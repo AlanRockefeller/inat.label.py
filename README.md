@@ -1,6 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator
+# iNaturalist Herbarium Label Generator version 1.1
+# By Alan Rockefeller
+# June 27, 2024
 
 ## Description
 
@@ -52,7 +54,7 @@ The iNaturalist Herbarium Label Generator is a powerful Python tool designed to 
 
 3. Install the required dependencies:
    ```
-   pip install requests python-dateutil
+   pip install requests python-dateutil beautifulsoup4
    ```
 
 ## Usage
@@ -90,8 +92,8 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
 
 The script generates herbarium labels with the following information:
 
-- Scientific Name (in italics)
-- Common Name
+- Scientific Name (in bold italics)
+- Common Name (which is occasionally set to the scientific name, and if it's a higher level taxonomic rank it will be more complete than what is in the Scientific Name field)
 - iNaturalist Observation Number
 - iNaturalist URL
 - Location
@@ -101,7 +103,9 @@ The script generates herbarium labels with the following information:
 - DNA Barcode ITS (if available)
 - GenBank Accession Number (if available)
 - Provisional Species Name (if available)
-- Observation Notes
+- Mobile or Traditional Photography (if available)
+- Mushroom Observer URL (if available, URL formatted for brevity)
+- Observation Notes (HTML formatting is preserved in RTF output)
 
 When using the RTF output option, the labels are formatted for optimal readability and professional appearance.
 
@@ -110,6 +114,7 @@ When using the RTF output option, the labels are formatted for optimal readabili
 - Python 3.6+
 - requests
 - python-dateutil
+- beautifulsoup4
 
 ## Contributing
 
