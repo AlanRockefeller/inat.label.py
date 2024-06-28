@@ -5,7 +5,7 @@ iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: June 27, 2024
-Version: 1.1
+Version: 1.2
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
 It fetches data from the iNaturalist API and formats it into printable labels suitable for
@@ -47,10 +47,11 @@ Dependencies:
 - requests
 - dateutil
 - beautifulsoup4
+- pytz
 
 The dependencies can be installed with the following command:
 
-    pip install requests python-dateutil beautifulsoup4
+    pip install requests python-dateutil beautifulsoup4 pytz
 
 Python version 3.6 or higher is recommended.
 
@@ -68,7 +69,50 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as dateutil_parser
+import pytz
 
+def escape_rtf(text):
+    """Escape special characters for RTF output."""
+    rtf_char_map = {
+        '\\': '\\\\',
+        '{': '\\{',
+        '}': '\\}',
+        '\n': '\\line ',
+        'í': '\\u237\'',
+        'µ': '\\u181?',
+        '×': '\\u215?',
+        '“': '\\ldblquote ',
+        '”': '\\rdblquote ',
+        '‘': '\\lquote ',
+        '’': '\\rquote ',
+        '–': '\\endash ',
+        '—': '\\emdash ',
+        'é': '\\\'e9',
+        'à': '\\\'e0',
+        'ä': '\\\'e4',
+        'ö': '\\\'f6',
+        'ü': '\\\'fc',
+        'ß': '\\\'df',
+        '\'': '\\\'27',
+    }
+    for char, replacement in rtf_char_map.items():
+        text = text.replace(char, replacement)
+    return text
+
+def remove_formatting_tags(text):
+    tags_to_remove = ['__BOLD_START__', '__BOLD_END__', '__ITALIC_START__', '__ITALIC_END__']
+    for tag in tags_to_remove:
+        text = text.replace(tag, '')
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        line = line.replace('<br/>', '').strip()
+        if not line or re.match(r'^[\d\W]+$', line):
+            continue
+        cleaned_lines.append(line)
+    return '\n'.join(cleaned_lines)
+
+                                                        
 def parse_html_notes(notes):
     if not notes or '<' not in notes:
         return notes  # Return the original notes if it's empty or doesn't contain HTML tags
@@ -162,8 +206,13 @@ def get_coordinates(observation_data):
     return 'Not available', None
 
 def parse_date(date_string):
+    # Define timezone information
+    tzinfos = {"EST": pytz.timezone("US/Eastern"),
+               "EDT": pytz.timezone("US/Eastern")}
+
     try:
-        return dateutil_parser.parse(date_string)
+        # Try parsing with dateutil, providing timezone information
+        return dateutil_parser.parse(date_string, tzinfos=tzinfos)
     except ValueError:
         pass
 
@@ -178,20 +227,20 @@ def parse_date(date_string):
     ]
     for format in date_formats:
         try:
-            return datetime.strptime(date_string, format)
+            parsed_date = datetime.strptime(date_string, format)
+            # If the parsed date doesn't have timezone info, make it timezone-aware
+            if parsed_date.tzinfo is None:
+                parsed_date = pytz.UTC.localize(parsed_date)
+            return parsed_date
         except ValueError:
             continue
 
     try:
-        return datetime.strptime(date_string.split()[0], '%Y-%m-%d')
+        parsed_date = datetime.strptime(date_string.split()[0], '%Y-%m-%d')
+        return pytz.UTC.localize(parsed_date)
     except ValueError:
         return None
 
-def remove_formatting_tags(text):
-    tags_to_remove = ['__BOLD_START__', '__BOLD_END__', '__ITALIC_START__', '__ITALIC_END__']
-    for tag in tags_to_remove:
-        text = text.replace(tag, '')
-    return text
 
 def create_inaturalist_label(observation_data):
     obs_number = observation_data['id']
@@ -202,6 +251,8 @@ def create_inaturalist_label(observation_data):
     scientific_name = observation_data.get('taxon', {}).get('name', 'Not available')
 
     location = observation_data.get('place_guess') or 'Not available'
+    if args.rtf:
+        location = escape_rtf(str(location))   # Escape characters if we are in rtf mode
 
     coords, accuracy = get_coordinates(observation_data)
     if accuracy:
@@ -324,6 +375,8 @@ def create_rtf_content(labels):
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + value_rtf + r"\line "
                 elif field == "Notes":
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} "
+                    value = remove_formatting_tags(value)
+                    value = escape_rtf(str(value))
                     value_rtf = str(value)
                     # Replace newlines with RTF line breaks
                     value_rtf = value_rtf.replace('\n', r'\line ')
