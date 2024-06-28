@@ -1,0 +1,21 @@
+# Changelog
+
+## [1.2] - 2024-06-27
+
+### Added
+- Implemented improved date parsing functionality with timezone support, ensuring more accurate and consistent handling of dates across different timezones
+- Added `pytz` library dependency for robust timezone handling
+
+### Dependencies
+- Added `pytz` to project dependencies
+
+### Notes
+
+
+## [1.1] - [Previous release 2024-06-27]
+
+Version 1.1 improves formatting, adds support for LSU, RPB1, RPB2 and TEF1 DNA barcodes and obscured locations.
+
+## [1.0] - [Initial release 2024-06-26]
+
+- Initial release
