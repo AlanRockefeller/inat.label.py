@@ -5,7 +5,7 @@ iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: June 27, 2024
-Version: 1.0
+Version: 1.1
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
 It fetches data from the iNaturalist API and formats it into printable labels suitable for
@@ -16,8 +16,8 @@ Features:
 - Can output labels to the console or to an RTF file
 - Includes various data fields such as scientific name, common name, location,
   GPS coordinates, observation date, observer, and more
-- Handles special fields like DNA Barcode ITS, GenBank Accession Number, and
-  Provisional Species Name when available
+- Handles special fields like DNA Barcode ITS (and LSU, TEF1, RPB1, RPB2), GenBank Accession Number,
+  Provisional Species Name, Mobile or Traditional Photography?, and Mushroom Observer URL when available
 
 Usage:
 1. Basic usage (output to console):
@@ -37,32 +37,63 @@ Examples:
   ./inat.label.py 12345 67890 --rtf my_labels.rtf
 
 Notes:
-- If the observation is a section, for example Amanita sect. Phalloideae, the scientific name
-  will just be Phalloideae - in that case the full scientific name will be in the Common name field.
-- It is recommended to print herbarium labels on 100% cotton paper for maximum longevity.
+- If the scientific name of an observation is a section, for example Amanita sect. Phalloideae, the 
+  scientific name will just be Phalloideae - in that case the full scientific name will be in the 
+  Common name field.
 - The RTF output is formatted to closely match the style of traditional herbarium labels.
+- It is recommended to print herbarium labels on 100% cotton paper for maximum longevity.
 
 Dependencies:
 - requests
 - dateutil
+- beautifulsoup4
 
-The dependencies can be installed with the following commands:
+The dependencies can be installed with the following command:
 
-    pip install requests
-    pip install python-dateutil
+    pip install requests python-dateutil beautifulsoup4
 
 Python version 3.6 or higher is recommended.
 
 """
 
-import requests
-import sys
-import os
-from datetime import datetime
-import json
-from dateutil import parser as dateutil_parser
-import re
 import argparse
+import html
+import json
+import os
+import re
+import sys
+import unicodedata
+from datetime import datetime
+
+import requests
+from bs4 import BeautifulSoup
+from dateutil import parser as dateutil_parser
+
+def parse_html_notes(notes):
+    if not notes or '<' not in notes:
+        return notes  # Return the original notes if it's empty or doesn't contain HTML tags
+    
+    soup = BeautifulSoup(notes, 'html.parser')
+    
+    # Replace <p> with line breaks
+    for p in soup.find_all('p'):
+        p.unwrap()
+    
+    # Convert hyperlinks to text URLs
+    for a in soup.find_all('a'):
+        a.replace_with(f"{a.text} ({a['href']})")
+    
+    # Mark bold and italic text for RTF formatting
+    for tag in soup.find_all(['strong', 'b']):
+        tag.replace_with('__BOLD_START__' + tag.string + '__BOLD_END__')
+    for tag in soup.find_all(['em', 'i']):
+        tag.replace_with('__ITALIC_START__' + tag.string + '__ITALIC_END__')
+    
+    processed_text = str(soup).strip()
+    return processed_text
+
+def normalize_string(s):
+    return unicodedata.normalize('NFKD', s.strip().lower())
 
 def extract_observation_id(input_string):
     # Check if the input is a URL
@@ -100,14 +131,32 @@ def get_field_value(observation_data, field_name):
             return field['value']
     return None
 
+def format_mushroom_observer_url(url):
+    if url:
+        match = re.search(r'mushroomobserver\.org/(?:observer/show_observation/)?(\d+)', url)
+        if match:
+            return f"https://mushroomobserver.org/{match.group(1)}"
+    return url
+
 def get_coordinates(observation_data):
     if 'geojson' in observation_data and observation_data['geojson']:
         coordinates = observation_data['geojson']['coordinates']
         latitude = f"{coordinates[1]:.5f}"
         longitude = f"{coordinates[0]:.5f}"
-        accuracy = observation_data.get('positional_accuracy')
+
+        # Try to get geoprivacy information
+        geoprivacy = observation_data.get('geoprivacy')
+
+        # Check if the observation is obscured
+        is_obscured = observation_data.get('obscured', False)
+
+        if is_obscured or geoprivacy == 'obscured':
+            accuracy = 20000  # Set accuracy to 20,000 meters
+        else:
+            accuracy = observation_data.get('positional_accuracy')
+
         if accuracy:
-            return f"{latitude}, {longitude}", accuracy
+            return f"{latitude}, {longitude}", f"{accuracy}"
         else:
             return f"{latitude}, {longitude}", None
     return 'Not available', None
@@ -138,6 +187,12 @@ def parse_date(date_string):
     except ValueError:
         return None
 
+def remove_formatting_tags(text):
+    tags_to_remove = ['__BOLD_START__', '__BOLD_END__', '__ITALIC_START__', '__ITALIC_END__']
+    for tag in tags_to_remove:
+        text = text.replace(tag, '')
+    return text
+
 def create_inaturalist_label(observation_data):
     obs_number = observation_data['id']
     url = f"https://www.inaturalist.org/observations/{obs_number}"
@@ -147,11 +202,12 @@ def create_inaturalist_label(observation_data):
     scientific_name = observation_data.get('taxon', {}).get('name', 'Not available')
 
     location = observation_data.get('place_guess') or 'Not available'
+
     coords, accuracy = get_coordinates(observation_data)
     if accuracy:
         gps_coords = f"{coords} (±{accuracy}m)"
     else:
-        gps_coords = coords
+        gps_coords = coords 
 
     date_observed = parse_date(observation_data['observed_on_string'])
     date_observed_str = date_observed.strftime('%Y-%m-%d') if date_observed else 'Not available'
@@ -161,21 +217,50 @@ def create_inaturalist_label(observation_data):
     login_name = user['login']
     observer = f"{display_name} ({login_name})" if display_name else login_name
 
+    scientific_name_normalized = normalize_string(scientific_name)
+    common_name_normalized = normalize_string(common_name) if common_name else ''
+
     label = [
-        ("Scientific Name", scientific_name),
-        ("Common Name", common_name),
-        ("iNat Observation Number", str(obs_number)),
-        ("iNaturalist URL", url),
-        ("Location", location),
-        ("GPS Coordinates", gps_coords),
-        ("Date Observed", date_observed_str),
-        ("Observer", observer)
+    ("Scientific Name", scientific_name)
     ]
+
+    if common_name and common_name_normalized != scientific_name_normalized:
+        label.append(("Common Name", common_name))
+
+    label.extend([
+    ("iNat Observation Number", str(obs_number)),
+    ("iNaturalist URL", url),
+    ("Location", location),
+    ("GPS Coordinates", gps_coords),
+    ("Date Observed", date_observed_str),
+    ("Observer", observer)
+])
 
     dna_barcode_its = get_field_value(observation_data, 'DNA Barcode ITS')
     if dna_barcode_its:
         bp_count = len(dna_barcode_its)
         label.append(("DNA Barcode ITS", f"{bp_count} bp"))
+
+    dna_barcode_lsu = get_field_value(observation_data, 'DNA Barcode LSU')
+    if dna_barcode_lsu:
+        bp_count = len(dna_barcode_lsu)
+        label.append(("DNA Barcode LSU", f"{bp_count} bp"))
+
+    dna_barcode_rpb1 = get_field_value(observation_data, 'DNA Barcode RPB1')
+    if dna_barcode_rpb1:
+        bp_count = len(dna_barcode_rpb1)
+        label.append(("DNA Barcode RPB1", f"{bp_count} bp"))
+
+    dna_barcode_rpb2 = get_field_value(observation_data, 'DNA Barcode RPB2')
+    if dna_barcode_rpb2:
+        bp_count = len(dna_barcode_rpb2)
+        label.append(("DNA Barcode RPB2", f"{bp_count} bp"))
+
+    dna_barcode_tef1 = get_field_value(observation_data, 'DNA Barcode TEF1')
+    if dna_barcode_tef1:
+        bp_count = len(dna_barcode_tef1)
+        label.append(("DNA Barcode TEF1", f"{bp_count} bp"))
+
 
     genbank_accession = get_field_value(observation_data, 'GenBank Accession Number')
     if not genbank_accession:
@@ -187,8 +272,18 @@ def create_inaturalist_label(observation_data):
     if provisional_name:
         label.append(("Provisional Species Name", provisional_name))
 
-    notes = observation_data.get('description') or 'No notes available'
-    label.append(("Notes", notes))
+    photography_type = get_field_value(observation_data, 'Mobile or Traditional Photography?')
+    if photography_type:
+        label.append(("Mobile or Traditional Photography", photography_type))
+
+    mushroom_observer_url = get_field_value(observation_data, 'Mushroom Observer URL')
+    if mushroom_observer_url:
+        formatted_url = format_mushroom_observer_url(mushroom_observer_url)
+        label.append(("Mushroom Observer URL", formatted_url))
+
+    notes = observation_data.get('description') or ''
+    notes_parsed = parse_html_notes(notes)
+    label.append(("Notes", notes_parsed))
 
     return label
 
@@ -224,9 +319,17 @@ def create_rtf_content(labels):
                 elif field == "Scientific Name":
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} {\b\i " + str(value) + r"}\line "
                 elif field == "GPS Coordinates":
-                    # Replace ± with its ASCII code
-                    value_rtf = str(value).replace("±", r"\'b1")
+                    # Directly replace the ± symbol with the RTF escape code
+                    value_rtf = value.replace("±", r"\'b1")
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + value_rtf + r"\line "
+                elif field == "Notes":
+                    rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} "
+                    value_rtf = str(value)
+                    # Replace newlines with RTF line breaks
+                    value_rtf = value_rtf.replace('\n', r'\line ')
+                    value_rtf = value_rtf.replace('__BOLD_START__', r'{\b ').replace('__BOLD_END__', r'}')
+                    value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
+                    rtf_content += value_rtf + r"\line "
                 else:
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + str(value) + r"\line "
             rtf_content += r"\par "
@@ -242,10 +345,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create herbarium labels from iNaturalist observation numbers or URLs")
     parser.add_argument("observation_ids", nargs="+", help="Observation number(s) or URL(s)")
     parser.add_argument("--rtf", metavar="filename.rtf", help="Output to RTF file (filename must end with .rtf)")
-    
+
     if len(sys.argv) > 1 and sys.argv[-1] == '--rtf':
         parser.error("argument --rtf: expected a filename ending in .rtf")
-    
+
     args = parser.parse_args()
 
     if args.rtf and not args.rtf.lower().endswith('.rtf'):
@@ -273,5 +376,7 @@ if __name__ == "__main__":
     else:
         for label in labels:
             for field, value in label:
+                if field == "Notes":
+                    value = remove_formatting_tags(value)
                 print(f"{field}: {value}")
-            print("\n\n")  # Blank line between labels
+            print("\n")  # Blank line between labels
