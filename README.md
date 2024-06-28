@@ -6,7 +6,7 @@
 
 ## Description
 
-The iNaturalist Herbarium Label Generator is a powerful Python tool designed to create formatted herbarium labels from iNaturalist observation data. This project streamlines the process of generating professional quality labels for herbarium specimens.
+The iNaturalist Herbarium Label Generator is a powerful Python tool designed to create formatted herbarium labels from iNaturalist observation data. This project streamlines the process of generating professional quality labels for herbarium specimens.   It is designed to be robust and work on many different platforms.
 
 ## Table of Contents
 
@@ -21,23 +21,24 @@ The iNaturalist Herbarium Label Generator is a powerful Python tool designed to 
 
 ## Features
 
-- Fetches observation data directly from the iNaturalist API
+- Fetches observation data using the iNaturalist API
 - Supports multiple observation IDs or URLs as input
 - Generates labels with key information including:
   - Scientific Name (in italics)
-  - Common Name
+  - Common Name (if different from scientific name)
   - iNaturalist Observation Number
-  - iNaturalist URL
-  - Location
-  - GPS Coordinates (with accuracy)
+  - iNaturalist URL (in case the herbarium manager doesn't know how to create iNaturalist URL's)
+  - Location (in text format)
+  - GPS Coordinates (with accuracy - accuracy is set to 20km if observation geoprivacy is obscured)
   - Date Observed
-  - Observer Name
-  - DNA Barcode ITS (if available)
-  - GenBank Accession Number (if available)
-  - Provisional Species Name (if available)
-  - Notes
+  - Observer Name and iNaturalist login
+  - DNA Barcode ITS, LSU, RPB1, RPB2 and TEF1 (if present)
+  - GenBank Accession Number (if present)
+  - Provisional Species Name (if present)
+  - Mushroom Observer URL (if present, formatted in simplest possible URL form)
+  - Observation Notes
 - Outputs labels to console for quick viewing
-- Creates formatted RTF files for high-quality printing
+- Optionally creates formatted RTF files for high-quality printing
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 
 ## Installation
@@ -90,24 +91,7 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
 
 ## Output
 
-The script generates herbarium labels with the following information:
-
-- Scientific Name (in bold italics)
-- Common Name (which is occasionally set to the scientific name, and if it's a higher level taxonomic rank it will be more complete than what is in the Scientific Name field)
-- iNaturalist Observation Number
-- iNaturalist URL
-- Location
-- GPS Coordinates (with accuracy if available)
-- Date Observed
-- Observer Name
-- DNA Barcode ITS (if available)
-- GenBank Accession Number (if available)
-- Provisional Species Name (if available)
-- Mobile or Traditional Photography (if available)
-- Mushroom Observer URL (if available, URL formatted for brevity)
-- Observation Notes (HTML formatting is preserved in RTF output)
-
-When using the RTF output option, the labels are formatted for optimal readability and professional appearance.
+The script generates herbarium labels to the standard output by default, or labels are written to a RTF file if the --rtf command line argument is given.   RTF labels generally look more professional when printed.
 
 ## Dependencies
 
