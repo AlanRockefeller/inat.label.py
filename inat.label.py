@@ -58,9 +58,6 @@ Python version 3.6 or higher is recommended.
 """
 
 import argparse
-import html
-import json
-import os
 import re
 import sys
 import unicodedata
@@ -257,10 +254,7 @@ def create_inaturalist_label(observation_data):
         location = escape_rtf(str(location))   # Escape characters if we are in rtf mode
 
     coords, accuracy = get_coordinates(observation_data)
-    if accuracy:
-        gps_coords = f"{coords} (±{accuracy}m)"
-    else:
-        gps_coords = coords 
+    gps_coords = f"{coords} (±{accuracy}m)" if accuracy else coords
 
     date_observed = parse_date(observation_data['observed_on_string'])
     date_observed_str = date_observed.strftime('%Y-%m-%d') if date_observed else 'Not available'
