@@ -4,8 +4,8 @@
 iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: June 27, 2024
-Version: 1.2
+Date: June 28, 2024
+Version: 1.3
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
 It fetches data from the iNaturalist API and formats it into printable labels suitable for
@@ -17,7 +17,7 @@ Features:
 - Includes various data fields such as scientific name, common name, location,
   GPS coordinates, observation date, observer, and more
 - Handles special fields like DNA Barcode ITS (and LSU, TEF1, RPB1, RPB2), GenBank Accession Number,
-  Provisional Species Name, Mobile or Traditional Photography?, and Mushroom Observer URL when available
+  Provisional Species Name, Mobile or Traditional Photography?, Microscopy Performed and Mushroom Observer URL when available
 
 Usage:
 1. Basic usage (output to console):
@@ -28,13 +28,13 @@ Usage:
 
 Examples:
 - Generate label for a single observation:
-  ./inat.label.py 12345
+  ./inat.label.py 150291663
 
 - Generate labels for multiple observations:
-  ./inat.label.py 12345 67890 https://www.inaturalist.org/observations/11111
+  ./inat.label.py 150291663 62240372 https://www.inaturalist.org/observations/105658809
 
 - Generate labels and save to an RTF file:
-  ./inat.label.py 12345 67890 --rtf my_labels.rtf
+  ./inat.label.py 150291663 62240372 --rtf two_labels.rtf
 
 Notes:
 - If the scientific name of an observation is a section, for example Amanita sect. Phalloideae, the 
@@ -79,6 +79,7 @@ def escape_rtf(text):
         '}': '\\}',
         '\n': '\\line ',
         'í': '\\u237\'',
+        '\\"': '\\u34\'',           #  Does not work, yet - see https://www.perplexity.ai/search/If-the-RTF-gOdEwtp2TnmQZoPfQGqpsQ
         'µ': '\\u181?',
         '×': '\\u215?',
         '“': '\\ldblquote ',
@@ -88,7 +89,8 @@ def escape_rtf(text):
         '–': '\\endash ',
         '—': '\\emdash ',
         'é': '\\\'e9',
-        'à': '\\\'e0',
+        'à': '\\u224\'',
+        'á': '\\u225\'',
         'ä': '\\\'e4',
         'ö': '\\\'f6',
         'ü': '\\\'fc',
@@ -323,6 +325,10 @@ def create_inaturalist_label(observation_data):
     if provisional_name:
         label.append(("Provisional Species Name", provisional_name))
 
+    microscopy = get_field_value(observation_data, 'Microscopy performed?')
+    if microscopy:
+        label.append(("Microscopy performed:", microscopy))
+    
     photography_type = get_field_value(observation_data, 'Mobile or Traditional Photography?')
     if photography_type:
         label.append(("Mobile or Traditional Photography", photography_type))
@@ -382,6 +388,8 @@ def create_rtf_content(labels):
                     value_rtf = value_rtf.replace('\n', r'\line ')
                     value_rtf = value_rtf.replace('__BOLD_START__', r'{\b ').replace('__BOLD_END__', r'}')
                     value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
+                    # Remove the line about the MO to iNat import, as this isn't important on a label
+                    value_rtf = re.sub(r'\\line Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value_rtf)
                     rtf_content += value_rtf + r"\line "
                 else:
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + str(value) + r"\line "
@@ -431,5 +439,7 @@ if __name__ == "__main__":
             for field, value in label:
                 if field == "Notes":
                     value = remove_formatting_tags(value)
+                    # Remove the line about the MO to iNat import, as this isn't important on a label
+                    value = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value)
                 print(f"{field}: {value}")
             print("\n")  # Blank line between labels
