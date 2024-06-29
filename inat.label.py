@@ -319,7 +319,7 @@ def create_inaturalist_label(observation_data):
     if provisional_name:
         label.append(("Provisional Species Name", provisional_name))
 
-    microscopy = get_field_value(observation_data, 'Microscopy performed?')
+    microscopy = get_field_value(observation_data, 'Microscopy performed')
     if microscopy:
         label.append(("Microscopy performed:", microscopy))
     
