@@ -4,8 +4,8 @@
 iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: June 28, 2024
-Version: 1.3
+Date: June 29, 2024
+Version: 1.4
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
 It fetches data from the iNaturalist API and formats it into printable labels suitable for
@@ -47,11 +47,10 @@ Dependencies:
 - requests
 - dateutil
 - beautifulsoup4
-- pytz
 
 The dependencies can be installed with the following command:
 
-    pip install requests python-dateutil beautifulsoup4 pytz
+    pip install requests python-dateutil beautifulsoup4
 
 Python version 3.6 or higher is recommended.
 
@@ -66,7 +65,6 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as dateutil_parser
-import pytz
 
 def escape_rtf(text):
     """Escape special characters for RTF output."""
@@ -205,41 +203,28 @@ def get_coordinates(observation_data):
     return 'Not available', None
 
 def parse_date(date_string):
-    # Define timezone information
-    tzinfos = {"EST": pytz.timezone("US/Eastern"),
-               "EDT": pytz.timezone("US/Eastern")}
-
-    try:
-        # Try parsing with dateutil, providing timezone information
-        return dateutil_parser.parse(date_string, tzinfos=tzinfos)
-    except ValueError:
-        pass
-
     date_formats = [
         '%Y-%m-%d',
-        '%Y/%m/%d %I:%M %p',
-        '%Y-%m-%dT%H:%M:%S%z',
         '%Y/%m/%d',
-        '%Y-%m-%d %H:%M:%S %z',
-        '%Y-%m-%d %H:%M:%S',
         '%B %d, %Y',
     ]
+    
+    # First, try to extract just the date part if there's more information
+    date_part = date_string.split()[0]
+    
     for format in date_formats:
         try:
-            parsed_date = datetime.strptime(date_string, format)
-            # If the parsed date doesn't have timezone info, make it timezone-aware
-            if parsed_date.tzinfo is None:
-                parsed_date = pytz.UTC.localize(parsed_date)
-            return parsed_date
+            parsed_date = datetime.strptime(date_part, format)
+            return parsed_date.date()  # Return only the date part
         except ValueError:
             continue
 
+    # If the above fails, try parsing the full string but only keep the date
     try:
-        parsed_date = datetime.strptime(date_string.split()[0], '%Y-%m-%d')
-        return pytz.UTC.localize(parsed_date)
+        parsed_date = dateutil_parser.parse(date_string, fuzzy=True)
+        return parsed_date.date()  # Return only the date part
     except ValueError:
         return None
-
 
 def create_inaturalist_label(observation_data):
     obs_number = observation_data['id']
@@ -257,7 +242,8 @@ def create_inaturalist_label(observation_data):
     gps_coords = f"{coords} (±{accuracy}m)" if accuracy else coords
 
     date_observed = parse_date(observation_data['observed_on_string'])
-    date_observed_str = date_observed.strftime('%Y-%m-%d') if date_observed else 'Not available'
+
+    date_observed_str = str(date_observed) if date_observed else 'Not available'
 
     user = observation_data['user']
     display_name = user.get('name')
