@@ -1,17 +1,16 @@
 # Changelog
 
+## 1.4
+
+- Fixed microscopy field support
+- Improved handling of dates
+- Removed unnnecessary pytz library
+
 ## [1.2] - 2024-06-28
 
 ### Added
 - Handles special characters and formatting better, especially of the Location and Notes fields
 - Implemented improved date parsing functionality with timezone support, ensuring more accurate and consistent handling of dates across different timezones
-- Added `pytz` library dependency for robust timezone handling
-
-### Dependencies
-- Added `pytz` to project dependencies
-
-### Notes
-Still more special characters and formatting to fix, but this version works pretty well
 
 ## [1.1] - [Previous release 2024-06-27]
 
