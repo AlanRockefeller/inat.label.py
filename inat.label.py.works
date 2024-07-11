@@ -4,10 +4,8 @@
 iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: July 10, 2024
-Version: 1.5
-
-Todo:  Fix error if observation has no date, print out each species as it makes RTF labels
+Date: June 29, 2024
+Version: 1.4
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
 It fetches data from the iNaturalist API and formats it into printable labels suitable for
@@ -61,7 +59,6 @@ Python version 3.6 or higher is recommended.
 import argparse
 import re
 import sys
-import time
 import unicodedata
 from datetime import datetime
 
@@ -385,20 +382,10 @@ def create_rtf_content(labels):
 
     return rtf_content
 
-def is_within_california(latitude, longitude):
-    # Approximate bounding box for California
-    CA_NORTH = 42.0
-    CA_SOUTH = 32.5
-    CA_WEST = -124.4
-    CA_EAST = -114.1
-
-    return (CA_SOUTH <= latitude <= CA_NORTH) and (CA_WEST <= longitude <= CA_EAST)
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create herbarium labels from iNaturalist observation numbers or URLs")
     parser.add_argument("observation_ids", nargs="+", help="Observation number(s) or URL(s)")
     parser.add_argument("--rtf", metavar="filename.rtf", help="Output to RTF file (filename must end with .rtf)")
-    parser.add_argument("--find-ca", action="store_true", help="Find observations within California")
 
     if len(sys.argv) > 1 and sys.argv[-1] == '--rtf':
         parser.error("argument --rtf: expected a filename ending in .rtf")
@@ -409,45 +396,30 @@ if __name__ == "__main__":
         parser.error("argument --rtf: filename must end with .rtf")
 
     labels = []
-    request_count = 0
 
     for input_value in args.observation_ids:
         observation_id = extract_observation_id(input_value)
 
         if observation_id is None:
-            if not args.find_ca:
-                print(f"Error: Invalid input '{input_value}'. Please provide a valid observation number or URL.")
+            print(f"Error: Invalid input '{input_value}'. Please provide a valid observation number or URL.")
             continue
 
-        # Add delay if more than 20 requests
-        if request_count >= 20:
-            time.sleep(1)  # 1 second delay
-
         observation_data = get_observation_data(observation_id)
-        request_count += 1  # Increment the request counter
-
         if observation_data:
-            if args.find_ca:
-                if 'geojson' in observation_data and observation_data['geojson']:
-                    coordinates = observation_data['geojson']['coordinates']
-                    latitude, longitude = coordinates[1], coordinates[0]
-                    if is_within_california(latitude, longitude):
-                        print(f"https://www.inaturalist.org/observations/{observation_id}")
-            else:
-                label = create_inaturalist_label(observation_data)
-                labels.append(label)
+            label = create_inaturalist_label(observation_data)
+            labels.append(label)
 
-    if not args.find_ca:
-        if args.rtf:
-            rtf_content = create_rtf_content(labels)
-            with open(args.rtf, 'w') as rtf_file:
-                rtf_file.write(rtf_content)
-            print(f"RTF file created: {args.rtf}")
-        else:
-            for label in labels:
-                for field, value in label:
-                    if field == "Notes":
-                        value = remove_formatting_tags(value)
-                        value = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value)
-                    print(f"{field}: {value}")
-                print("\n")  # Blank line between labels
+    if args.rtf:
+        rtf_content = create_rtf_content(labels)
+        with open(args.rtf, 'w') as rtf_file:
+            rtf_file.write(rtf_content)
+        print(f"RTF file created: {args.rtf}")
+    else:
+        for label in labels:
+            for field, value in label:
+                if field == "Notes":
+                    value = remove_formatting_tags(value)
+                    # Remove the line about the MO to iNat import, as this isn't important on a label
+                    value = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value)
+                print(f"{field}: {value}")
+            print("\n")  # Blank line between labels
