@@ -63,13 +63,11 @@ Python version 3.6 or higher is recommended.
 
 import argparse
 import datetime
-import os
 import re
 import sys
 import time
 import unicodedata
 from io import BytesIO
-import base64
 import requests
 
 import binascii
