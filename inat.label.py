@@ -372,8 +372,7 @@ def create_rtf_content(labels):
     rtf_header = r"""{\rtf1\ansi\deff3\adeflang1025
 {\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\froman\fprq2\fcharset0 Arial;}{\f5\froman\fprq2\fcharset0 Tahoma;}{\f6\froman\fprq2\fcharset0 Times New Roman;}{\f7\froman\fprq2\fcharset0 Courier New;}{\f8\fnil\fprq2\fcharset0 Times New Roman;}{\f9\fnil\fprq2\fcharset0 Lohit Hindi;}{\f10\fnil\fprq2\fcharset0 DejaVu Sans;}}
 {\colortbl;\red0\green0\blue0;\red0\green0\blue255;\red0\green255\blue255;\red0\green255\blue0;\red255\green0\blue255;\red255\green0\blue0;\red255\green255\blue0;\red255\green255\blue255;\red0\green0\blue128;\red0\green128\blue128;\red0\green128\blue0;\red128\green0\blue128;\red128\green0\blue0;\red128\green128\blue0;\red128\green128\blue128;\red192\green192\blue192;}
-{\stylesheet{\s0\snext0\dbch\af8\langfe1081\dbch\af8\afs24\alang1081\ql\keep\nowidctlpar\sb0\sa720\ltrpar\hyphpar0\aspalpha\cf0\loch\f6\fs24\lang1033\kerning1 Norm
-al;}
+{\stylesheet{\s0\snext0\dbch\af8\langfe1081\dbch\af8\afs24\alang1081\ql\keep\nowidctlpar\sb0\sa720\ltrpar\hyphpar0\aspalpha\cf0\loch\f6\fs24\lang1033\kerning1 Normal;}
 {\*\cs15\snext15\dbch\af10\langfe1033\afs24 Default Paragraph Font;}
 {\s16\sbasedon0\snext17\dbch\af10\langfe1081\dbch\af8\afs28\ql\keep\nowidctlpar\sb240\sa120\keepn\ltrpar\cf0\loch\f4\fs28\lang1033\kerning1 Heading;}
 {\s17\sbasedon0\snext17\dbch\af8\langfe1081\dbch\af8\afs24\ql\keep\nowidctlpar\sb0\sa120\ltrpar\cf0\loch\f6\fs24\lang1033\kerning1 Text Body;}
