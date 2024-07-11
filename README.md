@@ -2,7 +2,7 @@
 
 # iNaturalist Herbarium Label Generator version 1.1
 # By Alan Rockefeller
-# June 27, 2024
+# July 10, 2024
 
 ## Description
 
@@ -41,7 +41,7 @@ The iNaturalist Herbarium Label Generator is a powerful Python tool designed to 
 - Optionally creates formatted RTF files for high-quality printing
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
-- Incluedes a 1 second delay if there are more than 20 requests, which stops the iNaturalist API from denying requests for large label printing jobs.
+- Includes a 1 second delay if there are more than 20 requests, which stops the iNaturalist API from denying requests for large label printing jobs.
 
 ## Installation
 
