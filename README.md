@@ -1,14 +1,13 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 1.5
+# iNaturalist Herbarium Label Generator version 1.6
 # By Alan Rockefeller
-
-# July 10, 2024
+# July 11, 2024
 
 
 ## Description
 
-The iNaturalist Herbarium Label Generator is a powerful Python tool designed to create formatted herbarium labels from iNaturalist observation data. This project streamlines the process of generating professional quality labels for herbarium specimens.   It is designed to be robust and work on many different platforms.
+The iNaturalist Herbarium Label Generator is a Python tool designed to create formatted herbarium labels from an iNaturalist observation. This project rapidly creates professional quality labels for herbarium specimens.   It is designed to be robust, work on many different platforms and handle errors or unexpected input gracefully.
 
 ## Table of Contents
 
@@ -41,27 +40,28 @@ The iNaturalist Herbarium Label Generator is a powerful Python tool designed to 
   - Microscopy Performed (if present)
   - Traditional or Mobile Photography (if present)
   - Observation Notes
-- Outputs labels to console for quick viewing
+- By deafult outputs labels to console for quick viewing / testing
 - Optionally creates formatted RTF files for high-quality printing
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
 - Includes a 1 second delay if there are more than 20 requests, which stops the iNaturalist API from denying requests for large label printing jobs.
+- Adds a QR code to the RTF labels which points to the iNaturalist URL
 
 ## Installation
 
 1. Clone this repository:
    ```
-   git clone https://github.com/yourusername/inat-herbarium-label-generator.git
+   git clone https://github.com/AlanRockefeller/inat.label.py
    ```
 
 2. Navigate to the project directory:
    ```
-   cd inat-herbarium-label-generator
+   cd inat.label.py
    ```
 
 3. Install the required dependencies:
    ```
-   pip install requests python-dateutil beautifulsoup4
+   pip install requests python-dateutil beautifulsoup4 qrcode[pil]
    ```
 
 ## Usage
@@ -76,6 +76,12 @@ To generate an RTF file, use the `--rtf` option:
 
 ```
 python inat.label.py <observation_number_or_url> [<observation_number_or_url> ...] --rtf <filename.rtf>
+```
+
+To print out a list of URL's of observations that are in California, use the `--find-ca` option.    This was added to make it easy to add observations to the Mycomap CA Network project.   I paste the list of URL's into the Bulk URL Opener Chrome extension and add each tab to the project.   If there is an easier way I haven't found it yet.
+
+```
+python inat.label.py <observation_number_or_url> [<observation_number_or_url> ...] --find-ca
 ```
 
 ### Examples:
@@ -97,7 +103,7 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
 
 ## Output
 
-The script generates herbarium labels to the standard output by default, or labels are written to a RTF file if the --rtf command line argument is given.   RTF labels generally look more professional when printed.
+The script generates herbarium labels to the standard output by default, or labels are written to a RTF file if the --rtf command line argument is given.   RTF labels look much more professional when printed and include QR codes - the standard output is mostly for testing.
 
 ## Dependencies
 
@@ -105,6 +111,7 @@ The script generates herbarium labels to the standard output by default, or labe
 - requests
 - python-dateutil
 - beautifulsoup4
+- qrcode[pil]
 
 ## Contributing
 
@@ -127,5 +134,5 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 Alan Rockefeller - My email address is my full name at gmail, or message me on Facebook or Instagram
 
-Project Link: [https://github.com/AlanRockefeller/inat-herbarium-label-generator](https://github.com/AlanRockefeller/inat-herbarium-label-generator)
+Project Link: [https://github.com/AlanRockefeller/inat.label.py](https://github.com/AlanRockefeller/inat.label.py)
 
