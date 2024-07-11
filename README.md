@@ -1,8 +1,10 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 1.1
+# iNaturalist Herbarium Label Generator version 1.5
 # By Alan Rockefeller
+
 # July 10, 2024
+
 
 ## Description
 
@@ -36,6 +38,8 @@ The iNaturalist Herbarium Label Generator is a powerful Python tool designed to 
   - GenBank Accession Number (if present)
   - Provisional Species Name (if present)
   - Mushroom Observer URL (if present, formatted in simplest possible URL form)
+  - Microscopy Performed (if present)
+  - Traditional or Mobile Photography (if present)
   - Observation Notes
 - Outputs labels to console for quick viewing
 - Optionally creates formatted RTF files for high-quality printing
