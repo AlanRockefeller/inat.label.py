@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5
+
+- Added an optional command line switch to print out the iNaturalist URL's of
+observations which are in California.   This makes it easy to add these
+observations to the Mycomap CA Network project.
+- Adds a 1 second delay if there are more than 20 requests, which stops the
+iNaturalist API from denying requests for large label printing jobs.
+
+## 1.4
+
+- Fixed microscopy field support
+- Improved handling of dates
+- Removed unnnecessary pytz library
+
+Still need to fix encoding of unusual characters in the location.
+
 ## [1.2] - 2024-06-28
 
 ### Added
