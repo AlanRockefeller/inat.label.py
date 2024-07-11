@@ -390,7 +390,7 @@ def create_rtf_content(labels):
     rtf_content = rtf_header
 
     try:
-        for label_index, label in enumerate(labels):
+        for _label_index, label in enumerate(labels):
             inat_url = next((value for field, value in label if field == "iNaturalist URL"), None)
         
             for field, value in label:
