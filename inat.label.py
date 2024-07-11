@@ -4,14 +4,15 @@
 iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: July 10, 2024
-Version: 1.5
+Date: July 11, 2024
+Version: 1.6
 
-Todo:  Fix error if observation has no date, print out each species as it makes RTF labels
+Todo:  Fix error if observation has no date
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
 It fetches data from the iNaturalist API and formats it into printable labels suitable for
-herbarium specimens.
+herbarium specimens.  While it can output the labels to stdout, the RTF output makes more
+professional looking labels that include a QR code.
 
 Features:
 - Supports multiple observation IDs or URLs as input
@@ -20,6 +21,7 @@ Features:
   GPS coordinates, observation date, observer, and more
 - Handles special fields like DNA Barcode ITS (and LSU, TEF1, RPB1, RPB2), GenBank Accession Number,
   Provisional Species Name, Mobile or Traditional Photography?, Microscopy Performed and Mushroom Observer URL when available
+- Generates a QR code which links to the iNaturalist URL
 
 Usage:
 1. Basic usage (output to console):
@@ -40,37 +42,68 @@ Examples:
 
 Notes:
 - If the scientific name of an observation is a section, for example Amanita sect. Phalloideae, the 
-  scientific name will just be Phalloideae - in that case the full scientific name will be in the 
-  Common name field.
+  scientific name will just be Phalloideae - in that case the full scientific name will often be in the 
+  Common Name field.
 - The RTF output is formatted to closely match the style of traditional herbarium labels.
-- It is recommended to print herbarium labels on 100% cotton paper for maximum longevity.
+- It is recommended to print herbarium labels on 100% cotton paper with an inkjet printer for maximum longevity.
 
 Dependencies:
 - requests
 - dateutil
 - beautifulsoup4
+- qrcode
 
 The dependencies can be installed with the following command:
 
-    pip install requests python-dateutil beautifulsoup4
+    pip install requests python-dateutil beautifulsoup4 qrcode[pil]
 
 Python version 3.6 or higher is recommended.
 
 """
 
 import argparse
+import datetime
+import os
 import re
 import sys
 import time
 import unicodedata
-from datetime import datetime
-
+from io import BytesIO
+import base64
 import requests
+
+import binascii
 from bs4 import BeautifulSoup
 from dateutil import parser as dateutil_parser
+import qrcode
+from PIL import Image
+
+
+def generate_qr_code(url):
+    try:
+        qr = qrcode.QRCode(version=1, box_size=1, border=1)  
+        qr.add_data(url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Resize the QR code here if desired
+        scale_factor = 2 # Resize to 2x the original size
+        img = img.resize((int(img.size[0] * scale_factor), int(img.size[1] * scale_factor)), Image.LANCZOS)
+        
+        buffered = BytesIO()
+        img.save(buffered, format="PNG")
+        img_bytes = buffered.getvalue()
+        img_hex = binascii.hexlify(img_bytes).decode('utf-8')
+        
+        # Save the QR code to a PNG file for debugging
+        # img.save(filename)
+        return img_hex, img.size  # Return the hex string and the size of the image
+    except Exception as e:
+        print(f"Error generating QR code: {e}")
+        return None, None
 
 def escape_rtf(text):
-    """Escape special characters for RTF output."""
+    """Escape special characters for RTF output.  This section may need additional changes as more unusual characters are encountered, usually in the location."""
     rtf_char_map = {
         '\\': '\\\\',
         '{': '\\{',
@@ -99,6 +132,7 @@ def escape_rtf(text):
         text = text.replace(char, replacement)
     return text
 
+# Remove formatting tags in stdout
 def remove_formatting_tags(text):
     tags_to_remove = ['__BOLD_START__', '__BOLD_END__', '__ITALIC_START__', '__ITALIC_END__']
     for tag in tags_to_remove:
@@ -132,6 +166,8 @@ def parse_html_notes(notes):
         tag.replace_with('__BOLD_START__' + tag.string + '__BOLD_END__')
     for tag in soup.find_all(['em', 'i']):
         tag.replace_with('__ITALIC_START__' + tag.string + '__ITALIC_END__')
+    for tag in soup.find_all(['ins', 'u']):
+        tag.replace_with('' + tag.string + '')
     
     processed_text = str(soup).strip()
     return processed_text
@@ -217,7 +253,7 @@ def parse_date(date_string):
     
     for format in date_formats:
         try:
-            parsed_date = datetime.strptime(date_part, format)
+            parsed_date = datetime.datetime.strptime(date_part, format)
             return parsed_date.date()  # Return only the date part
         except ValueError:
             continue
@@ -253,16 +289,18 @@ def create_inaturalist_label(observation_data):
     login_name = user['login']
     observer = f"{display_name} ({login_name})" if display_name else login_name
 
-    scientific_name_normalized = normalize_string(scientific_name)
-    common_name_normalized = normalize_string(common_name) if common_name else ''
-
+    # Begin generating label
     label = [
     ("Scientific Name", scientific_name)
     ]
 
+    # Include common name only if it's different from the scientific name
+    scientific_name_normalized = normalize_string(scientific_name)
+    common_name_normalized = normalize_string(common_name) if common_name else ''
     if common_name and common_name_normalized != scientific_name_normalized:
         label.append(("Common Name", common_name))
-
+    
+    # Add these fields to all labels
     label.extend([
     ("iNat Observation Number", str(obs_number)),
     ("iNaturalist URL", url),
@@ -272,6 +310,7 @@ def create_inaturalist_label(observation_data):
     ("Observer", observer)
 ])
 
+    # Include these fields only if they are populated
     dna_barcode_its = get_field_value(observation_data, 'DNA Barcode ITS')
     if dna_barcode_its:
         bp_count = len(dna_barcode_its)
@@ -297,7 +336,7 @@ def create_inaturalist_label(observation_data):
         bp_count = len(dna_barcode_tef1)
         label.append(("DNA Barcode TEF1", f"{bp_count} bp"))
 
-
+    # Include Genbank accession number whether it's in Genbank Accession or Genbank Accession Number observation field
     genbank_accession = get_field_value(observation_data, 'GenBank Accession Number')
     if not genbank_accession:
         genbank_accession = get_field_value(observation_data, 'GenBank Accession')
@@ -318,10 +357,12 @@ def create_inaturalist_label(observation_data):
 
     mushroom_observer_url = get_field_value(observation_data, 'Mushroom Observer URL')
     if mushroom_observer_url:
+        # Format Mushroom Observer URL in the shortest possible way
         formatted_url = format_mushroom_observer_url(mushroom_observer_url)
         label.append(("Mushroom Observer URL", formatted_url))
 
     notes = observation_data.get('description') or ''
+    # Convert HTML in notes field to text
     notes_parsed = parse_html_notes(notes)
     label.append(("Notes", notes_parsed))
 
@@ -331,7 +372,8 @@ def create_rtf_content(labels):
     rtf_header = r"""{\rtf1\ansi\deff3\adeflang1025
 {\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\froman\fprq2\fcharset0 Arial;}{\f5\froman\fprq2\fcharset0 Tahoma;}{\f6\froman\fprq2\fcharset0 Times New Roman;}{\f7\froman\fprq2\fcharset0 Courier New;}{\f8\fnil\fprq2\fcharset0 Times New Roman;}{\f9\fnil\fprq2\fcharset0 Lohit Hindi;}{\f10\fnil\fprq2\fcharset0 DejaVu Sans;}}
 {\colortbl;\red0\green0\blue0;\red0\green0\blue255;\red0\green255\blue255;\red0\green255\blue0;\red255\green0\blue255;\red255\green0\blue0;\red255\green255\blue0;\red255\green255\blue255;\red0\green0\blue128;\red0\green128\blue128;\red0\green128\blue0;\red128\green0\blue128;\red128\green0\blue0;\red128\green128\blue0;\red128\green128\blue128;\red192\green192\blue192;}
-{\stylesheet{\s0\snext0\dbch\af8\langfe1081\dbch\af8\afs24\alang1081\ql\keep\nowidctlpar\sb0\sa720\ltrpar\hyphpar0\aspalpha\cf0\loch\f6\fs24\lang1033\kerning1 Normal;}
+{\stylesheet{\s0\snext0\dbch\af8\langfe1081\dbch\af8\afs24\alang1081\ql\keep\nowidctlpar\sb0\sa720\ltrpar\hyphpar0\aspalpha\cf0\loch\f6\fs24\lang1033\kerning1 Norm
+al;}
 {\*\cs15\snext15\dbch\af10\langfe1033\afs24 Default Paragraph Font;}
 {\s16\sbasedon0\snext17\dbch\af10\langfe1081\dbch\af8\afs28\ql\keep\nowidctlpar\sb240\sa120\keepn\ltrpar\cf0\loch\f4\fs28\lang1033\kerning1 Heading;}
 {\s17\sbasedon0\snext17\dbch\af8\langfe1081\dbch\af8\afs24\ql\keep\nowidctlpar\sb0\sa120\ltrpar\cf0\loch\f6\fs24\lang1033\kerning1 Text Body;}
@@ -351,31 +393,73 @@ def create_rtf_content(labels):
     rtf_content = rtf_header
 
     try:
-        for label in labels:
+        for label_index, label in enumerate(labels):
+            inat_url = next((value for field, value in label if field == "iNaturalist URL"), None)
+        
             for field, value in label:
                 if field.startswith("iNat") or field.startswith("iNaturalist"):
                     first_char, rest = field[0], field[1:]
                     rtf_content += r"{\rtlch \ltrch\loch{\ul{\b " + first_char + r"}}}" + r"{\rtlch \ltrch\scaps\loch{\ul{\b " + rest + r":}}} " + str(value) + r"\line "
                 elif field == "Scientific Name":
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} {\b\i " + str(value) + r"}\line "
+                    # Tell the user which species is being added to the label on stdout
+                    print(f"Added label for {value}")
                 elif field == "GPS Coordinates":
-                    # Directly replace the ± symbol with the RTF escape code
+                    # Replace the ± symbol with the RTF escape code
                     value_rtf = value.replace("±", r"\'b1")
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + value_rtf + r"\line "
                 elif field == "Notes":
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} "
-                    value = remove_formatting_tags(value)
                     value = escape_rtf(str(value))
                     value_rtf = str(value)
                     # Replace newlines with RTF line breaks
                     value_rtf = value_rtf.replace('\n', r'\line ')
+                    # Handle bold and italics text properly
                     value_rtf = value_rtf.replace('__BOLD_START__', r'{\b ').replace('__BOLD_END__', r'}')
                     value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
-                    # Remove the line about the MO to iNat import, as this isn't important on a label
+                    # Remove the line about the MO to iNat import, as this isn't important on a label since we already include the MO URL
                     value_rtf = re.sub(r'\\line Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value_rtf)
-                    rtf_content += value_rtf + r"\line "
+                    rtf_content += value_rtf + r"\line \tab"
                 else:
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + str(value) + r"\line "
+        
+            def split_hex_string(s, n):
+                # Split hex string into lines of n characters
+                return '\n'.join([s[i:i+n] for i in range(0, len(s), n)])
+
+            # Add the QR code to the label
+
+            # Save QR to a png file for debugging
+            # qr_filename = f"qr_code_{label_index}.png"
+            qr_hex, qr_size = generate_qr_code(inat_url)
+            # os.remove(qr_filename)
+
+            if qr_hex:
+                # Convert pixel dimensions to twips (1 pixel = 15 twips)
+                qr_width_twips = qr_size[0] * 15
+                qr_height_twips = qr_size[1] * 15
+
+                # Embed the base64-encoded QR code image in RTF
+                rtf_content += r'{\pict\pngblip\picw'
+                rtf_content += str(qr_width_twips)
+                rtf_content += r'\pich'
+                rtf_content += str(qr_height_twips)
+                rtf_content += r'\picwgoal'
+                rtf_content += str(qr_width_twips)
+                rtf_content += r'\pichgoal'
+                rtf_content += str(qr_height_twips)
+                rtf_content += r' '
+                
+                # Split the base64 string into chunks of 76 characters (standard for RTF)
+                hex_chunks = split_hex_string(qr_hex, 76)
+                rtf_content += hex_chunks
+                rtf_content += r'}'
+
+                # print(f"QR code embedded successfully.")
+            else:
+                print("Failed to generate QR code.")
+
+            # Add some vertical space between labels
             rtf_content += r"\par "
 
         rtf_content += rtf_footer
@@ -385,6 +469,7 @@ def create_rtf_content(labels):
 
     return rtf_content
 
+# Check to see if the observation is in California,
 def is_within_california(latitude, longitude):
     # Approximate bounding box for California
     CA_NORTH = 42.0
@@ -427,6 +512,7 @@ if __name__ == "__main__":
         request_count += 1  # Increment the request counter
 
         if observation_data:
+            # If the --find-ca command line option is given, only print out URL's of California observations
             if args.find_ca:
                 if 'geojson' in observation_data and observation_data['geojson']:
                     coordinates = observation_data['geojson']['coordinates']
@@ -444,6 +530,7 @@ if __name__ == "__main__":
                 rtf_file.write(rtf_content)
             print(f"RTF file created: {args.rtf}")
         else:
+            # Print labels to stdout
             for label in labels:
                 for field, value in label:
                     if field == "Notes":
