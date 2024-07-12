@@ -50,10 +50,11 @@ Dependencies:
 - dateutil
 - beautifulsoup4
 - qrcode
+- colorama
 
 The dependencies can be installed with the following command:
 
-    pip install requests python-dateutil beautifulsoup4 qrcode[pil]
+    pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama
 
 Python version 3.6 or higher is recommended.
 

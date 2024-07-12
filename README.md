@@ -62,7 +62,7 @@ The iNaturalist Herbarium Label Generator is a Python tool designed to create fo
 
 3. Install the required dependencies:
    ```
-   bash pip install requests python-dateutil beautifulsoup4 qrcode[pil]
+   bash pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama
    ```
 
 ## Usage
@@ -113,6 +113,7 @@ The script generates herbarium labels to the standard output by default, or labe
 - python-dateutil
 - beautifulsoup4
 - qrcode[pil]
+- colorama
 
 ## Contributing
 
