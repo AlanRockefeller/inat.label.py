@@ -5,9 +5,7 @@ iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: July 11, 2024
-Version: 1.6
-
-Todo:  Fix error if observation has no date
+Version: 1.7
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
 It fetches data from the iNaturalist API and formats it into printable labels suitable for
@@ -62,6 +60,7 @@ Python version 3.6 or higher is recommended.
 """
 
 import argparse
+import colorama
 import datetime
 import re
 import sys
@@ -186,19 +185,24 @@ def extract_observation_id(input_string):
     # If neither, return None
     return None
 
+
 def get_observation_data(observation_id):
     url = f"https://api.inaturalist.org/v1/observations/{observation_id}"
     response = requests.get(url)
+    # Debug: Display all downloaded information - requires adding import json
+    # print(json.dumps(response.json(), indent=2))
     if response.status_code == 200:
         data = response.json()
         if data['results']:
-            return data['results'][0]
+            observation = data['results'][0]
+            iconic_taxon_name = observation.get('taxon', {}).get('iconic_taxon_name', 'Unknown')
+            return observation, iconic_taxon_name
         else:
-            print(f"Error: Observation {observation_id} does not exist.")
-            return None
+            print(f"Error: Observation {observation_id} does not exist.")  
+            return None 
     else:
-        print(f"Error: Unable to fetch data for observation {observation_id}")
-        return None
+        print(f"Error: Unable to fetch data for observation {observation_id}") 
+        return None 
 
 def field_exists(observation_data, field_name):
     return any(field['name'].lower() == field_name.lower() for field in observation_data.get('ofvs', []))
@@ -247,23 +251,25 @@ def parse_date(date_string):
     ]
     
     # First, try to extract just the date part if there's more information
-    date_part = date_string.split()[0]
+    date_part = getattr(date_string, 'split', lambda: [' '])()[0]
     
     for format in date_formats:
         try:
             parsed_date = datetime.datetime.strptime(date_part, format)
-            return parsed_date.date()  # Return only the date part
+            if parsed_date:
+                return parsed_date.date()  # Return only the date part
         except ValueError:
             continue
 
     # If the above fails, try parsing the full string but only keep the date
     try:
         parsed_date = dateutil_parser.parse(date_string, fuzzy=True)
-        return parsed_date.date()  # Return only the date part
-    except ValueError:
-        return None
+        if parsed_date:
+            return parsed_date.date()  # Return only the date part
+    except (ValueError, TypeError):
+        pass
 
-def create_inaturalist_label(observation_data):
+def create_inaturalist_label(observation_data, iconic_taxon_name):
     obs_number = observation_data['id']
     url = f"https://www.inaturalist.org/observations/{obs_number}"
 
@@ -364,7 +370,7 @@ def create_inaturalist_label(observation_data):
     notes_parsed = parse_html_notes(notes)
     label.append(("Notes", notes_parsed))
 
-    return label
+    return label, iconic_taxon_name
 
 def create_rtf_content(labels):
     rtf_header = r"""{\rtf1\ansi\deff3\adeflang1025
@@ -390,7 +396,7 @@ def create_rtf_content(labels):
     rtf_content = rtf_header
 
     try:
-        for _label_index, label in enumerate(labels):
+        for label, iconic_taxon_name in labels:
             inat_url = next((value for field, value in label if field == "iNaturalist URL"), None)
         
             for field, value in label:
@@ -399,8 +405,14 @@ def create_rtf_content(labels):
                     rtf_content += r"{\rtlch \ltrch\loch{\ul{\b " + first_char + r"}}}" + r"{\rtlch \ltrch\scaps\loch{\ul{\b " + rest + r":}}} " + str(value) + r"\line "
                 elif field == "Scientific Name":
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} {\b\i " + str(value) + r"}\line "
-                    # Tell the user which species is being added to the label on stdout
-                    print(f"Added label for {value}")
+                    # Tell the user which species is being added to the label on stdout.   Fungi in blue, plants in green, everything else in white.
+                    colorama.init()
+                    if iconic_taxon_name == "Fungi":
+                        print(f"\033[94mAdded label for {iconic_taxon_name}\033[0m {value}")
+                    elif iconic_taxon_name == "Plantae":
+                        print(f"\033[92mAdded label for {iconic_taxon_name}\033[0m {value}")
+                    else: 
+                        print(f"Added label for {iconic_taxon_name} {value}")
                 elif field == "GPS Coordinates":
                     # Replace the ± symbol with the RTF escape code
                     value_rtf = value.replace("±", r"\'b1")
@@ -497,41 +509,48 @@ if __name__ == "__main__":
         observation_id = extract_observation_id(input_value)
 
         if observation_id is None:
-            if not args.find_ca:
-                print(f"Error: Invalid input '{input_value}'. Please provide a valid observation number or URL.")
+            print(f"Error: Invalid input '{input_value}'. Please provide a valid observation number or URL.")
             continue
 
         # Add delay if more than 20 requests
         if request_count >= 20:
             time.sleep(1)  # 1 second delay
 
-        observation_data = get_observation_data(observation_id)
+        result = get_observation_data(observation_id)
         request_count += 1  # Increment the request counter
 
-        if observation_data:
-            # If the --find-ca command line option is given, only print out URL's of California observations
-            if args.find_ca:
-                if 'geojson' in observation_data and observation_data['geojson']:
-                    coordinates = observation_data['geojson']['coordinates']
-                    latitude, longitude = coordinates[1], coordinates[0]
-                    if is_within_california(latitude, longitude):
-                        print(f"https://www.inaturalist.org/observations/{observation_id}")
-            else:
-                label = create_inaturalist_label(observation_data)
-                labels.append(label)
+        if result is None:
+            continue  # Skip to the next observation if there was an error
+
+        observation_data, iconic_taxon_name = result
+
+        # If the --find-ca command line option is given, only print out URL's of California observations
+        if args.find_ca:
+            if 'geojson' in observation_data and observation_data['geojson']:
+                coordinates = observation_data['geojson']['coordinates']
+                latitude, longitude = coordinates[1], coordinates[0]
+                if is_within_california(latitude, longitude):
+                    print(f"https://www.inaturalist.org/observations/{observation_id}")
+        # Otherwise create the label
+        else:
+            label, iconic_taxon_name = create_inaturalist_label(observation_data, iconic_taxon_name)
+            labels.append((label, iconic_taxon_name))
 
     if not args.find_ca:
-        if args.rtf:
-            rtf_content = create_rtf_content(labels)
-            with open(args.rtf, 'w') as rtf_file:
-                rtf_file.write(rtf_content)
-            print(f"RTF file created: {args.rtf}")
+        if labels:
+            if args.rtf:
+                rtf_content = create_rtf_content(labels)
+                with open(args.rtf, 'w') as rtf_file:
+                    rtf_file.write(rtf_content)
+                print(f"RTF file created: {args.rtf}")
+            else:
+                # Print labels to stdout
+                for label, _ in labels:
+                    for field, value in label:
+                        if field == "Notes":
+                            value = remove_formatting_tags(value)
+                            value = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value)
+                        print(f"{field}: {value}")
+                    print("\n")  # Blank line between labels
         else:
-            # Print labels to stdout
-            for label in labels:
-                for field, value in label:
-                    if field == "Notes":
-                        value = remove_formatting_tags(value)
-                        value = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value)
-                    print(f"{field}: {value}")
-                print("\n")  # Blank line between labels
+            print("No valid observations found.")
