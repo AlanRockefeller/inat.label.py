@@ -1,5 +1,12 @@
 # Changelog
 
+## 1,7
+
+- When generating RTF labels it prints the iconic taxon along with the name -
+fungi in blue, plants in green and everything else in white.   This will help
+you quickly notice if an observation number is mistyped.
+- Gracefully handles observations which don't have a date defined
+
 ## 1.6
 
 - RTF output now includes a QR code which points to the iNaturalist URL
@@ -11,7 +18,8 @@
 observations which are in California.   This makes it easy to add these
 observations to the Mycomap CA Network project.
 - Added a 1-second delay if there are more than 20 requests, which stops the
-iNaturalist API from denying requests for large label printing jobs.
+iNaturalist API from denying requests for large label printing jobs.  Now it
+works well even if you are printing hundreds of labels at a time.
 
 ## 1.4
 
@@ -25,11 +33,13 @@ Still need to fix encoding of unusual characters in the location.
 
 ### Added
 - Handles special characters and formatting better, especially of the Location and Notes fields
-- Implemented improved date parsing functionality with timezone support, ensuring more accurate and consistent handling of dates across different timezones
+- Implemented improved date parsing functionality with timezone support, ensuring more accurate 
+and consistent handling of dates across different timezones
 
 ## [1.1] - [Previous release 2024-06-27]
 
-Version 1.1 improves formatting, adds support for LSU, RPB1, RPB2 and TEF1 DNA barcodes and obscured locations.
+Version 1.1 improves formatting, adds support for LSU, RPB1, RPB2 and TEF1 DNA barcodes and 
+gracefully handles obscured locations.
 
 ## [1.0] - [Initial release 2024-06-26]
 
