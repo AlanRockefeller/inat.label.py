@@ -1,6 +1,6 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 1.6
+# iNaturalist Herbarium Label Generator version 1.7
 # By Alan Rockefeller
 # July 11, 2024
 
@@ -46,6 +46,7 @@ The iNaturalist Herbarium Label Generator is a Python tool designed to create fo
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
 - Includes a 1-second delay if there are more than 20 requests, which stops the iNaturalist API from denying requests for large label printing jobs.
 - Adds a QR code to the RTF labels which points to the iNaturalist URL
+- When generating RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white.   This will help you quickly notice if an observation number is mistyped.
 
 ## Installation
 
