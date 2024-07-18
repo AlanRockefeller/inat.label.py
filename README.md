@@ -40,7 +40,7 @@ The iNaturalist Herbarium Label Generator is a Python tool designed to create fo
   - Microscopy Performed (if present)
   - Traditional or Mobile Photography (if present)
   - Observation Notes
-- By deafult outputs labels to console for quick viewing / testing
+- By default outputs labels to console for quick viewing / testing
 - Optionally creates formatted RTF files for high-quality printing
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
