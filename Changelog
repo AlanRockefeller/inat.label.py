@@ -1,5 +1,12 @@
 # Changelog
 
+## 1,8
+
+- Handles observations without names gracefully
+- Now includes more observation fields in the label, including Herbarium Catalog Number,
+Herbarium Name, Mycoportal ID and Voucher number(s)
+- Shortens long locations
+
 ## 1,7
 
 - When generating RTF labels it prints the iconic taxon along with the name -

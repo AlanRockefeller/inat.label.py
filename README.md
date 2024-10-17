@@ -39,6 +39,10 @@ The iNaturalist Herbarium Label Generator is a Python tool designed to create fo
   - Mushroom Observer URL (if present, formatted in simplest possible URL form)
   - Microscopy Performed (if present)
   - Traditional or Mobile Photography (if present)
+  - Herbarium Catalog Number (if present)
+  - Herbarium Name (if present)
+  - Mycoportal ID (if present)
+  - Voucher number(s) (if present)
   - Observation Notes
 - By default outputs labels to console for quick viewing / testing
 - Optionally creates formatted RTF files for high-quality printing
@@ -62,7 +66,7 @@ The iNaturalist Herbarium Label Generator is a Python tool designed to create fo
 
 3. Install the required dependencies:
    ```
-   bash pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama
+   bash pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow
    ```
 
 ## Usage
@@ -114,6 +118,8 @@ The script generates herbarium labels to the standard output by default, or labe
 - beautifulsoup4
 - qrcode[pil]
 - colorama
+- replace-accents
+- pillow
 
 ## Contributing
 
@@ -127,6 +133,7 @@ Contributions to the iNaturalist Herbarium Label Generator are welcome! Here's h
 6. Open a Pull Request
 7. Contact Alan Rockefeller via email, old fashioned phone call or messenger of your choice
 
+Or just contact me with suggestions.
 
 ## License
 
@@ -134,7 +141,7 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 ## Contact
 
-Alan Rockefeller - My email address is my full name at gmail, or message me on Facebook or Instagram
+Alan Rockefeller - My email address is my full name at gmail, or message me on Facebook, Linkedin or Instagram
 
 Project Link: [https://github.com/AlanRockefeller/inat.label.py](https://github.com/AlanRockefeller/inat.label.py)
 
