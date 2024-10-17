@@ -5,7 +5,12 @@ iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: July 11, 2024
-Version: 1.7
+Version: 1.8
+
+
+#  Todo:  Fix bug that causes it to crash if ID is unknown
+
+
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
 It fetches data from the iNaturalist API and formats it into printable labels suitable for
@@ -18,7 +23,8 @@ Features:
 - Includes various data fields such as scientific name, common name, location,
   GPS coordinates, observation date, observer, and more
 - Handles special fields like DNA Barcode ITS (and LSU, TEF1, RPB1, RPB2), GenBank Accession Number,
-  Provisional Species Name, Mobile or Traditional Photography?, Microscopy Performed and Mushroom Observer URL when available
+  Provisional Species Name, Mobile or Traditional Photography?, Microscopy Performed, Herbarium Catalog Number,
+  Herbarium Name, Mycoportal ID, Voucher number(s) and Mushroom Observer URL when available
 - Generates a QR code which links to the iNaturalist URL
 
 Usage:
@@ -51,10 +57,11 @@ Dependencies:
 - beautifulsoup4
 - qrcode
 - colorama
+- replace-accents
 
 The dependencies can be installed with the following command:
 
-    pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama
+    pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow
 
 Python version 3.6 or higher is recommended.
 
@@ -69,7 +76,7 @@ import time
 import unicodedata
 from io import BytesIO
 import requests
-
+from replace_accents import replace_accents_characters
 import binascii
 from bs4 import BeautifulSoup
 from dateutil import parser as dateutil_parser
@@ -173,7 +180,7 @@ def parse_html_notes(notes):
 def normalize_string(s):
     return unicodedata.normalize('NFKD', s.strip().lower())
 
-def extract_observation_id(input_string):
+def extract_observation_id(input_string, debug = False):
     # Check if the input is a URL
     url_match = re.search(r'observations/(\d+)', input_string)
     if url_match:
@@ -190,20 +197,20 @@ def extract_observation_id(input_string):
 def get_observation_data(observation_id):
     url = f"https://api.inaturalist.org/v1/observations/{observation_id}"
     response = requests.get(url)
-    # Debug: Display all downloaded information - requires adding import json
-    # print(json.dumps(response.json(), indent=2))
+    
     if response.status_code == 200:
         data = response.json()
         if data['results']:
             observation = data['results'][0]
-            iconic_taxon_name = observation.get('taxon', {}).get('iconic_taxon_name', 'Unknown')
+            taxon = observation.get('taxon', {})
+            iconic_taxon_name = taxon.get('iconic_taxon_name') if taxon else 'Life'
             return observation, iconic_taxon_name
         else:
-            print(f"Error: Observation {observation_id} does not exist.")  
-            return None 
+            print(f"Error: Observation {observation_id} does not exist.")
+            return None, 'Life'
     else:
-        print(f"Error: Unable to fetch data for observation {observation_id}") 
-        return None 
+        print(f"Error: Unable to fetch data for observation {observation_id}")
+        return None, 'Life'
 
 def field_exists(observation_data, field_name):
     return any(field['name'].lower() == field_name.lower() for field in observation_data.get('ofvs', []))
@@ -275,12 +282,29 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
     url = f"https://www.inaturalist.org/observations/{obs_number}"
 
     taxon = observation_data.get('taxon', {})
-    common_name = taxon.get('preferred_common_name', taxon.get('name', 'Not available'))
-    scientific_name = observation_data.get('taxon', {}).get('name', 'Not available')
+    # Handle cases where there is no name on the observation
+    if taxon is None:
+        common_name = ''
+        scientific_name = 'Not available'
+    else:
+        common_name = taxon.get('preferred_common_name', taxon.get('name', 'Not available'))
+        scientific_name = observation_data.get('taxon', {}).get('name', 'Not available')
 
     location = observation_data.get('place_guess') or 'Not available'
+
+    location = location.replace("United States", "USA")
+    location = re.sub(r'\b\d{5}\b,?\s*', '', location)
+
+    #If the location is long, remove the first part of the location (usually a street address)
+    if len(location) > 40:
+        comma_index = location.find(',')
+        if comma_index != -1:
+         location = location[comma_index + 1:].strip()
+
+
+    # Remove unusual characters if we are in rtf mode - rtf readers don't handle these well
     if args.rtf:
-        location = escape_rtf(str(location))   # Escape characters if we are in rtf mode
+        location = replace_accents_characters(location)
 
     coords, accuracy = get_coordinates(observation_data)
     gps_coords = f"{coords} (±{accuracy}m)" if accuracy else coords
@@ -305,6 +329,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
     if common_name and common_name_normalized != scientific_name_normalized:
         label.append(("Common Name", common_name))
     
+
     # Add these fields to all labels
     label.extend([
     ("iNat Observation Number", str(obs_number)),
@@ -359,6 +384,26 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
     photography_type = get_field_value(observation_data, 'Mobile or Traditional Photography?')
     if photography_type:
         label.append(("Mobile or Traditional Photography", photography_type))
+
+    herbarium_catalog_number = get_field_value(observation_data, 'Herbarium Catalog Number')
+    if herbarium_catalog_number:
+        label.append(("Herbarium Catalog Number", herbarium_catalog_number))
+
+    herbarium_secondary_catalog_number = get_field_value(observation_data, 'Herbarium Secondary Catalog Number')
+    if herbarium_secondary_catalog_number:
+        label.append(("Herbarium Secondary Catalog Number", herbarium_secondary_catalog_number))
+
+    herbarium_name = get_field_value(observation_data, 'Herbarium Name')
+    if herbarium_name:
+        label.append(("Herbarium Name", herbarium_name))
+
+    mycoportal_id = get_field_value(observation_data, 'Mycoportal ID')
+    if mycoportal_id:
+        label.append(("Mycoportal ID", mycoportal_id))
+
+    voucher_numbers = get_field_value(observation_data, 'Voucher Number(s)')
+    if voucher_numbers:
+        label.append(("Voucher number(s)", voucher_numbers))
 
     mushroom_observer_url = get_field_value(observation_data, 'Mushroom Observer URL')
     if mushroom_observer_url:
@@ -494,6 +539,7 @@ if __name__ == "__main__":
     parser.add_argument("observation_ids", nargs="+", help="Observation number(s) or URL(s)")
     parser.add_argument("--rtf", metavar="filename.rtf", help="Output to RTF file (filename must end with .rtf)")
     parser.add_argument("--find-ca", action="store_true", help="Find observations within California")
+    parser.add_argument('--debug', action='store_true', help='Print debug output')
 
     if len(sys.argv) > 1 and sys.argv[-1] == '--rtf':
         parser.error("argument --rtf: expected a filename ending in .rtf")
@@ -507,7 +553,7 @@ if __name__ == "__main__":
     request_count = 0
 
     for input_value in args.observation_ids:
-        observation_id = extract_observation_id(input_value)
+        observation_id = extract_observation_id(input_value, debug=args.debug)
 
         if observation_id is None:
             print(f"Error: Invalid input '{input_value}'. Please provide a valid observation number or URL.")
@@ -518,6 +564,8 @@ if __name__ == "__main__":
             time.sleep(1)  # 1 second delay
 
         result = get_observation_data(observation_id)
+        observation, iconic_taxon_name = result
+
         request_count += 1  # Increment the request counter
 
         if result is None:
