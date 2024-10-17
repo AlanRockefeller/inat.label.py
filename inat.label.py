@@ -4,7 +4,7 @@
 iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: July 11, 2024
+Date:August 17, 2024
 Version: 1.8
 
 
