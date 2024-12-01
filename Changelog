@@ -1,5 +1,12 @@
 # Changelog
 
+
+## 1,9
+
+- Now can accept observation numbers in a file with the --file command line
+argument.  The file can have observation numbers separated by commas, spaces
+or newlines.
+
 ## 1,8
 
 - Handles observations without names gracefully

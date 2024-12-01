@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 1.8
+# iNaturalist Herbarium Label Generator version 1.9
 # By Alan Rockefeller
-# August 17, 2024
+# December 1, 2024
 
 
 ## Description
@@ -23,7 +23,7 @@ The iNaturalist Herbarium Label Generator is a Python tool designed to create fo
 ## Features
 
 - Fetches observation data using the iNaturalist API
-- Supports multiple observation IDs or URLs as input
+- Supports multiple observation IDs or URLs as input - or a file can be specified
 - Generates labels with key information including:
   - Scientific Name (in italics)
   - Common Name (if different from scientific name)

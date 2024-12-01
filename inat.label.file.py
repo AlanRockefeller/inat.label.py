@@ -4,8 +4,12 @@
 iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date:December 1, 2024
-Version: 1.9
+Date:August 17, 2024
+Version: 1.8
+
+
+#  Todo:  Fix bug that causes it to crash if ID is unknown
+
 
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
@@ -24,10 +28,10 @@ Features:
 - Generates a QR code which links to the iNaturalist URL
 
 Usage:
-1. Basic usage (output to console - mostly just for testing):
+1. Basic usage (output to console):
    ./inat.label.py <observation_number_or_url> [<observation_number_or_url> ...]
 
-2. Output to RTF file: (recommended - much better formatting and adds a QR code)
+2. Output to RTF file:
    ./inat.label.py <observation_number_or_url> [<observation_number_or_url> ...] --rtf <filename.rtf>
 
 Examples:
