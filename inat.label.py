@@ -4,8 +4,8 @@
 iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date:December 1, 2024
-Version: 1.9
+Date:December 2, 2024
+Version: 2.0
 
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
@@ -539,6 +539,9 @@ if __name__ == "__main__":
     parser.add_argument('--debug', action='store_true', help='Print debug output')
 
     args = parser.parse_args()
+    
+    # Suggested by James Chelin to fix a bug that caused large jobs to crash when called from cron
+    sys.setrecursionlimit(100000)
 
     # If no arguments are provided, show help and exit
     if len(sys.argv) == 1:

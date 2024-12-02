@@ -1,6 +1,10 @@
 # Changelog
 
 
+## 2,0
+
+- Bug fix suggested by James Chelin - large jobs no longer crash when called from cron
+
 ## 1,9
 
 - Now can accept observation numbers in a file with the --file command line
