@@ -9,6 +9,8 @@
 
 The iNaturalist Herbarium Label Generator is a Python tool designed to create formatted herbarium labels from an iNaturalist observation. This project rapidly creates professional quality labels for herbarium specimens.   It is designed to be robust, work on many different platforms and handle errors or unexpected input gracefully.
 
+An online version is at https://images.mushroomobserver.org/labels
+
 ## Table of Contents
 
 - [Features](#features)
