@@ -1,5 +1,9 @@
 # Changelog
 
+## 2,1
+
+- Now removes "Imported by Mushroom Observer yyyy-mm-dd" from notes which is added when importing iNaturalist observations
+into Mushroom Observer.
 
 ## 2,0
 
