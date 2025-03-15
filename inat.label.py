@@ -4,8 +4,8 @@
 iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date:December 2, 2024
-Version: 2.0
+Date:March 14, 2025
+Version: 2.1
 
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
@@ -470,6 +470,8 @@ def create_rtf_content(labels):
                     value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
                     # Remove the line about the MO to iNat import, as this isn't important on a label since we already include the MO URL
                     value_rtf = re.sub(r'\\line Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value_rtf)
+                    # Remove the line about the inat to MO import, as this isn't important on a label since we already include the MO URL (added by MO on import)
+                    value_rtf = re.sub(r'((\\line)\s+\2+\s+\2 Imported|Imported) by Mushroom Observer \d{4}-\d{2}-\d{2}', '', value_rtf)
                     rtf_content += value_rtf + r"\line \tab"
                 else:
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + str(value) + r"\line "
@@ -618,6 +620,7 @@ if __name__ == "__main__":
                         if field == "Notes":
                             value = remove_formatting_tags(value)
                             value = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value)
+                            value = re.sub(r'Imported by Mushroom Observer \d{4}-\d{2}-\d{2}', '', value)
                         print(f"{field}: {value}")
                     print("\n")  # Blank line between labels
         else:
