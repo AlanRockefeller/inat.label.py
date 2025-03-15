@@ -4,8 +4,8 @@
 iNaturalist Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date:March 14, 2025
-Version: 2.1
+Date:March 15, 2025
+Version: 2.2
 
 
 This script creates herbarium labels from iNaturalist observation numbers or URLs.
@@ -41,11 +41,8 @@ Examples:
   ./inat.label.py 150291663 62240372 --rtf two_labels.rtf
 
 Notes:
-- If the scientific name of an observation is a section, for example Amanita sect. Phalloideae, the 
-  scientific name will just be Phalloideae - in that case the full scientific name will often be in the 
-  Common Name field.
 - The RTF output is formatted to closely match the style of traditional herbarium labels.
-- It is recommended to print herbarium labels on 100% cotton paper with an inkjet printer for maximum longevity.
+- It is recommended to print herbarium labels on 100% cotton cardstock with an inkjet printer for maximum longevity.
 
 Dependencies:
 - requests
@@ -82,20 +79,20 @@ from PIL import Image
 
 def generate_qr_code(url):
     try:
-        qr = qrcode.QRCode(version=1, box_size=1, border=1)  
+        qr = qrcode.QRCode(version=1, box_size=1, border=1)
         qr.add_data(url)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
-        
+
         # Resize the QR code here if desired
         scale_factor = 2 # Resize to 2x the original size
         img = img.resize((int(img.size[0] * scale_factor), int(img.size[1] * scale_factor)), Image.LANCZOS)
-        
+
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         img_bytes = buffered.getvalue()
         img_hex = binascii.hexlify(img_bytes).decode('utf-8')
-        
+
         # Save the QR code to a PNG file for debugging
         # img.save(filename)
         return img_hex, img.size  # Return the hex string and the size of the image
@@ -114,10 +111,10 @@ def escape_rtf(text):
         '\\"': '\\u34\'',           #  Does not work, yet - see https://www.perplexity.ai/search/If-the-RTF-gOdEwtp2TnmQZoPfQGqpsQ
         'µ': '\\u181?',
         '×': '\\u215?',
-        '“': '\\ldblquote ',
-        '”': '\\rdblquote ',
-        '‘': '\\lquote ',
-        '’': '\\rquote ',
+        '"': '\\ldblquote ',
+        '"': '\\rdblquote ',
+        ''': '\\lquote ',
+        ''': '\\rquote ',
         '–': '\\endash ',
         '—': '\\emdash ',
         'é': '\\\'e9',
@@ -147,21 +144,21 @@ def remove_formatting_tags(text):
         cleaned_lines.append(line)
     return '\n'.join(cleaned_lines)
 
-                                                        
+
 def parse_html_notes(notes):
     if not notes or '<' not in notes:
         return notes  # Return the original notes if it's empty or doesn't contain HTML tags
-    
+
     soup = BeautifulSoup(notes, 'html.parser')
-    
+
     # Replace <p> with line breaks
     for p in soup.find_all('p'):
         p.unwrap()
-    
+
     # Convert hyperlinks to text URLs
     for a in soup.find_all('a'):
         a.replace_with(f"{a.text} ({a['href']})")
-    
+
     # Mark bold and italic text for RTF formatting
     for tag in soup.find_all(['strong', 'b']):
         tag.replace_with('__BOLD_START__' + tag.string + '__BOLD_END__')
@@ -169,7 +166,7 @@ def parse_html_notes(notes):
         tag.replace_with('__ITALIC_START__' + tag.string + '__ITALIC_END__')
     for tag in soup.find_all(['ins', 'u']):
         tag.replace_with('' + tag.string + '')
-    
+
     processed_text = str(soup).strip()
     return processed_text
 
@@ -189,23 +186,73 @@ def extract_observation_id(input_string, debug = False):
     # If neither, return None
     return None
 
+def get_taxon_details(taxon_id):
+    """Fetch detailed information about a taxon, including its ancestors."""
+    url = f"https://api.inaturalist.org/v1/taxa/{taxon_id}"
+    try:
+        # Add timeout to prevent hanging indefinitely
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data['results']:
+                return data['results'][0]
+        elif response.status_code == 429:
+            print(f"Rate limit exceeded when fetching taxon details. Waiting 5 seconds before retry...")
+            time.sleep(5)  # Wait 5 seconds before next request
+            return get_taxon_details(taxon_id)  # Retry
+        else:
+            print(f"Warning: Received status code {response.status_code} when fetching taxon {taxon_id}")
+            
+    except requests.exceptions.Timeout:
+        print(f"Timeout error when fetching taxon {taxon_id}. Continuing without detailed taxon information.")
+    except requests.exceptions.RequestException as e:
+        print(f"Network error when fetching taxon {taxon_id}: {str(e)}. Continuing without detailed taxon information.")
+    except Exception as e:
+        print(f"Unexpected error when fetching taxon {taxon_id}: {str(e)}. Continuing without detailed taxon information.")
+        
+    return None
 
 def get_observation_data(observation_id):
     url = f"https://api.inaturalist.org/v1/observations/{observation_id}"
-    response = requests.get(url)
-    
-    if response.status_code == 200:
-        data = response.json()
-        if data['results']:
-            observation = data['results'][0]
-            taxon = observation.get('taxon', {})
-            iconic_taxon_name = taxon.get('iconic_taxon_name') if taxon else 'Life'
-            return observation, iconic_taxon_name
+    try:
+        # Add timeout to prevent hanging indefinitely
+        response = requests.get(url, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            if data['results']:
+                observation = data['results'][0]
+                taxon = observation.get('taxon', {})
+                iconic_taxon_name = taxon.get('iconic_taxon_name') if taxon else 'Life'
+                
+                # If we have a taxon, fetch its complete taxonomic data
+                if taxon and 'id' in taxon:
+                    taxon_id = taxon['id']
+                    taxon_details = get_taxon_details(taxon_id)
+                    if taxon_details:
+                        observation['taxon_details'] = taxon_details
+                
+                return observation, iconic_taxon_name
+            else:
+                print(f"Error: Observation {observation_id} does not exist.")
+                return None, 'Life'
+        elif response.status_code == 429:
+            print(f"Rate limit exceeded. Waiting 5 seconds before retry...")
+            time.sleep(5)  # Wait 5 seconds before next request
+            return get_observation_data(observation_id)  # Retry
         else:
-            print(f"Error: Observation {observation_id} does not exist.")
+            print(f"Error: Unable to fetch data for observation {observation_id}. Status code: {response.status_code}")
             return None, 'Life'
-    else:
-        print(f"Error: Unable to fetch data for observation {observation_id}")
+            
+    except requests.exceptions.Timeout:
+        print(f"Timeout error when fetching observation {observation_id}. Skipping.")
+        return None, 'Life'
+    except requests.exceptions.RequestException as e:
+        print(f"Network error when fetching observation {observation_id}: {str(e)}. Skipping.")
+        return None, 'Life'
+    except Exception as e:
+        print(f"Unexpected error when fetching observation {observation_id}: {str(e)}. Skipping.")
         return None, 'Life'
 
 def field_exists(observation_data, field_name):
@@ -253,10 +300,10 @@ def parse_date(date_string):
         '%Y/%m/%d',
         '%B %d, %Y',
     ]
-    
+
     # First, try to extract just the date part if there's more information
-    date_part = getattr(date_string, 'split', lambda: [' '])()[0]
-    
+    date_part = getattr(date_string, 'split', lambda x: [' '])()[0]
+
     for format in date_formats:
         try:
             parsed_date = datetime.datetime.strptime(date_part, format)
@@ -273,6 +320,109 @@ def parse_date(date_string):
     except (ValueError, TypeError):
         pass
 
+def format_scientific_name(observation_data):
+    """Format the scientific name based on taxonomic rank."""
+    
+    # Define rank abbreviations
+    rank_abbreviations = {
+        'subgenus': 'subg.',
+        'section': 'sect.',
+        'subsection': 'subsect.',
+        'complex': 'complex',
+        'subspecies': 'subsp.',
+        'variety': 'var.',
+        'form': 'f.'
+    }
+    
+    taxon = observation_data.get('taxon', {})
+    if not taxon:
+        return 'Not available'
+    
+    # Get the basic scientific name and rank
+    scientific_name = taxon.get('name', 'Not available')
+    rank = taxon.get('rank', '').lower()
+    
+    # If it's not in our special ranks list, use the name as is
+    if rank not in rank_abbreviations:
+        return scientific_name
+    
+    # For complex, append 'complex' to the name
+    if rank == 'complex':
+        return f"{scientific_name} complex"
+    
+    # Special handling for subspecies, variety, and form which follow species name
+    if rank in ['subspecies', 'variety', 'form']:
+        taxon_details = observation_data.get('taxon_details', {})
+        
+        # Check if the name already includes the parent species (e.g., "Amanita muscaria flavivolvata")
+        name_parts = scientific_name.split()
+        
+        # If name has more than 2 parts, it might already include the parent species
+        if len(name_parts) > 2:
+            # Find the species in the ancestors
+            species_name = None
+            ancestors = taxon_details.get('ancestors', [])
+            
+            for ancestor in ancestors:
+                if ancestor.get('rank') == 'species':
+                    species_name = ancestor.get('name')
+                    break
+            
+            # If we found the species and it's in the name, format properly
+            if species_name and species_name in scientific_name:
+                # Extract the infraspecific epithet (the part after the species name)
+                epithet = scientific_name.replace(species_name, '').strip()
+                return f"{species_name} {rank_abbreviations[rank]} {epithet}"
+            # If the name has three parts but doesn't match our species ancestor,
+            # it might be "Genus species epithet" format
+            elif len(name_parts) == 3:
+                return f"{name_parts[0]} {name_parts[1]} {rank_abbreviations[rank]} {name_parts[2]}"
+        
+        # If we get here, we need to find parent species from ancestors
+        ancestors = taxon_details.get('ancestors', [])
+        species_name = None
+        
+        for ancestor in ancestors:
+            if ancestor.get('rank') == 'species':
+                species_name = ancestor.get('name')
+                break
+        
+        if species_name:
+            # If the scientific_name is just the infraspecific epithet
+            if len(name_parts) == 1:
+                return f"{species_name} {rank_abbreviations[rank]} {scientific_name}"
+            else:
+                # If scientific_name already contains full info, just make sure format is correct
+                return f"{species_name} {rank_abbreviations[rank]} {name_parts[-1]}"
+        else:
+            # Fallback: couldn't find parent species
+            return scientific_name
+    
+    # For other ranks below genus (section, subsection, etc.)
+    taxon_details = observation_data.get('taxon_details', {})
+    ancestors = taxon_details.get('ancestors', [])
+    
+    # Find the genus in the ancestors
+    genus = None
+    section = None
+    for ancestor in ancestors:
+        if ancestor.get('rank') == 'genus':
+            genus = ancestor.get('name')
+        elif ancestor.get('rank') == 'section':
+            section = ancestor.get('name')
+    
+    # If we couldn't find the genus, use the name as is
+    if not genus:
+        return scientific_name
+    
+    # Construct the full scientific name based on rank
+    if rank == 'section':
+        return f"{genus} {rank_abbreviations[rank]} {scientific_name}"
+    elif rank == 'subsection' and section:
+        return f"{genus} sect. {section} {rank_abbreviations[rank]} {scientific_name}"
+    else:
+        return f"{genus} {rank_abbreviations[rank]} {scientific_name}"
+
 def create_inaturalist_label(observation_data, iconic_taxon_name):
     obs_number = observation_data['id']
     url = f"https://www.inaturalist.org/observations/{obs_number}"
@@ -284,7 +434,8 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
         scientific_name = 'Not available'
     else:
         common_name = taxon.get('preferred_common_name', taxon.get('name', 'Not available'))
-        scientific_name = observation_data.get('taxon', {}).get('name', 'Not available')
+        # Use the new function to format the scientific name correctly
+        scientific_name = format_scientific_name(observation_data)
 
     location = observation_data.get('place_guess') or 'Not available'
 
@@ -319,12 +470,32 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
     ("Scientific Name", scientific_name)
     ]
 
-    # Include common name only if it's different from the scientific name
-    scientific_name_normalized = normalize_string(scientific_name)
+    # Check if common name is contained in any part of the scientific name
+    # Include common name only if it's not redundant with any part of the scientific name
+    scientific_name_parts = scientific_name.lower().split()
     common_name_normalized = normalize_string(common_name) if common_name else ''
-    if common_name and common_name_normalized != scientific_name_normalized:
-        label.append(("Common Name", common_name))
     
+    # Check if common name matches any part of the scientific name
+    is_redundant = False
+    if common_name:
+        # First check if it matches the full scientific name
+        if common_name_normalized == normalize_string(scientific_name):
+            is_redundant = True
+        else:
+            # Check if it matches any part of the scientific name
+            for part in scientific_name_parts:
+                # Skip rank abbreviations (sect., subsp., etc.)
+                if part.endswith('.') or part == 'complex':
+                    continue
+                    
+                if normalize_string(part) == common_name_normalized:
+                    is_redundant = True
+                    break
+    
+    # Only add common name if it's not redundant
+    if common_name and not is_redundant:
+        label.append(("Common Name", common_name))
+
 
     # Add these fields to all labels
     label.extend([
@@ -376,7 +547,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
     microscopy = get_field_value(observation_data, 'Microscopy performed')
     if microscopy:
         label.append(("Microscopy performed:", microscopy))
-    
+
     photography_type = get_field_value(observation_data, 'Mobile or Traditional Photography?')
     if photography_type:
         label.append(("Mobile or Traditional Photography", photography_type))
@@ -440,7 +611,7 @@ def create_rtf_content(labels):
     try:
         for label, iconic_taxon_name in labels:
             inat_url = next((value for field, value in label if field == "iNaturalist URL"), None)
-        
+
             for field, value in label:
                 if field.startswith("iNat") or field.startswith("iNaturalist"):
                     first_char, rest = field[0], field[1:]
@@ -453,7 +624,7 @@ def create_rtf_content(labels):
                         print(f"\033[94mAdded label for {iconic_taxon_name}\033[0m {value}")
                     elif iconic_taxon_name == "Plantae":
                         print(f"\033[92mAdded label for {iconic_taxon_name}\033[0m {value}")
-                    else: 
+                    else:
                         print(f"Added label for {iconic_taxon_name} {value}")
                 elif field == "GPS Coordinates":
                     # Replace the ± symbol with the RTF escape code
@@ -475,7 +646,7 @@ def create_rtf_content(labels):
                     rtf_content += value_rtf + r"\line \tab"
                 else:
                     rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + str(value) + r"\line "
-        
+
             def split_hex_string(s, n):
                 # Split hex string into lines of n characters
                 return '\n'.join([s[i:i+n] for i in range(0, len(s), n)])
@@ -502,7 +673,7 @@ def create_rtf_content(labels):
                 rtf_content += r'\pichgoal'
                 rtf_content += str(qr_height_twips)
                 rtf_content += r' '
-                
+
                 # Split the base64 string into chunks of 76 characters (standard for RTF)
                 hex_chunks = split_hex_string(qr_hex, 76)
                 rtf_content += hex_chunks
@@ -541,7 +712,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug', action='store_true', help='Print debug output')
 
     args = parser.parse_args()
-    
+
     # Suggested by James Chelin to fix a bug that caused large jobs to crash when called from cron
     sys.setrecursionlimit(100000)
 
@@ -625,4 +796,3 @@ if __name__ == "__main__":
                     print("\n")  # Blank line between labels
         else:
             print("No valid observations found.")
-
