@@ -245,7 +245,7 @@ def get_observation_data(observation_id, retries=3):
             print("Rate limit exceeded. Waiting 5 seconds before retry...")
             time.sleep(5)  # Wait 5 seconds before next request
             if retries > 0:
-                return get_taxon_details(taxon_id, retries - 1)
+                return get_observation_data(taxon_id, retries - 1)
             else:
                 print("Max retries reached. Skipping further attempts.")
                 return None
