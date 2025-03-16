@@ -78,6 +78,21 @@ from PIL import Image
 
 
 def generate_qr_code(url):
+    """
+    Generate a QR code image from a URL.
+    
+    This function creates a QR code from the provided URL, resizes the image to twice its original dimensions,
+    and converts the QR code into a PNG formatted hexadecimal string. It returns a tuple containing the hex
+    string and the image size. If an error occurs during the generation process, an error message is printed and
+    (None, None) is returned.
+    
+    Args:
+        url: The URL to encode into the QR code.
+    
+    Returns:
+        A tuple (img_hex, size) where img_hex is the hexadecimal string of the PNG image, and size is a tuple
+        (width, height) indicating the dimensions of the image. Returns (None, None) if an error occurs.
+    """
     try:
         qr = qrcode.QRCode(version=1, box_size=1, border=1)
         qr.add_data(url)
@@ -101,7 +116,19 @@ def generate_qr_code(url):
         return None, None
 
 def escape_rtf(text):
-    """Escape special characters for RTF output.  This section may need additional changes as more unusual characters are encountered, usually in the location."""
+    """
+    Escape special characters in a text string for RTF output.
+    
+    Replaces characters that have special meaning in RTF with their corresponding escape
+    sequences to ensure that the text is correctly formatted in RTF documents. This mapping
+    may be updated in the future to handle additional or unusual characters.
+    
+    Args:
+        text (str): The input string to be escaped for RTF.
+        
+    Returns:
+        str: The escaped string.
+    """
     rtf_char_map = {
         '\\': '\\\\',
         '{': '\\{',
@@ -132,6 +159,19 @@ def escape_rtf(text):
 
 # Remove formatting tags in stdout
 def remove_formatting_tags(text):
+    """
+    Removes specified formatting tags and extraneous lines from the input text.
+    
+    This function strips custom bold and italic markers along with HTML break tags,
+    cleans up whitespace, and removes lines that are empty or composed solely of digits
+    and non-word characters.
+    
+    Args:
+        text: A string that may include custom formatting markers and HTML line breaks.
+    
+    Returns:
+        A cleaned string with formatting tags removed and unnecessary lines omitted.
+    """
     tags_to_remove = ['__BOLD_START__', '__BOLD_END__', '__ITALIC_START__', '__ITALIC_END__']
     for tag in tags_to_remove:
         text = text.replace(tag, '')
@@ -146,6 +186,15 @@ def remove_formatting_tags(text):
 
 
 def parse_html_notes(notes):
+    """
+    Converts HTML notes into plain text with RTF formatting markers.
+    
+    Parses an HTML string and transforms specific tags: paragraph tags are unwrapped,
+    hyperlinks are replaced with "text (URL)" format, bold and strong tags are wrapped
+    in "__BOLD_START__" and "__BOLD_END__", italic and emphasis tags are wrapped in
+    "__ITALIC_START__" and "__ITALIC_END__", and underlined tags are unwrapped.
+    If the input does not contain HTML tags, it is returned unchanged.
+    """
     if not notes or '<' not in notes:
         return notes  # Return the original notes if it's empty or doesn't contain HTML tags
 
@@ -175,6 +224,21 @@ def normalize_string(s):
 
 def extract_observation_id(input_string, debug = False):
     # Check if the input is a URL
+    """
+    Extracts an observation ID from a URL or numeric string.
+    
+    This function searches the input for a numeric observation ID. It first looks for a URL
+    pattern containing "observations/<id>" and, if found, returns the matched identifier.
+    If no URL pattern is present, it checks whether the entire input consists of digits and,
+    if so, returns it as the observation ID. Returns None if no valid observation ID can be extracted.
+    
+    Args:
+        input_string: A URL or string that may contain a numeric observation ID.
+        debug: An optional flag for future debugging purposes (currently unused).
+    
+    Returns:
+        The extracted observation ID as a string, or None if no ID is found.
+    """
     url_match = re.search(r'observations/(\d+)', input_string)
     if url_match:
         return url_match.group(1)
@@ -187,7 +251,17 @@ def extract_observation_id(input_string, debug = False):
     return None
 
 def get_taxon_details(taxon_id):
-    """Fetch detailed information about a taxon, including its ancestors."""
+    """
+    Fetch detailed taxon information from the iNaturalist API.
+    
+    This function sends a GET request to the iNaturalist taxa endpoint using the provided taxon identifier, with a 10-second timeout. If the API responds with valid data, it returns a dictionary containing taxon details (including its ancestors). If a rate limit error occurs (HTTP 429), the function waits 5 seconds and retries. In the event of timeout, network, or unexpected errors, a message is printed and None is returned.
+    
+    Args:
+        taxon_id: Identifier for the taxon.
+    
+    Returns:
+        A dictionary with taxon details if successful; otherwise, None.
+    """
     url = f"https://api.inaturalist.org/v1/taxa/{taxon_id}"
     try:
         # Add timeout to prevent hanging indefinitely
@@ -214,6 +288,22 @@ def get_taxon_details(taxon_id):
     return None
 
 def get_observation_data(observation_id):
+    """
+    Fetch observation data from the iNaturalist API.
+    
+    Retrieves observation details for a given observation identifier and extracts its iconic taxon
+    name. If available, additional taxonomic details are fetched and appended to the observation data.
+    On success, returns a tuple containing the observation dictionary and its iconic taxon name; if not,
+    returns (None, 'Life'). The function handles rate limits by retrying and manages network or timeout
+    errors by printing messages and returning default values.
+    
+    Args:
+        observation_id: Identifier for the iNaturalist observation.
+        
+    Returns:
+        A tuple where the first element is the observation data dictionary (or None if retrieval failed)
+        and the second element is the iconic taxon name as a string.
+    """
     url = f"https://api.inaturalist.org/v1/observations/{observation_id}"
     try:
         # Add timeout to prevent hanging indefinitely
@@ -256,6 +346,12 @@ def get_observation_data(observation_id):
         return None, 'Life'
 
 def field_exists(observation_data, field_name):
+    """
+    Checks if an observation field exists in the provided data.
+    
+    Inspects the 'ofvs' list in the observation data and returns True if any field's name
+    matches the given field name, ignoring case differences.
+    """
     return any(field['name'].lower() == field_name.lower() for field in observation_data.get('ofvs', []))
 
 def get_field_value(observation_data, field_name):
@@ -295,6 +391,19 @@ def get_coordinates(observation_data):
     return 'Not available', None
 
 def parse_date(date_string):
+    """
+    Parse a date string into a date object.
+    
+    The function first isolates the initial segment of the input string and attempts to 
+    parse it using several common date formats. If these attempts fail, it falls back to a 
+    fuzzy parsing approach with dateutil to extract the date. Only the date component is returned.
+    
+    Args:
+        date_string: A string containing a date, which may include extra text.
+    
+    Returns:
+        A datetime.date object representing the parsed date, or None if parsing fails.
+    """
     date_formats = [
         '%Y-%m-%d',
         '%Y/%m/%d',
@@ -321,7 +430,22 @@ def parse_date(date_string):
         pass
 
 def format_scientific_name(observation_data):
-    """Format the scientific name based on taxonomic rank."""
+    """
+    Format the scientific name based on the taxon rank.
+    
+    This function constructs a formatted scientific name from observation data by using the
+    taxon's rank along with additional taxon details. It applies appropriate abbreviations to
+    infraspecific ranks (such as subspecies, variety, and form) and integrates parent species or
+    genus information from ancestral data when available. The "complex" rank is handled by appending
+    "complex" to the name. If the required taxon information is missing, the function returns "Not available".
+    
+    Args:
+        observation_data (dict): A dictionary containing taxon information under the 'taxon' key and
+            optional 'taxon_details' including ancestor data.
+    
+    Returns:
+        str: The formatted scientific name adhering to taxonomic naming conventions.
+    """
     
     # Define rank abbreviations
     rank_abbreviations = {
@@ -424,6 +548,23 @@ def format_scientific_name(observation_data):
         return f"{genus} {rank_abbreviations[rank]} {scientific_name}"
 
 def create_inaturalist_label(observation_data, iconic_taxon_name):
+    """
+    Creates an iNaturalist label from observation data.
+    
+    Extracts and formats key information—including scientific and common names, location,
+    GPS coordinates, observation date, and observer details—from the provided observation data.
+    Additional metadata such as DNA barcodes, GenBank accession numbers, herbarium details,
+    and notes are included when available. The function returns the label as a list of
+    (field, value) tuples along with the associated iconic taxon name.
+    
+    Args:
+        observation_data: A dictionary containing iNaturalist observation details.
+        iconic_taxon_name: A string representing the iconic taxon associated with the observation.
+    
+    Returns:
+        A tuple where the first element is a list of (field, value) tuples representing the
+        formatted label, and the second element is the provided iconic_taxon_name.
+    """
     obs_number = observation_data['id']
     url = f"https://www.inaturalist.org/observations/{obs_number}"
 
@@ -586,6 +727,23 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
     return label, iconic_taxon_name
 
 def create_rtf_content(labels):
+    """
+    Creates RTF formatted content from herbarium label data.
+    
+    This function iterates over a collection of label records—each consisting of label data and
+    an iconic taxon name—and formats each field using RTF commands. It handles special formatting
+    for fields like Scientific Name, GPS Coordinates, and Notes, and embeds a QR code image generated
+    from the iNaturalist URL when available. The complete RTF document is returned as a string. In
+    case of an error during processing, a minimal error message is returned within an RTF structure.
+    
+    Args:
+        labels: An iterable of tuples, each containing:
+            - A label represented as an iterable of (field, value) pairs.
+            - A corresponding iconic taxon name used to determine specific formatting and status messages.
+    
+    Note:
+        This function prints status messages to standard output when processing Scientific Name fields.
+    """
     rtf_header = r"""{\rtf1\ansi\deff3\adeflang1025
 {\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\froman\fprq2\fcharset0 Arial;}{\f5\froman\fprq2\fcharset0 Tahoma;}{\f6\froman\fprq2\fcharset0 Times New Roman;}{\f7\froman\fprq2\fcharset0 Courier New;}{\f8\fnil\fprq2\fcharset0 Times New Roman;}{\f9\fnil\fprq2\fcharset0 Lohit Hindi;}{\f10\fnil\fprq2\fcharset0 DejaVu Sans;}}
 {\colortbl;\red0\green0\blue0;\red0\green0\blue255;\red0\green255\blue255;\red0\green255\blue0;\red255\green0\blue255;\red255\green0\blue0;\red255\green255\blue0;\red255\green255\blue255;\red0\green0\blue128;\red0\green128\blue128;\red0\green128\blue0;\red128\green0\blue128;\red128\green0\blue0;\red128\green128\blue0;\red128\green128\blue128;\red192\green192\blue192;}
@@ -649,6 +807,19 @@ def create_rtf_content(labels):
 
             def split_hex_string(s, n):
                 # Split hex string into lines of n characters
+                """
+                Splits a hexadecimal string into lines of a fixed length.
+                
+                Divides the input hex string into substrings of length n and joins them with
+                newline characters. This is useful for formatting long hex strings for display.
+                  
+                Args:
+                    s: The hexadecimal string to split.
+                    n: The number of characters per line.
+                
+                Returns:
+                    A string with newline characters inserted every n characters.
+                """
                 return '\n'.join([s[i:i+n] for i in range(0, len(s), n)])
 
             # Add the QR code to the label
