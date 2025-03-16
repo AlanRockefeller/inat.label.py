@@ -111,10 +111,10 @@ def escape_rtf(text):
         '\\"': '\\u34\'',           #  Does not work, yet - see https://www.perplexity.ai/search/If-the-RTF-gOdEwtp2TnmQZoPfQGqpsQ
         'µ': '\\u181?',
         '×': '\\u215?',
-        '"': '\\ldblquote ',
-        '"': '\\rdblquote ',
-        ''': '\\lquote ',
-        ''': '\\rquote ',
+        '“': '\\ldblquote ',
+        '”': '\\rdblquote ',
+        '‘': '\\lquote ',
+        '’': '\\rquote ',
         '–': '\\endash ',
         '—': '\\emdash ',
         'é': '\\\'e9',
@@ -186,7 +186,7 @@ def extract_observation_id(input_string, debug = False):
     # If neither, return None
     return None
 
-def get_taxon_details(taxon_id):
+def get_taxon_details(taxon_id, retries=3):
     """Fetch detailed information about a taxon, including its ancestors."""
     url = f"https://api.inaturalist.org/v1/taxa/{taxon_id}"
     try:
@@ -198,9 +198,13 @@ def get_taxon_details(taxon_id):
             if data['results']:
                 return data['results'][0]
         elif response.status_code == 429:
-            print(f"Rate limit exceeded when fetching taxon details. Waiting 5 seconds before retry...")
+            print("Rate limit exceeded when fetching taxon details. Waiting 5 seconds before retry...")
             time.sleep(5)  # Wait 5 seconds before next request
-            return get_taxon_details(taxon_id)  # Retry
+            if retries > 0:
+                return get_taxon_details(taxon_id, retries - 1)
+            else:
+                print("Max retries reached. Skipping further attempts.")
+                return None
         else:
             print(f"Warning: Received status code {response.status_code} when fetching taxon {taxon_id}")
             
@@ -213,7 +217,7 @@ def get_taxon_details(taxon_id):
         
     return None
 
-def get_observation_data(observation_id):
+def get_observation_data(observation_id, retries=3):
     url = f"https://api.inaturalist.org/v1/observations/{observation_id}"
     try:
         # Add timeout to prevent hanging indefinitely
@@ -238,9 +242,13 @@ def get_observation_data(observation_id):
                 print(f"Error: Observation {observation_id} does not exist.")
                 return None, 'Life'
         elif response.status_code == 429:
-            print(f"Rate limit exceeded. Waiting 5 seconds before retry...")
+            print("Rate limit exceeded. Waiting 5 seconds before retry...")
             time.sleep(5)  # Wait 5 seconds before next request
-            return get_observation_data(observation_id)  # Retry
+            if retries > 0:
+                return get_taxon_details(taxon_id, retries - 1)
+            else:
+                print("Max retries reached. Skipping further attempts.")
+                return None
         else:
             print(f"Error: Unable to fetch data for observation {observation_id}. Status code: {response.status_code}")
             return None, 'Life'
