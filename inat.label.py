@@ -561,16 +561,25 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
         label.append(("Mobile or Traditional Photography", photography_type))
 
     herbarium_catalog_number = get_field_value(observation_data, 'Herbarium Catalog Number')
+    fungarium_catalog_number = get_field_value(observation_data, 'Fungarium Catalog Number')
     if herbarium_catalog_number:
         label.append(("Herbarium Catalog Number", herbarium_catalog_number))
+    elif fungarium_catalog_number:
+        label.append(("Fungarium Catalog Number", fungarium_catalog_number))
 
     herbarium_secondary_catalog_number = get_field_value(observation_data, 'Herbarium Secondary Catalog Number')
+    fungarium_secondary_catalog_number = get_field_value(observation_data, 'Fungaium Secondary Catalog Number')
     if herbarium_secondary_catalog_number:
         label.append(("Herbarium Secondary Catalog Number", herbarium_secondary_catalog_number))
+    elif fungarium_secondary_catalog_number:
+        label.append(("Fungarium Secondary Catalog Number", fungarium_secondary_catalog_number))
 
     herbarium_name = get_field_value(observation_data, 'Herbarium Name')
+    fungarium_name = get_field_value(observation_data, 'Fungarium Name')
     if herbarium_name:
         label.append(("Herbarium Name", herbarium_name))
+    if fungarium_name:
+        label.append(("Fungarium Name", fungarium_name))
 
     mycoportal_id = get_field_value(observation_data, 'Mycoportal ID')
     if mycoportal_id:
