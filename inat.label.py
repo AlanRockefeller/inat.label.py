@@ -988,12 +988,13 @@ if __name__ == "__main__":
             time.sleep(1)  # 1 second delay
 
         result = get_observation_data(observation_id)
-        observation_data, iconic_taxon_name = result
 
         request_count += 1  # Increment the request counter
 
         if result is None:
             continue  # Skip to the next observation if there was an error
+
+        observation_data, iconic_taxon_name = result
 
         # If the --find-ca command line option is given, only print out URL's of California observations
         if args.find_ca:
