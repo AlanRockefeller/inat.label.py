@@ -1,15 +1,15 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 2.2
+# iNaturalist Herbarium Label Generator version 2.3
 # By Alan Rockefeller
 # March 15, 2025
 
 
 ## Description
 
-The iNaturalist Herbarium Label Generator is a Python tool designed to create formatted herbarium labels from an iNaturalist observation. This project rapidly creates professional quality labels for herbarium specimens.   It is designed to be robust, work on many different platforms and handle errors or unexpected input gracefully.
+The Herbarium Label Generator is a Python tool designed to create formatted herbarium labels from a iNaturalist and Mushroom Observer observations. This project rapidly creates professional quality labels for herbarium specimens.   It is designed to be robust, work on many different platforms and handle errors or unexpected input gracefully.
 
-An online version is at https://images.mushroomobserver.org/labels
+An easy to use online version is at https://images.mushroomobserver.org/labels
 
 ## Table of Contents
 
@@ -24,13 +24,13 @@ An online version is at https://images.mushroomobserver.org/labels
 
 ## Features
 
-- Fetches observation data using the iNaturalist API
+- Fetches observation data using the iNaturalisti / Mushroom Observer API
 - Supports multiple observation IDs or URLs as input - or a file can be specified
 - Generates labels with key information including:
   - Scientific Name (in italics)
   - Common Name (if different from scientific name)
-  - iNaturalist Observation Number
-  - iNaturalist URL (in case the herbarium manager doesn't know how to create iNaturalist URL's)
+  - iNaturalist / Mushroom Observer Observation Number
+  - iNaturalist / Mushroom Observer URL 
   - Location (in text format)
   - GPS Coordinates (with accuracy - accuracy is set to 20km if observation geoprivacy is obscured)
   - Date Observed
@@ -47,7 +47,7 @@ An online version is at https://images.mushroomobserver.org/labels
   - Voucher number(s) (if present)
   - Observation Notes
 - By default outputs labels to console for quick viewing / testing
-- Optionally creates formatted RTF files for high-quality printing
+- Optionally creates formatted RTF files for high-quality printing (RTF output is strongly recommended)
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
 - Includes a 1-second delay if there are more than 20 requests, which stops the iNaturalist API from denying requests for large label printing jobs.
@@ -55,6 +55,9 @@ An online version is at https://images.mushroomobserver.org/labels
 - When generating RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white.   This will help you quickly notice if an observation number is mistyped.
 
 ## Installation
+
+Instead of installing this software, consider using the online version: https://images.mushroomobserver.org/labels
+
 
 1. Clone this repository:
    ```
@@ -100,7 +103,7 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
 
 2. Generate labels for multiple observations:
    ```
-   python3 inat.label.py 183905751 147249599 https://www.inaturalist.org/observations/106191917
+   python3 inat.label.py 183905751 147249599 https://www.inaturalist.org/observations/106191917 MO505283
    ```
 
 3. Generate labels and save to an RTF file:
