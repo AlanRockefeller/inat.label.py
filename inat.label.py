@@ -1,44 +1,48 @@
 #!/usr/bin/env python3
 
 """
-iNaturalist Herbarium Label Generator
+iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date:March 15, 2025
-Version: 2.2
+Date: May 13, 2025
+Version: 2.3
 
-
-This script creates herbarium labels from iNaturalist observation numbers or URLs.
-It fetches data from the iNaturalist API and formats it into printable labels suitable for
-herbarium specimens.  While it can output the labels to stdout, the RTF output makes more
+This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
+It fetches data from the respective APIs and formats it into printable labels suitable for
+herbarium specimens. While it can output the labels to stdout, the RTF output makes more
 professional looking labels that include a QR code.
 
 Features:
-- Supports multiple observation IDs or URLs as input
+- Supports multiple observation IDs or URLs as input from both iNaturalist and Mushroom Observer
+- Recognizes Mushroom Observer IDs in format "MO" followed by 4-6 digits (e.g., MO2345)
+- Supports Mushroom Observer URLs in various formats
 - Can output labels to the console or to an RTF file
 - Includes various data fields such as scientific name, common name, location,
   GPS coordinates, observation date, observer, and more
 - Handles special fields like DNA Barcode ITS (and LSU, TEF1, RPB1, RPB2), GenBank Accession Number,
   Provisional Species Name, Mobile or Traditional Photography?, Microscopy Performed, Herbarium Catalog Number,
-  Herbarium Name, Mycoportal ID, Voucher number(s) and Mushroom Observer URL when available
-- Generates a QR code which links to the iNaturalist URL
+  Herbarium Name, Mycoportal ID, Voucher number(s)
+- Generates a QR code which links to the observation URL
 
 Usage:
 1. Basic usage (output to console - mostly just for testing):
-   ./inat.label.py <observation_number_or_url> [<observation_number_or_url> ...]
+   ./inat_label.py <observation_number_or_url> [<observation_number_or_url> ...]
 
 2. Output to RTF file: (recommended - much better formatting and adds a QR code)
-   ./inat.label.py <observation_number_or_url> [<observation_number_or_url> ...] --rtf <filename.rtf>
+   ./inat_label.py <observation_number_or_url> [<observation_number_or_url> ...] --rtf <filename.rtf>
 
 Examples:
-- Generate label for a single observation:
-  ./inat.label.py 150291663
+- Generate label for a single iNaturalist observation:
+  ./inat_label.py 150291663
 
-- Generate labels for multiple observations:
-  ./inat.label.py 150291663 62240372 https://www.inaturalist.org/observations/105658809
+- Generate label for a single Mushroom Observer observation:
+  ./inat_label.py MO2345
+
+- Generate labels for multiple observations from both platforms:
+  ./inat_label.py 150291663 MO2345 https://www.inaturalist.org/observations/105658809 https://mushroomobserver.org/395895
 
 - Generate labels and save to an RTF file:
-  ./inat.label.py 150291663 62240372 --rtf two_labels.rtf
+  ./inat_label.py 150291663 MO2345 --rtf two_labels.rtf
 
 Notes:
 - The RTF output is formatted to closely match the style of traditional herbarium labels.
@@ -111,10 +115,10 @@ def escape_rtf(text):
         '\\"': '\\u34\'',           #  Does not work, yet - see https://www.perplexity.ai/search/If-the-RTF-gOdEwtp2TnmQZoPfQGqpsQ
         'µ': '\\u181?',
         '×': '\\u215?',
-        '“': '\\ldblquote ',
-        '”': '\\rdblquote ',
-        '‘': '\\lquote ',
-        '’': '\\rquote ',
+        '“': '\\ldblquote ',   # left double quotation mark U+201C
+        '”': '\\rdblquote ',   # right double quotation mark U+201D
+        '‘': '\\lquote ',      # left single quotation mark U+2018
+        '’': '\\rquote ',      # right single quotation mark U+2019
         '–': '\\endash ',
         '—': '\\emdash ',
         'é': '\\\'e9',
@@ -161,20 +165,41 @@ def parse_html_notes(notes):
 
     # Mark bold and italic text for RTF formatting
     for tag in soup.find_all(['strong', 'b']):
-        tag.replace_with('__BOLD_START__' + tag.string + '__BOLD_END__')
+        tag.replace_with('__BOLD_START__' + (tag.string or '') + '__BOLD_END__')
     for tag in soup.find_all(['em', 'i']):
-        tag.replace_with('__ITALIC_START__' + tag.string + '__ITALIC_END__')
+        tag.replace_with('__ITALIC_START__' + (tag.string or '') + '__ITALIC_END__')
     for tag in soup.find_all(['ins', 'u']):
-        tag.replace_with('' + tag.string + '')
+        tag.replace_with('' + (tag.string or '') + '')
 
     processed_text = str(soup).strip()
+
+    # Clean up "Mirrored on iNaturalist at" line by removing the URL in parentheses
+    processed_text = re.sub(
+        r'(Mirrored on iNaturalist at\s+(https://www\.inaturalist\.org/observations/\d+))\s*\(\2\)?',
+        r'\1',
+        processed_text,
+        flags=re.IGNORECASE
+    )
+
     return processed_text
 
 def normalize_string(s):
     return unicodedata.normalize('NFKD', s.strip().lower())
 
 def extract_observation_id(input_string, debug = False):
-    # Check if the input is a URL
+    # Check if the input is a Mushroom Observer ID (format MO followed by any number of digits)
+    mo_match = re.match(r'^MO(\d+)$', input_string)
+    if mo_match:
+        # Return the Mushroom Observer ID with the MO prefix
+        return input_string
+    
+    # Check if the input is a Mushroom Observer URL
+    mo_url_match = re.search(r'mushroomobserver\.org/(?:observations/)?(\d+)(?:\?.*)?', input_string)
+    if mo_url_match:
+        # Return the MO ID with the MO prefix
+        return f"MO{mo_url_match.group(1)}"
+    
+    # Check if the input is an iNaturalist URL
     url_match = re.search(r'observations/(\d+)', input_string)
     if url_match:
         return url_match.group(1)
@@ -217,11 +242,185 @@ def get_taxon_details(taxon_id, retries=3):
         
     return None
 
+def get_mushroom_observer_data(mo_id, retries=3):
+    """Fetch observation data from Mushroom Observer API"""
+    # Extract the numeric part from the MO ID
+    mo_number = mo_id.replace("MO", "")
+    url = f"https://mushroomobserver.org/api2/observations/{mo_number}?detail=high"
+    
+    try:
+        # Add timeout to prevent hanging indefinitely and request JSON specifically
+        headers = {'Accept': 'application/json'}
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 404:
+            print(f"Error: Mushroom Observer observation {mo_id} does not exist.")
+            return None, 'Life'
+        elif response.status_code == 200:
+            # First check if the response has content
+            if not response.text.strip():
+                # Try to get XML response which might have error details
+                xml_response = requests.get(url, timeout=10)  # No Accept header to get default XML
+                if xml_response.status_code == 200 and 'ObjectNotFoundById' in xml_response.text:
+                    print(f"Error: Mushroom Observer observation {mo_id} does not exist.")
+                else:
+                    print(f"Error: Empty response from Mushroom Observer API for observation {mo_id}. Skipping.")
+                return None, 'Life'
+            
+            try:
+                data = response.json()
+                
+                # Check for error response in the JSON data
+                if 'errors' in data and data['errors']:
+                    error_details = data['errors'][0].get('details', 'Unknown error')
+                    print(f"Error: {error_details}")
+                    return None, 'Life'
+                
+                if data and 'results' in data and data['results']:
+                    # The API returns the observation in the results array
+                    mo_observation = data['results'][0]
+                    
+                    # Skip if the response is just an integer ID instead of a full object
+                    if isinstance(mo_observation, int):
+                        print(f"Error: Insufficient data from Mushroom Observer API for observation {mo_id}. Skipping.")
+                        return None, 'Life'
+                    
+                    # Create a structure similar to iNaturalist API response
+                    observation = {
+                        'id': mo_id,  # Use the MO ID with prefix
+                        'ofvs': [],  # We'll populate this with MO fields
+                    }
+                    
+                    # Get location from the location object
+                    if 'location' in mo_observation and isinstance(mo_observation['location'], dict):
+                        observation['place_guess'] = mo_observation['location'].get('name', 'Not available')
+                    else:
+                        observation['place_guess'] = 'Not available'
+                    
+                    # Get date
+                    observation['observed_on_string'] = mo_observation.get('date', 'Not available')
+                    
+                    # Get notes/description
+                    observation['description'] = mo_observation.get('notes', '')
+                    
+                    # Get user information
+                    if 'owner' in mo_observation and isinstance(mo_observation['owner'], dict):
+                        observation['user'] = {
+                            'name': mo_observation['owner'].get('legal_name', ''),
+                            'login': mo_observation['owner'].get('login_name', ''),
+                        }
+                    else:
+                        observation['user'] = {
+                            'name': '',
+                            'login': '',
+                        }
+                    
+                    # Add geojson if latitude and longitude are available in the location object
+                    if 'location' in mo_observation and isinstance(mo_observation['location'], dict):
+                        location = mo_observation['location']
+                        if 'longitude_east' in location and 'longitude_west' in location and 'latitude_north' in location and 'latitude_south' in location:
+                            # Calculate the center point
+                            longitude = (float(location.get('longitude_east', 0)) + float(location.get('longitude_west', 0))) / 2
+                            latitude = (float(location.get('latitude_north', 0)) + float(location.get('latitude_south', 0))) / 2
+                            
+                            observation['geojson'] = {
+                                'coordinates': [longitude, latitude]
+                            }
+                    
+                    # Add taxon information if available
+                    if 'consensus' in mo_observation and isinstance(mo_observation['consensus'], dict):
+                        observation['taxon'] = {
+                            'name': mo_observation['consensus'].get('name', 'Not available'),
+                            'preferred_common_name': ''  # MO doesn't typically have common names
+                        }
+                    
+                    # Create a field for the Mushroom Observer URL
+                    mo_url = f"https://mushroomobserver.org/{mo_number}"
+                    observation['ofvs'].append({
+                        'name': 'Mushroom Observer URL',
+                        'value': mo_url
+                    })
+                    
+                    # Add other relevant fields if available
+                    if 'herbarium_name' in mo_observation:
+                        observation['ofvs'].append({
+                            'name': 'Herbarium Name',
+                            'value': mo_observation.get('herbarium_name', '')
+                        })
+                    
+                    if 'herbarium_id' in mo_observation:
+                        observation['ofvs'].append({
+                            'name': 'Herbarium Catalog Number',
+                            'value': mo_observation.get('herbarium_id', '')
+                        })
+                    
+                    # Add DNA Barcode fields from sequences
+                    if 'sequences' in mo_observation and mo_observation['sequences']:
+                        for sequence in mo_observation['sequences']:
+                            locus = sequence.get('locus', '').upper()
+                            bases = sequence.get('bases', '')
+                            if locus and bases:
+                                # Map MO locus to iNaturalist field names
+                                locus_mapping = {
+                                    'ITS': 'DNA Barcode ITS',
+                                    'LSU': 'DNA Barcode LSU',
+                                    'TEF1': 'DNA Barcode TEF1',
+                                    'EF1': 'DNA Barcode TEF1',  # Map EF1 to TEF1
+                                    'RPB1': 'DNA Barcode RPB1',
+                                    'RPB2': 'DNA Barcode RPB2'
+                                }
+                                field_name = locus_mapping.get(locus)
+                                if field_name:
+                                    # Clean bases by removing whitespace and newlines
+                                    cleaned_bases = ''.join(bases.split())
+                                    bp_count = len(cleaned_bases)
+                                    observation['ofvs'].append({
+                                        'name': field_name,
+                                        'value': f"{bp_count} bp"
+                                    })
+                    
+                    # Return the observation with 'Fungi' as the iconic taxon name 
+                    # (most MO observations are fungi)
+                    return observation, 'Fungi'
+                else:
+                    print(f"Error: Mushroom Observer observation {mo_id} does not exist or has no results.")
+                    return None, 'Life'
+            except ValueError as e:
+                print(f"Error parsing JSON from Mushroom Observer API for observation {mo_id}: {str(e)}. Skipping.")
+                return None, 'Life'
+        elif response.status_code == 429:
+            print("Rate limit exceeded. Waiting 5 seconds before retry...")
+            time.sleep(5)  # Wait 5 seconds before next request
+            if retries > 0:
+                return get_mushroom_observer_data(mo_id, retries - 1)
+            else:
+                print("Max retries reached. Skipping further attempts.")
+                return None, 'Life'
+        else:
+            print(f"Error: Unable to fetch data for Mushroom Observer observation {mo_id}. Status code: {response.status_code}")
+            return None, 'Life'
+            
+    except requests.exceptions.Timeout:
+        print(f"Timeout error when fetching Mushroom Observer observation {mo_id}. Skipping.")
+        return None, 'Life'
+    except requests.exceptions.RequestException as e:
+        print(f"Network error when fetching Mushroom Observer observation {mo_id}: {str(e)}. Skipping.")
+        return None, 'Life'
+    except Exception as e:
+        print(f"Unexpected error when fetching Mushroom Observer observation {mo_id}: {str(e)}. Skipping.")
+        return None, 'Life'
+
 def get_observation_data(observation_id, retries=3):
+    # Check if the observation ID is a Mushroom Observer ID
+    if isinstance(observation_id, str) and observation_id.startswith("MO"):
+        return get_mushroom_observer_data(observation_id, retries)
+    
+    # Continue with iNaturalist API for regular observation IDs
     url = f"https://api.inaturalist.org/v1/observations/{observation_id}"
     try:
-        # Add timeout to prevent hanging indefinitely
-        response = requests.get(url, timeout=10)
+        # Add timeout to prevent hanging indefinitely and request JSON specifically
+        headers = {'Accept': 'application/json'}
+        response = requests.get(url, headers=headers, timeout=10)
 
         if response.status_code == 200:
             data = response.json()
@@ -245,10 +444,10 @@ def get_observation_data(observation_id, retries=3):
             print("Rate limit exceeded. Waiting 5 seconds before retry...")
             time.sleep(5)  # Wait 5 seconds before next request
             if retries > 0:
-                return get_observation_data(taxon_id, retries - 1)
+                return get_observation_data(observation_id, retries - 1)
             else:
                 print("Max retries reached. Skipping further attempts.")
-                return None
+                return None, 'Life'
         else:
             print(f"Error: Unable to fetch data for observation {observation_id}. Status code: {response.status_code}")
             return None, 'Life'
@@ -310,7 +509,9 @@ def parse_date(date_string):
     ]
 
     # First, try to extract just the date part if there's more information
-    date_part = getattr(date_string, 'split', lambda x: [' '])()[0]
+    if not date_string:
+        return None
+    date_part = str(date_string).split()[0]
 
     for format in date_formats:
         try:
@@ -431,9 +632,20 @@ def format_scientific_name(observation_data):
     else:
         return f"{genus} {rank_abbreviations[rank]} {scientific_name}"
 
-def create_inaturalist_label(observation_data, iconic_taxon_name):
+def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False):
+    # Check if observation_data is None
+    if observation_data is None:
+        print("Error: No observation data available to create label.")
+        return None, None
+        
     obs_number = observation_data['id']
-    url = f"https://www.inaturalist.org/observations/{obs_number}"
+    # Check if this is a Mushroom Observer observation
+    if isinstance(obs_number, str) and obs_number.startswith("MO"):
+        # Use the Mushroom Observer URL as the main URL for the label
+        mo_number = obs_number.replace("MO", "")
+        url = f"https://mushroomobserver.org/{mo_number}"
+    else:
+        url = f"https://www.inaturalist.org/observations/{obs_number}"
 
     taxon = observation_data.get('taxon', {})
     # Handle cases where there is no name on the observation
@@ -454,11 +666,10 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
     if len(location) > 40:
         comma_index = location.find(',')
         if comma_index != -1:
-         location = location[comma_index + 1:].strip()
-
+            location = location[comma_index + 1:].strip()
 
     # Remove unusual characters if we are in rtf mode - rtf readers don't handle these well
-    if args.rtf:
+    if rtf_mode:
         location = replace_accents_characters(location)
 
     coords, accuracy = get_coordinates(observation_data)
@@ -475,7 +686,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
 
     # Begin generating label
     label = [
-    ("Scientific Name", scientific_name)
+        ("Scientific Name", scientific_name)
     ]
 
     # Check if common name is contained in any part of the scientific name
@@ -504,44 +715,51 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
     if common_name and not is_redundant:
         label.append(("Common Name", common_name))
 
-
     # Add these fields to all labels
-    label.extend([
-    ("iNat Observation Number", str(obs_number)),
-    ("iNaturalist URL", url),
-    ("Location", location),
-    ("GPS Coordinates", gps_coords),
-    ("Date Observed", date_observed_str),
-    ("Observer", observer)
-])
+    if isinstance(obs_number, str) and obs_number.startswith("MO"):
+        # For Mushroom Observer data
+        mo_number = obs_number.replace("MO", "")
+        label.extend([
+            ("Mushroom Observer Number", mo_number),
+            ("Mushroom Observer URL", url),
+            ("Location", location),
+            ("GPS Coordinates", gps_coords),
+            ("Date Observed", date_observed_str),
+            ("Observer", observer)
+        ])
+    else:
+        # For iNaturalist data
+        label.extend([
+            ("iNat Observation Number", str(obs_number)),
+            ("iNaturalist URL", url),
+            ("Location", location),
+            ("GPS Coordinates", gps_coords),
+            ("Date Observed", date_observed_str),
+            ("Observer", observer)
+        ])
+
+    # Handle DNA Barcode fields consistently for both platforms
+    dna_fields = [
+        'DNA Barcode ITS',
+        'DNA Barcode LSU',
+        'DNA Barcode RPB1',
+        'DNA Barcode RPB2',
+        'DNA Barcode TEF1'
+    ]
+    for field_name in dna_fields:
+        dna_value = get_field_value(observation_data, field_name)
+        if dna_value:
+            if isinstance(observation_data['id'], str) and observation_data['id'].startswith("MO"):
+                # For Mushroom Observer, dna_value is already formatted (e.g., "603 bp")
+                label.append((field_name, dna_value))
+            else:
+                # For iNaturalist, dna_value may contain the full sequence
+                cleaned_bases = ''.join(dna_value.split())
+                bp_count = len(cleaned_bases)
+                if bp_count > 0:  # Only add if there are actual bases
+                    label.append((field_name, f"{bp_count} bp"))
 
     # Include these fields only if they are populated
-    dna_barcode_its = get_field_value(observation_data, 'DNA Barcode ITS')
-    if dna_barcode_its:
-        bp_count = len(dna_barcode_its)
-        label.append(("DNA Barcode ITS", f"{bp_count} bp"))
-
-    dna_barcode_lsu = get_field_value(observation_data, 'DNA Barcode LSU')
-    if dna_barcode_lsu:
-        bp_count = len(dna_barcode_lsu)
-        label.append(("DNA Barcode LSU", f"{bp_count} bp"))
-
-    dna_barcode_rpb1 = get_field_value(observation_data, 'DNA Barcode RPB1')
-    if dna_barcode_rpb1:
-        bp_count = len(dna_barcode_rpb1)
-        label.append(("DNA Barcode RPB1", f"{bp_count} bp"))
-
-    dna_barcode_rpb2 = get_field_value(observation_data, 'DNA Barcode RPB2')
-    if dna_barcode_rpb2:
-        bp_count = len(dna_barcode_rpb2)
-        label.append(("DNA Barcode RPB2", f"{bp_count} bp"))
-
-    dna_barcode_tef1 = get_field_value(observation_data, 'DNA Barcode TEF1')
-    if dna_barcode_tef1:
-        bp_count = len(dna_barcode_tef1)
-        label.append(("DNA Barcode TEF1", f"{bp_count} bp"))
-
-    # Include Genbank accession number whether it's in Genbank Accession or Genbank Accession Number observation field
     genbank_accession = get_field_value(observation_data, 'GenBank Accession Number')
     if not genbank_accession:
         genbank_accession = get_field_value(observation_data, 'GenBank Accession')
@@ -552,9 +770,9 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
     if provisional_name:
         label.append(("Provisional Species Name", provisional_name))
 
-    microscopy = get_field_value(observation_data, 'Microscopy performed')
+    microscopy = get_field_value(observation_data, 'Microscopy Performed')
     if microscopy:
-        label.append(("Microscopy performed:", microscopy))
+        label.append(("Microscopy Performed", microscopy))
 
     photography_type = get_field_value(observation_data, 'Mobile or Traditional Photography?')
     if photography_type:
@@ -578,7 +796,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name):
 
     voucher_numbers = get_field_value(observation_data, 'Voucher Number(s)')
     if voucher_numbers:
-        label.append(("Voucher number(s)", voucher_numbers))
+        label.append(("Voucher Number(s)", voucher_numbers))
 
     mushroom_observer_url = get_field_value(observation_data, 'Mushroom Observer URL')
     if mushroom_observer_url:
@@ -597,20 +815,20 @@ def create_rtf_content(labels):
     rtf_header = r"""{\rtf1\ansi\deff3\adeflang1025
 {\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\froman\fprq2\fcharset0 Arial;}{\f5\froman\fprq2\fcharset0 Tahoma;}{\f6\froman\fprq2\fcharset0 Times New Roman;}{\f7\froman\fprq2\fcharset0 Courier New;}{\f8\fnil\fprq2\fcharset0 Times New Roman;}{\f9\fnil\fprq2\fcharset0 Lohit Hindi;}{\f10\fnil\fprq2\fcharset0 DejaVu Sans;}}
 {\colortbl;\red0\green0\blue0;\red0\green0\blue255;\red0\green255\blue255;\red0\green255\blue0;\red255\green0\blue255;\red255\green0\blue0;\red255\green255\blue0;\red255\green255\blue255;\red0\green0\blue128;\red0\green128\blue128;\red0\green128\blue0;\red128\green0\blue128;\red128\green0\blue0;\red128\green128\blue0;\red128\green128\blue128;\red192\green192\blue192;}
-{\stylesheet{\s0\snext0\dbch\af8\langfe1081\dbch\af8\afs24\alang1081\ql\keep\nowidctlpar\sb0\sa720\ltrpar\hyphpar0\aspalpha\cf0\loch\f6\fs24\lang1033\kerning1 Normal;}
-{\*\cs15\snext15\dbch\af10\langfe1033\afs24 Default Paragraph Font;}
-{\s16\sbasedon0\snext17\dbch\af10\langfe1081\dbch\af8\afs28\ql\keep\nowidctlpar\sb240\sa120\keepn\ltrpar\cf0\loch\f4\fs28\lang1033\kerning1 Heading;}
-{\s17\sbasedon0\snext17\dbch\af8\langfe1081\dbch\af8\afs24\ql\keep\nowidctlpar\sb0\sa120\ltrpar\cf0\loch\f6\fs24\lang1033\kerning1 Text Body;}
-{\s18\sbasedon17\snext18\dbch\af8\langfe1081\dbch\af8\afs24\ql\keep\nowidctlpar\sb0\sa120\ltrpar\cf0\loch\f7\fs24\lang1033\kerning1 List;}
-{\s19\sbasedon0\snext19\dbch\af9\langfe1081\dbch\af8\afs24\ai\ql\keep\nowidctlpar\sb120\sa120\ltrpar\cf0\loch\f6\fs24\lang1033\i\kerning1 Caption;}
-{\s20\sbasedon0\snext20\dbch\af8\langfe1081\dbch\af8\afs24\ql\keep\nowidctlpar\sb0\sa720\ltrpar\cf0\loch\f7\fs24\lang1033\kerning1 Index;}
-{\s21\sbasedon0\snext21\dbch\af8\langfe1081\dbch\af8\afs24\ai\ql\keep\nowidctlpar\sb120\sa120\ltrpar\cf0\loch\f7\fs24\lang1033\i\kerning1 caption;}
-{\s22\sbasedon0\snext22\dbch\af8\langfe1081\dbch\af8\afs16\ql\keep\nowidctlpar\sb0\sa720\ltrpar\cf0\loch\f5\fs16\lang1033\kerning1 Balloon Text;}
-{\s23\sbasedon0\snext23\dbch\af8\langfe1081\dbch\af8\afs24\ql\keep\nowidctlpar\sb0\sa720\ltrpar\cf0\loch\f6\fs24\lang1033\kerning1 Table Contents;}
-{\s24\sbasedon23\snext24\dbch\af8\langfe1081\dbch\af8\afs24\ab\qc\keep\nowidctlpar\sb0\sa720\ltrpar\cf0\loch\f6\fs24\lang1033\b\kerning1 Table Heading;}
+{\stylesheet{\s0\snext0\ql\keep\nowidCtl\sb0\sa720\ltrpar\hyphpar0\aspalpha\cf0\f6\fs24\lang1033\kerning1 Normal;}
+{\*\cs15\snext15 Default Paragraph Font;}
+{\s16\sbasedon0\snext17\ql\keep\nowidctl\sb240\sa120\keepn\ltrpar\cf0\f4\fs28\lang1033\kerning1 Heading;}
+{\s17\sbasedon0\snext17\ql\keep\nowidctl\sb0\sa120\ltrpar\cf0\f6\fs24\lang1033\kerning1 Text Body;}
+{\s18\sbasedon17\snext18\ql\keep\nowidctl\sb0\sa120\ltrpar\cf0\f7\fs24\lang1033\kerning1 List;}
+{\s19\sbasedon0\snext19\ai\ql\keep\nowidctl\sb120\sa120\ltrpar\cf0\f6\fs24\lang1033\i\kerning1 Caption;}
+{\s20\sbasedon0\snext20\ql\keep\nowidctl\sb0\sa720\ltrpar\cf0\f7\fs24\lang1033\kerning1 Index;}
+{\s21\sbasedon0\snext21\ai\ql\keep\nowidctl\sb120\sa120\ltrpar\cf0\f7\fs24\lang1033\i\kerning1 caption;}
+{\s22\sbasedon0\snext22\ql\keep\nowidctl\sb0\sa720\ltrpar\cf0\f5\fs16\lang1033\kerning1 Balloon Text;}
+{\s23\sbasedon0\snext23\ql\keep\nowidctl\sb0\sa720\ltrpar\cf0\f6\fs24\lang1033\kerning1 Table Contents;}
+{\s24\sbasedon23\snext24\ab\qc\keep\nowidctl\sb0\sa720\ltrpar\cf0\f6\fs24\lang1033\b\kerning1 Table Heading;}
 }
 \formshade\paperh15840\paperw12240\margl360\margr360\margt360\margb360\sectd\sbknone\sectunlocked1\pgndec\pgwsxn12240\pghsxn15840\marglsxn360\margrsxn360\margtsxn360\margbsxn360\cols2\colsx720\ftnbj\ftnstart1\ftnrstcont\ftnnar\aenddoc\aftnrstcont\aftnstart1\aftnnrlc
-\pard\plain \s0\dbch\af8\langfe1081\dbch\af8\afs24\alang1081\ql\keep\nowidctlpar\sb0\sa720\ltrpar\hyphpar0\aspalpha\cf0\loch\f6\fs24\lang1033\kerning1\ql\tx4320
+\pard\plain \s0\ql\tx4320
 """
     rtf_footer = r"}"
 
@@ -618,14 +836,23 @@ def create_rtf_content(labels):
 
     try:
         for label, iconic_taxon_name in labels:
-            inat_url = next((value for field, value in label if field == "iNaturalist URL"), None)
+            # Get the URL for the QR code - could be either iNaturalist or Mushroom Observer
+            qr_url = next(
+                (value for field, value in label
+                 if field in ("iNaturalist URL", "Mushroom Observer URL")),
+                None)
 
             for field, value in label:
-                if field.startswith("iNat") or field.startswith("iNaturalist"):
-                    first_char, rest = field[0], field[1:]
-                    rtf_content += r"{\rtlch \ltrch\loch{\ul{\b " + first_char + r"}}}" + r"{\rtlch \ltrch\scaps\loch{\ul{\b " + rest + r":}}} " + str(value) + r"\line "
+                if field.startswith("iNat") or field.startswith("iNaturalist") or field.startswith("Mushroom Observer"):
+                    # Special formatting for observation headers
+                    if field.startswith("Mushroom Observer"):
+                        first_chars, rest = field[:2], field[2:]
+                        rtf_content += r"{\ul\b " + first_chars + r"}{\scaps\ul\b " + rest + r":} " + str(value) + r"\line "
+                    else:
+                        first_char, rest = field[0], field[1:]
+                        rtf_content += r"{\ul\b " + first_char + r"}{\scaps\ul\b " + rest + r":} " + str(value) + r"\line "
                 elif field == "Scientific Name":
-                    rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} {\b\i " + str(value) + r"}\line "
+                    rtf_content += r"{\scaps\ul\b " + field + r":} {\b\i " + str(value) + r"}\line "
                     # Tell the user which species is being added to the label on stdout.   Fungi in blue, plants in green, everything else in white.
                     colorama.init()
                     if iconic_taxon_name == "Fungi":
@@ -637,9 +864,9 @@ def create_rtf_content(labels):
                 elif field == "GPS Coordinates":
                     # Replace the ± symbol with the RTF escape code
                     value_rtf = value.replace("±", r"\'b1")
-                    rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + value_rtf + r"\line "
+                    rtf_content += r"{\scaps\ul\b " + field + r":} " + value_rtf + r"\line "
                 elif field == "Notes":
-                    rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} "
+                    rtf_content += r"{\scaps\ul\b " + field + r":} "
                     value = escape_rtf(str(value))
                     value_rtf = str(value)
                     # Replace newlines with RTF line breaks
@@ -653,18 +880,14 @@ def create_rtf_content(labels):
                     value_rtf = re.sub(r'((\\line)\s+\2+\s+\2 Imported|Imported) by Mushroom Observer \d{4}-\d{2}-\d{2}', '', value_rtf)
                     rtf_content += value_rtf + r"\line \tab"
                 else:
-                    rtf_content += r"{\rtlch \ltrch\scaps\loch{\ul{\b " + field + r":}}} " + str(value) + r"\line "
+                    rtf_content += r"{\scaps\ul\b " + field + r":} " + str(value) + r"\line "
 
             def split_hex_string(s, n):
                 # Split hex string into lines of n characters
                 return '\n'.join([s[i:i+n] for i in range(0, len(s), n)])
 
             # Add the QR code to the label
-
-            # Save QR to a png file for debugging
-            # qr_filename = f"qr_code_{label_index}.png"
-            qr_hex, qr_size = generate_qr_code(inat_url)
-            # os.remove(qr_filename)
+            qr_hex, qr_size = generate_qr_code(qr_url) if qr_url else (None, None)
 
             if qr_hex:
                 # Convert pixel dimensions to twips (1 pixel = 15 twips)
@@ -686,8 +909,6 @@ def create_rtf_content(labels):
                 hex_chunks = split_hex_string(qr_hex, 76)
                 rtf_content += hex_chunks
                 rtf_content += r'}'
-
-                # print(f"QR code embedded successfully.")
             else:
                 print("Failed to generate QR code.")
 
@@ -701,7 +922,7 @@ def create_rtf_content(labels):
 
     return rtf_content
 
-# Check to see if the observation is in California,
+# Check to see if the observation is in California
 def is_within_california(latitude, longitude):
     # Approximate bounding box for California
     CA_NORTH = 42.0
@@ -729,7 +950,10 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(1)
 
-    if args.rtf and not args.rtf.lower().endswith('.rtf'):
+    # Define rtf_mode based on whether --rtf argument is provided
+    rtf_mode = bool(args.rtf)
+
+    if rtf_mode and not args.rtf.lower().endswith('.rtf'):
         parser.error("argument --rtf: filename must end with .rtf")
 
     observation_ids = args.observation_ids or []
@@ -764,7 +988,6 @@ if __name__ == "__main__":
             time.sleep(1)  # 1 second delay
 
         result = get_observation_data(observation_id)
-        observation, iconic_taxon_name = result
 
         request_count += 1  # Increment the request counter
 
@@ -782,12 +1005,15 @@ if __name__ == "__main__":
                     print(f"https://www.inaturalist.org/observations/{observation_id}")
         # Otherwise create the label
         else:
-            label, iconic_taxon_name = create_inaturalist_label(observation_data, iconic_taxon_name)
-            labels.append((label, iconic_taxon_name))
+            label, updated_iconic_taxon = create_inaturalist_label(
+                observation_data, iconic_taxon_name, rtf_mode=bool(args.rtf)
+            )
+            if label is not None:
+                labels.append((label, updated_iconic_taxon))
 
     if not args.find_ca:
         if labels:
-            if args.rtf:
+            if rtf_mode:
                 rtf_content = create_rtf_content(labels)
                 with open(args.rtf, 'w') as rtf_file:
                     rtf_file.write(rtf_content)
