@@ -39,7 +39,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - GenBank Accession Number (if present)
   - Provisional Species Name (if present)
   - Species Name Override (if present - and it actually overrides the name on the label)
-  - Mushroom Observer URL (if present, formatted in simplest possible URL form)
+  - Mushroom Observer URL (if present, formatted in best URL form so it's accessible to users who aren't logged in)
   - Microscopy Performed (if present)
   - Traditional or Mobile Photography (if present)
   - Herbarium Catalog Number (if present)
