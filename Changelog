@@ -9,6 +9,9 @@ the label.  Thanks to Ryan Peace for the suggestion!
 
 Adds an additional blank line between labels to make them easier to cut.
 
+Updated to support the new Mushroom Observer URL format -
+https://mushroomobserver.org/obs/12345.
+
 ## 2.3
 
 Added support for generating labels from Mushroom Observer (MO) observations, including MO-specific fields and QR codes.
