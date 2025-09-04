@@ -482,7 +482,7 @@ def format_mushroom_observer_url(url):
     if url:
         match = re.search(r'https?://(?:www\.)?mushroomobserver\.org/(?:observations/|observer/show_observation/|obs/)?(\d+)(?:\?.*)?', url)
         if match:
-            return f"https://mushroomobserver.org/{match.group(1)}"
+            return f"https://mushroomobserver.org/obs/{match.group(1)}"
     return url
 
 def get_coordinates(observation_data):
@@ -814,7 +814,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
 
     mushroom_observer_url = get_field_value(observation_data, 'Mushroom Observer URL')
     if mushroom_observer_url:
-        # Format Mushroom Observer URL in the shortest possible way
+        # Format Mushroom Observer URL in the best possible way
         formatted_url = format_mushroom_observer_url(mushroom_observer_url)
         label.append(("Mushroom Observer URL", formatted_url))
 
