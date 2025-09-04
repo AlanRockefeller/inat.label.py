@@ -5,7 +5,7 @@
 
 Now checks for the Species Name Override observation field - if present it
 prints it on the label and also overrides the iNaturalist consensus name on
-the label.  
+the label.  Thanks to Ryan Peace for the suggestion!
 
 Adds an additional blank line between labels to make them easier to cut.
 
