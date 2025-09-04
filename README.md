@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 2.3
+# iNaturalist Herbarium Label Generator version 2.4
 # By Alan Rockefeller
-# March 15, 2025
+# September 4, 2025
 
 
 ## Description
@@ -38,6 +38,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - DNA Barcode ITS, LSU, RPB1, RPB2 and TEF1 (if present)
   - GenBank Accession Number (if present)
   - Provisional Species Name (if present)
+  - Species Name Override (if present - and it actually overrides the name on the label)
   - Mushroom Observer URL (if present, formatted in simplest possible URL form)
   - Microscopy Performed (if present)
   - Traditional or Mobile Photography (if present)

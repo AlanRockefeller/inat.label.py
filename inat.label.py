@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: May 13, 2025
-Version: 2.3
+Date: September 4, 2025
+Version: 2.4
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -770,6 +770,13 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     if provisional_name:
         label.append(("Provisional Species Name", provisional_name))
 
+    species_name_override = get_field_value(observation_data, 'Species Name Override')
+    if species_name_override:
+        label.append(("Species Name Override", species_name_override))
+
+        # If there is a scientific name override, actually override the scientific name
+        label[0] = ("Scientific Name", species_name_override)
+
     microscopy = get_field_value(observation_data, 'Microscopy Performed')
     if microscopy:
         label.append(("Microscopy Performed", microscopy))
@@ -913,7 +920,7 @@ def create_rtf_content(labels):
                 print("Failed to generate QR code.")
 
             # Add some vertical space between labels
-            rtf_content += r"\par "
+            rtf_content += r"\par\par "
 
         rtf_content += rtf_footer
     except Exception as e:
