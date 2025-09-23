@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: September 4, 2025
-Version: 2.4
+Date: September 23, 2025
+Version: 2.5
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -58,7 +58,7 @@ Dependencies:
 
 The dependencies can be installed with the following command:
 
-    pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow
+    pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab
 
 Python version 3.6 or higher is recommended.
 
@@ -79,6 +79,14 @@ from bs4 import BeautifulSoup
 from dateutil import parser as dateutil_parser
 import qrcode
 from PIL import Image
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Image as ReportLabImage, KeepTogether, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.units import inch
+from reportlab.lib.colors import black, blue, green, white
+from reportlab.lib.utils import ImageReader
+
 
 
 def generate_qr_code(url):
@@ -823,6 +831,109 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
 
     return label, iconic_taxon_name
 
+def create_pdf_content(labels, filename):
+    doc = BaseDocTemplate(filename, pagesize=letter, leftMargin=0.25*inch, rightMargin=0.25*inch, topMargin=0.25*inch, bottomMargin=0.25*inch)
+
+    # Two columns
+    column_gap = 0.25 * inch
+    frame_width = (doc.width - column_gap) / 2
+    frame_height = doc.height
+
+    doc.addPageTemplates([
+        PageTemplate(id='TwoCol',
+                     frames=[
+                         Frame(doc.leftMargin, doc.bottomMargin, frame_width, frame_height, id='col1', topPadding=0, bottomPadding=0, leftPadding=0, rightPadding=0),
+                         Frame(doc.leftMargin + frame_width + column_gap, doc.bottomMargin, frame_width, frame_height, id='col2', topPadding=0, bottomPadding=0, leftPadding=0, rightPadding=0),
+                     ])
+    ])
+
+    styles = getSampleStyleSheet()
+    custom_normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontSize=12,
+        leading=14
+    )
+    story = []
+
+    for label, iconic_taxon_name in labels:
+        pre_notes_content = []
+        notes_value = ""
+        qr_url = next(
+            (value for field, value in label
+             if field in ("iNaturalist URL", "Mushroom Observer URL")),
+            None)
+
+        scientific_name = ""
+        for field, value in label:
+            if field == "Scientific Name":
+                scientific_name = value
+                break
+        
+        colorama.init()
+        if iconic_taxon_name == "Fungi":
+            print(f"\033[94mAdded label for {iconic_taxon_name}\033[0m {scientific_name}")
+        elif iconic_taxon_name == "Plantae":
+            print(f"\033[92mAdded label for {iconic_taxon_name}\033[0m {scientific_name}")
+        else:
+            print(f"Added label for {iconic_taxon_name} {scientific_name}")
+
+        for field, value in label:
+            if field == "Notes":
+                notes_value = value
+                continue
+            if field == "Scientific Name":
+                p = Paragraph(f"<b>{field}:</b> <i>{value}</i>", custom_normal_style)
+                pre_notes_content.append(p)
+            else:
+                p = Paragraph(f"<b>{field}:</b> {value}", custom_normal_style)
+                pre_notes_content.append(p)
+
+        notes_paragraph = None
+        if notes_value:
+            notes_text = notes_value.replace('__BOLD_START__', '<b>').replace('__BOLD_END__', '</b>')
+            notes_text = notes_text.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
+            notes_text = notes_text.replace('\n', '<br/>')
+            notes_paragraph = Paragraph(f"<b>Notes:</b> {notes_text}", custom_normal_style)
+
+        qr_image = None
+        if qr_url:
+            qr_hex, qr_size = generate_qr_code(qr_url)
+            if qr_hex:
+                qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
+                qr_image = ReportLabImage(qr_img_data, width=0.75*inch, height=0.75*inch)
+
+        label_content = pre_notes_content
+
+        # If notes are long, put QR code below, otherwise to the right
+        if len(notes_value) > 200 and notes_paragraph:
+            label_content.append(notes_paragraph)
+            if qr_image:
+                qr_image.hAlign = 'RIGHT'
+                label_content.append(qr_image)
+        elif notes_paragraph:
+            if qr_image:
+                table_data = [[notes_paragraph, qr_image]]
+                table = Table(table_data, colWidths=['*', 0.85*inch])
+                table.setStyle(TableStyle([
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                    ('TOPPADDING', (0, 0), (-1, -1), 0),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                ]))
+                label_content.append(table)
+            else:
+                label_content.append(notes_paragraph)
+        elif qr_image:
+            qr_image.hAlign = 'RIGHT'
+            label_content.append(qr_image)
+
+        label_content.append(Spacer(1, 0.25*inch))
+        story.append(KeepTogether(label_content))
+
+    doc.build(story)
+
 def create_rtf_content(labels):
     rtf_header = r"""{\rtf1\ansi\deff3\adeflang1025
 {\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\froman\fprq2\fcharset0 Arial;}{\f5\froman\fprq2\fcharset0 Tahoma;}{\f6\froman\fprq2\fcharset0 Times New Roman;}{\f7\froman\fprq2\fcharset0 Courier New;}{\f8\fnil\fprq2\fcharset0 Times New Roman;}{\f9\fnil\fprq2\fcharset0 Lohit Hindi;}{\f10\fnil\fprq2\fcharset0 DejaVu Sans;}}
@@ -948,7 +1059,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create herbarium labels from iNaturalist observation numbers or URLs")
     parser.add_argument("observation_ids", nargs="*", help="Observation number(s) or URL(s)")
     parser.add_argument("--file", metavar="filename", help="File containing observation numbers or URLs (separated by spaces, commas, or newlines)")
-    parser.add_argument("--rtf", metavar="filename.rtf", help="Output to RTF file (filename must end with .rtf)")
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument("--rtf", metavar="filename.rtf", help="Output to RTF file (filename must end with .rtf)")
+    output_group.add_argument("--pdf", metavar="filename.pdf", help="Output to PDF file (filename must end with .pdf)")
     parser.add_argument("--find-ca", action="store_true", help="Find observations within California")
     parser.add_argument('--debug', action='store_true', help='Print debug output')
 
@@ -962,11 +1075,15 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(1)
 
-    # Define rtf_mode based on whether --rtf argument is provided
+    # Define rtf_mode and pdf_mode based on whether --rtf or --pdf argument is provided
     rtf_mode = bool(args.rtf)
+    pdf_mode = bool(args.pdf)
 
     if rtf_mode and not args.rtf.lower().endswith('.rtf'):
         parser.error("argument --rtf: filename must end with .rtf")
+
+    if pdf_mode and not args.pdf.lower().endswith('.pdf'):
+        parser.error("argument --pdf: filename must end with .pdf")
 
     observation_ids = args.observation_ids or []
 
@@ -1018,7 +1135,7 @@ if __name__ == "__main__":
         # Otherwise create the label
         else:
             label, updated_iconic_taxon = create_inaturalist_label(
-                observation_data, iconic_taxon_name, rtf_mode=bool(args.rtf)
+                observation_data, iconic_taxon_name, rtf_mode=rtf_mode
             )
             if label is not None:
                 labels.append((label, updated_iconic_taxon))
@@ -1030,6 +1147,9 @@ if __name__ == "__main__":
                 with open(args.rtf, 'w') as rtf_file:
                     rtf_file.write(rtf_content)
                 print(f"RTF file created: {args.rtf}")
+            elif pdf_mode:
+                create_pdf_content(labels, args.pdf)
+                print(f"PDF file created: {args.pdf}")
             else:
                 # Print labels to stdout
                 for label, _ in labels:

@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 2.4
+# iNaturalist Herbarium Label Generator version 2.5
 # By Alan Rockefeller
-# September 4, 2025
+# September 23, 2025
 
 
 ## Description
@@ -49,6 +49,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - Observation Notes
 - By default outputs labels to console for quick viewing / testing
 - Optionally creates formatted RTF files for high-quality printing (RTF output is strongly recommended)
+- Optionally creates two-column PDF files for more compatability
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
 - Includes a 1-second delay if there are more than 20 requests, which stops the iNaturalist API from denying requests for large label printing jobs.
@@ -72,7 +73,7 @@ Instead of installing this software, consider using the online version: https://
 
 3. Install the required dependencies:
    ```
-   bash pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow
+   bash pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab
    ```
 
 ## Usage
@@ -87,6 +88,12 @@ To generate an RTF file, use the `--rtf` option:
 
 ```
 python inat.label.py <observation_number_or_url> [<observation_number_or_url> ...] --rtf <filename.rtf>
+```
+
+To generate a PDF file, use the `--pdf` option:
+
+```
+python inat.label.py <observation_number_or_url> [<observation_number_or_url> ...] --pdf <filename.pdf>
 ```
 
 To print out a list of URL's of observations that are in California, use the `--find-ca` option.    This was added to make it easy to add observations to the Mycomap CA Network project.   I paste the list of URL's into the Bulk URL Opener Chrome extension and add each tab to the project.   If there is an easier way, I haven't found it yet.
@@ -126,6 +133,7 @@ The script generates herbarium labels to the standard output by default, or labe
 - colorama
 - replace-accents
 - pillow
+- reportlab
 
 ## Contributing
 
