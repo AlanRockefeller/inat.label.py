@@ -86,6 +86,15 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.units import inch
 from reportlab.lib.colors import black, blue, green, white
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+pdfmetrics.registerFont(TTFont('Liberation Serif', 'LiberationSerif-Regular.ttf'))
+pdfmetrics.registerFont(TTFont('Liberation Serif-Bold', 'LiberationSerif-Bold.ttf'))
+pdfmetrics.registerFont(TTFont('Liberation Serif-Italic', 'LiberationSerif-Italic.ttf'))
+pdfmetrics.registerFont(TTFont('Liberation Serif-BoldItalic', 'LiberationSerif-BoldItalic.ttf'))
+pdfmetrics.registerFontFamily('Liberation Serif', normal='Liberation Serif', bold='Liberation Serif-Bold', italic='Liberation Serif-Italic', boldItalic='Liberation Serif-BoldItalic')
+
 
 
 
@@ -743,7 +752,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     else:
         # For iNaturalist data
         label.extend([
-            ("iNat Observation Number", str(obs_number)),
+            ("iNaturalist Observation Number", str(obs_number)),
             ("iNaturalist URL", url),
             ("Location", location),
             ("GPS Coordinates", gps_coords),
@@ -851,6 +860,7 @@ def create_pdf_content(labels, filename):
     custom_normal_style = ParagraphStyle(
         'CustomNormal',
         parent=styles['Normal'],
+        fontName='Liberation Serif',
         fontSize=12,
         leading=14
     )
@@ -884,6 +894,9 @@ def create_pdf_content(labels, filename):
                 continue
             if field == "Scientific Name":
                 p = Paragraph(f"<b>{field}:</b> <i>{value}</i>", custom_normal_style)
+                pre_notes_content.append(p)
+            elif field == "iNaturalist URL":
+                p = Paragraph(f"{value}", custom_normal_style)
                 pre_notes_content.append(p)
             else:
                 p = Paragraph(f"<b>{field}:</b> {value}", custom_normal_style)
@@ -966,7 +979,9 @@ def create_rtf_content(labels):
                 None)
 
             for field, value in label:
-                if field.startswith("iNat") or field.startswith("iNaturalist") or field.startswith("Mushroom Observer"):
+                if field == "iNaturalist URL":
+                    rtf_content += str(value) + r"\line "
+                elif field.startswith("iNat") or field.startswith("iNaturalist") or field.startswith("Mushroom Observer"):
                     # Special formatting for observation headers
                     if field.startswith("Mushroom Observer"):
                         first_chars, rest = field[:2], field[2:]
@@ -1158,7 +1173,11 @@ if __name__ == "__main__":
                             value = remove_formatting_tags(value)
                             value = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value)
                             value = re.sub(r'Imported by Mushroom Observer \d{4}-\d{2}-\d{2}', '', value)
-                        print(f"{field}: {value}")
+                            print(f"{field}: {value}")
+                        elif field == "iNaturalist URL":
+                            print(value)
+                        else:
+                            print(f"{field}: {value}")
                     print("\n")  # Blank line between labels
         else:
             print("No valid observations found.")

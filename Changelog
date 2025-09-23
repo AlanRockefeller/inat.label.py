@@ -3,11 +3,11 @@
 
 ## 2.5
 
-- Added --pdf option to save labels in PDF format - more compatibility,
-especially with Mac.
+- Added --pdf option to save labels in PDF format - more compatibility, especially with Mac.   Uses the same font - Liberation Serif.
 - PDF output is in two columns with no margins to fit more labels per page.
 - Labels are kept together and will not split across columns or pages.
 - QR codes in PDF are placed intelligently to save space. For short notes, the QR code is to the right of the notes. For long notes, it is below.
+- Removed the iNaturalist URL: header because it's already obvious that it's an iNaturalist URL.
 
 ## 2.4
 

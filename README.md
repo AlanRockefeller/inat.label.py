@@ -49,7 +49,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - Observation Notes
 - By default outputs labels to console for quick viewing / testing
 - Optionally creates formatted RTF files for high-quality printing (RTF output is strongly recommended)
-- Optionally creates two-column PDF files for more compatability
+- Optionally creates two-column PDF files for more compatibility
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
 - Includes a 1-second delay if there are more than 20 requests, which stops the iNaturalist API from denying requests for large label printing jobs.
