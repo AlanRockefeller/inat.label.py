@@ -198,10 +198,8 @@ def extract_observation_id(input_string, debug = False):
     # http://mushroomobserver.org/observations/12345
     # https://mushroomobserver.org/obs/585855
     # https://www.mushroomobserver.org/obs/585855?foo=bar
-    mo_url_match = re.search(
-        r'https?://(?:www\.)?mushroomobserver\.org/(?:observations/|observer/show_observation/|obs/)?(\d+)(?=[/?#]|$)',
-        input_string
-    )
+    mo_url_match = re.search( r'(?:https?://)?(?:www\.)?mushroomobserver\.org/(?:observations/|observer/show_observation/|obs/)?/?(\d+)(?=[/?#\s]|$)',input_string)
+
     if mo_url_match:
         # Return the MO ID with the MO prefix
         return f"MO{mo_url_match.group(1)}"
