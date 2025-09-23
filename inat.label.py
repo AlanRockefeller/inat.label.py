@@ -193,8 +193,15 @@ def extract_observation_id(input_string, debug = False):
         # Return the Mushroom Observer ID with the MO prefix
         return input_string
     
-    # Check if the input is a Mushroom Observer URL
-    mo_url_match = re.search(r'mushroomobserver\.org/(?:observations/)?(\d+)(?:\?.*)?', input_string)
+    # Check if the input is a Mushroom Observer URL - being tolerant of different ways to write it
+    # https://mushroomobserver.org/12345
+    # http://mushroomobserver.org/observations/12345
+    # https://mushroomobserver.org/obs/585855
+    # https://www.mushroomobserver.org/obs/585855?foo=bar
+    mo_url_match = re.search(
+        r'https?://(?:www\.)?mushroomobserver\.org/(?:observations/|observer/show_observation/|obs/)?(\d+)(?=[/?#]|$)',
+        input_string
+    )
     if mo_url_match:
         # Return the MO ID with the MO prefix
         return f"MO{mo_url_match.group(1)}"
@@ -335,7 +342,7 @@ def get_mushroom_observer_data(mo_id, retries=3):
                         }
                     
                     # Create a field for the Mushroom Observer URL
-                    mo_url = f"https://mushroomobserver.org/{mo_number}"
+                    mo_url = f"https://mushroomobserver.org/obs/{mo_number}"
                     observation['ofvs'].append({
                         'name': 'Mushroom Observer URL',
                         'value': mo_url
@@ -473,9 +480,9 @@ def get_field_value(observation_data, field_name):
 
 def format_mushroom_observer_url(url):
     if url:
-        match = re.search(r'mushroomobserver\.org/(?:observer/show_observation/)?(\d+)', url)
+        match = re.search(r'https?://(?:www\.)?mushroomobserver\.org/(?:observations/|observer/show_observation/|obs/)?(\d+)(?:\?.*)?', url)
         if match:
-            return f"https://mushroomobserver.org/{match.group(1)}"
+            return f"https://mushroomobserver.org/obs/{match.group(1)}"
     return url
 
 def get_coordinates(observation_data):
@@ -643,7 +650,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     if isinstance(obs_number, str) and obs_number.startswith("MO"):
         # Use the Mushroom Observer URL as the main URL for the label
         mo_number = obs_number.replace("MO", "")
-        url = f"https://mushroomobserver.org/{mo_number}"
+        url = f"https://mushroomobserver.org/obs/{mo_number}"
     else:
         url = f"https://www.inaturalist.org/observations/{obs_number}"
 
@@ -807,7 +814,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
 
     mushroom_observer_url = get_field_value(observation_data, 'Mushroom Observer URL')
     if mushroom_observer_url:
-        # Format Mushroom Observer URL in the shortest possible way
+        # Format Mushroom Observer URL in the best possible way
         formatted_url = format_mushroom_observer_url(mushroom_observer_url)
         label.append(("Mushroom Observer URL", formatted_url))
 
