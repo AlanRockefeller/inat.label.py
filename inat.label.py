@@ -1198,6 +1198,9 @@ def create_rtf_content(labels):
             qr_hex, qr_size = generate_qr_code(qr_url) if qr_url else (None, None)
 
             if qr_hex:
+                # If there are no notes, remove a trailing \line to avoid an extra blank line before the QR code
+                if notes_length == 0 and rtf_content.endswith(r"\line "):
+                    rtf_content = rtf_content[:-6]
                 rtf_content += r"\par\pard\qr\ri360\sb57\sa0 " # Close paragraph, start new right-aligned one with minimal spacing (~1mm)
                 # Convert pixel dimensions to twips (1 pixel = 15 twips)
                 qr_width_twips = qr_size[0] * 15
