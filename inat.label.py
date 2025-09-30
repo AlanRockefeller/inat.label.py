@@ -1026,9 +1026,9 @@ def create_pdf_content(labels, filename):
                 break
         
         if iconic_taxon_name == "Fungi":
-            print(f"\033[94mAdded label for {iconic_taxon_name}\033[0m {scientific_name}")
+            print(Fore.BLUE + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {scientific_name}")
         elif iconic_taxon_name == "Plantae":
-            print(f"\033[92mAdded label for {iconic_taxon_name}\033[0m {scientific_name}")
+            print(Fore.GREEN + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {scientific_name}")
         else:
             print(f"Added label for {iconic_taxon_name} {scientific_name}")
 
@@ -1158,9 +1158,9 @@ def create_rtf_content(labels):
                     rtf_content += r"{\scaps\ul\b " + field + r":} {\b\i " + str(value) + r"}\line "
                     # Tell the user which species is being added to the label on stdout.   Fungi in blue, plants in green, everything else in white.
                     if iconic_taxon_name == "Fungi":
-                        print(f"\033[94mAdded label for {iconic_taxon_name}\033[0m {value}")
+                        print(Fore.BLUE + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {value}")
                     elif iconic_taxon_name == "Plantae":
-                        print(f"\033[92mAdded label for {iconic_taxon_name}\033[0m {value}")
+                        print(Fore.GREEN + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {value}")
                     else:
                         print(f"Added label for {iconic_taxon_name} {value}")
                 elif field == "GPS Coordinates":
