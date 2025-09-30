@@ -55,10 +55,13 @@ Dependencies:
 - qrcode
 - colorama
 - replace-accents
+- pillow 
+- reportlab
+- requests-toolbelt
 
 The dependencies can be installed with the following command:
 
-    pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab
+    pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab requests-toolbelt
 
 Python version 3.6 or higher is recommended.
 
