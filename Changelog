@@ -1,6 +1,15 @@
 # Changelog
 
 
+## 2.7
+September 30, 2025
+
+- Uses parallel processing to vastly speed up requests for multiple labels.
+- Improved formatting of Mushroom Observer labels.
+- If there are errors we wait up to 30 seconds instead of exiting without creating all the labels the user requested.
+- Give a report on the success of our label generation
+- Better error messages
+
 ## 2.6
 September 30, 2025
 
