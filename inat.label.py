@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: September 30, 2025
-Version: 2.7
+Date: September 23, 2025
+Version: 2.5
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -55,13 +55,10 @@ Dependencies:
 - qrcode
 - colorama
 - replace-accents
-- pillow 
-- reportlab
-- requests-toolbelt
 
 The dependencies can be installed with the following command:
 
-    pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab requests-toolbelt
+    pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab
 
 Python version 3.6 or higher is recommended.
 
@@ -76,6 +73,7 @@ import re
 import sys
 import time
 import unicodedata
+import random
 from io import BytesIO
 import requests
 from requests.adapters import HTTPAdapter
@@ -374,7 +372,6 @@ def fetch_api_data(url, retries=6):
         try:
             headers = {'Accept': 'application/json', 'User-Agent': 'inat.label.py (label generator)'}
             _rate_limit_wait()
-            response = get_session().get(url, headers=headers, timeout=20)
             with _conc_lock:
                 global _active_requests
                 _active_requests += 1
@@ -399,6 +396,8 @@ def fetch_api_data(url, retries=6):
                 wait = _parse_retry_after(response)
                 if wait is None:
                     wait = min(60, 2 ** attempt)  # exponential backoff
+                # Jitter to avoid herd retry
+                wait *= random.uniform(0.8, 1.2)
                 # Clamp to keep total wait under budget
                 remaining = max_total_wait - total_wait
                 wait = max(0.5, min(wait, remaining))
@@ -431,6 +430,7 @@ def fetch_api_data(url, retries=6):
 
             if 500 <= response.status_code < 600:
                 wait = min(30, 1.5 ** attempt)
+                wait *= random.uniform(0.8, 1.2)
                 remaining = max_total_wait - total_wait
                 wait = max(0.5, min(wait, remaining))
                 print_error(f"Server error {response.status_code}. Retrying in {wait:.1f}s (attempt {attempt}/{retries})")
@@ -443,8 +443,9 @@ def fetch_api_data(url, retries=6):
 
             return None, f"HTTP error {response.status_code}"
 
-        except (requests.exceptions.Timeout, requests.exceptions.SSLError) as e:
+        except (requests.exceptions.Timeout, requests.exceptions.SSLError):
             wait = min(20, 1.5 ** attempt)
+            wait *= random.uniform(0.8, 1.2)
             remaining = max_total_wait - total_wait
             wait = max(0.5, min(wait, remaining))
             print_error(f"Timeout/SSL error. Retrying in {wait:.1f}s (attempt {attempt}/{retries})")
@@ -454,8 +455,9 @@ def fetch_api_data(url, retries=6):
             time.sleep(wait)
             total_wait += wait
             continue
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             wait = min(20, 1.5 ** attempt)
+            wait *= random.uniform(0.8, 1.2)
             remaining = max_total_wait - total_wait
             wait = max(0.5, min(wait, remaining))
             print_error(f"Network error. Retrying in {wait:.1f}s (attempt {attempt}/{retries})")
@@ -1313,8 +1315,9 @@ def main():
                 return ('err', f"Failed to fetch observation {observation_id}")
             observation_data, iconic_taxon_name = result
             if args.find_ca:
-                if 'geojson' in observation_data and observation_data['geojson']:
-                    coordinates = observation_data['geojson']['coordinates']
+                geo = observation_data.get('geojson')
+                if geo and geo.get('coordinates'):
+                    coordinates = geo['coordinates']
                     latitude, longitude = coordinates[1], coordinates[0]
                     if is_within_california(latitude, longitude):
                         print(f"https://www.inaturalist.org/observations/{observation_id}")
@@ -1344,15 +1347,6 @@ def main():
                 failed.append(payload)
 
     if not args.find_ca:
-        elapsed = time.time() - start_time
-        # Summary line
-        print("="*60)
-        print(f"Summary: requested {total_requested}, generated {len(labels)}, failed {len(failed)}, time {elapsed:.2f}s, workers {max_workers}")
-        if failed:
-            for msg in failed:
-                print_error(f" - {msg}")
-        print("="*60)
-
         if labels:
             if rtf_mode:
                 rtf_content = create_rtf_content(labels)
@@ -1380,6 +1374,14 @@ def main():
                     print("\n")  # Blank line between labels
         else:
             print("No valid observations found.")
+
+        # Print summary last so it appears at the very end
+        elapsed = time.time() - start_time
+        failed_count_text = (Fore.RED + str(len(failed)) + Style.RESET_ALL) if failed else str(len(failed))
+        print(f"Summary: requested {total_requested}, generated {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s, workers {max_workers}")
+        if failed:
+            for msg in failed:
+                print_error(f" - {msg}")
 
 if __name__ == "__main__":
     colorama.init()
