@@ -5,7 +5,7 @@ iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: September 23, 2025
-Version: 2.5
+Version: 2.7
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -1381,7 +1381,7 @@ def main():
         # Print summary last so it appears at the very end
         elapsed = time.time() - start_time
         failed_count_text = (Fore.RED + str(len(failed)) + Style.RESET_ALL) if failed else str(len(failed))
-        print(f"Summary: requested {total_requested}, generated {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s, workers {max_workers}")
+        print(f"Summary: requested {total_requested}, generated {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s")
         if failed:
             for msg in failed:
                 print_error(f" - {msg}")
