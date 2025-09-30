@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: September 30, 2025
-Version: 2.6
+Date: September 23, 2025
+Version: 2.7
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -22,7 +22,7 @@ Features:
 - Handles special fields like DNA Barcode ITS (and LSU, TEF1, RPB1, RPB2), GenBank Accession Number,
   Provisional Species Name, Mobile or Traditional Photography?, Microscopy Performed, Herbarium Catalog Number,
   Herbarium Name, Mycoportal ID, Voucher number(s)
-- Generates a QR code which links to the observation URL when outputting in RTF or PDF format
+- Generates a QR code which links to the observation URL
 
 Usage:
 1. Basic usage (output to console - mostly just for testing):
@@ -66,16 +66,21 @@ Python version 3.6 or higher is recommended.
 
 import argparse
 import colorama
+from colorama import Fore, Style
 import datetime
 import os
 import re
 import sys
 import time
 import unicodedata
+import random
 from io import BytesIO
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from collections import deque
 from replace_accents import replace_accents_characters
 import binascii
 from bs4 import BeautifulSoup
@@ -97,16 +102,57 @@ PDF_BASE_FONT = os.environ.get('PDF_BASE_FONT', 'Times-Roman')
 # Global session with connection pooling
 _session = None
 
+# Simple thread-safe rate limiter: max 60 requests per 60 seconds (configurable via env)
+RATE_LIMIT_RPM = int(os.environ.get("INAT_RATE_LIMIT_RPM", "60"))
+_rate_lock = threading.Lock()
+_request_times = deque()
+
+# Dynamic concurrency control (can be lowered on repeated 429s)
+_conc_lock = threading.Lock()
+_concurrency_target = int(os.environ.get('INAT_MAX_WORKERS', '5'))
+_active_requests = 0
+_recent_429 = deque()  # timestamps of recent 429s
+
+# Retry/quiet controls (tunable from CLI or env)
+_MAX_WAIT_SECONDS = float(os.environ.get('INAT_MAX_WAIT_SECONDS', '30'))
+_QUIET = bool(int(os.environ.get('INAT_QUIET', '0')))
+
+def _rate_limit_wait():
+    """Block if we've made RATE_LIMIT_RPM requests in the last 60 seconds, and if active threads exceed target."""
+    if RATE_LIMIT_RPM <= 0:
+        pass
+    window = 60.0
+    while True:
+        # Concurrency gate
+        with _conc_lock:
+            if _active_requests < _concurrency_target:
+                break
+        time.sleep(0.01)
+    # Rate window gate
+    while True:
+        with _rate_lock:
+            now = time.time()
+            # Drop timestamps outside the window
+            while _request_times and now - _request_times[0] > window:
+                _request_times.popleft()
+            if len(_request_times) < RATE_LIMIT_RPM:
+                _request_times.append(now)
+                return
+            # Need to wait until the oldest timestamp leaves the window
+            sleep_time = max(0.01, window - (now - _request_times[0]))
+        time.sleep(sleep_time)
+
 def get_session():
     """Get or create a requests session with connection pooling."""
     global _session
     if _session is None:
         _session = requests.Session()
+        # Let our own code handle 429s with Retry-After; adapter will only retry on transient 5xx
         retry_strategy = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"]
+            total=2,
+            backoff_factor=0.5,
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["GET"],
         )
         adapter = HTTPAdapter(
             max_retries=retry_strategy,
@@ -118,8 +164,12 @@ def get_session():
     return _session
 
 def print_error(message):
-    """Print error message in red."""
-    print(f"\033[91m{message}\033[0m")
+    """Print error message in red using colorama for cross-platform support."""
+    try:
+        print(Fore.RED + str(message) + Style.RESET_ALL)
+    except Exception:
+        # Fallback if colorama not available for some reason
+        print(f"\033[91m{message}\033[0m")
 
 
 def register_fonts():
@@ -132,7 +182,7 @@ def register_fonts():
         pdfmetrics.registerFontFamily('Liberation Serif', normal='Liberation Serif', bold='Liberation Serif-Bold', italic='Liberation Serif-Italic', boldItalic='Liberation Serif-BoldItalic')
         PDF_BASE_FONT = 'Liberation Serif'
     except Exception as e:
-        print("Warning: Liberation Serif font not found. Falling back to default font.")
+        print_error("Warning: Liberation Serif font not found. Falling back to default font.")
 
 register_fonts()
 
@@ -292,43 +342,143 @@ def extract_observation_id(input_string, debug = False):
     # If neither, return None
     return None
 
-def fetch_api_data(url, retries=3):
-    """Fetch data from a URL with retries and error handling."""
-    try:
-        headers = {'Accept': 'application/json'}
-        response = get_session().get(url, headers=headers, timeout=15)
-
-        if response.status_code == 200:
-            if not response.text.strip():
-                return None, "Empty response"
+def fetch_api_data(url, retries=6):
+    """Fetch data from a URL with robust retries and friendly errors.
+    Uses Retry-After header for 429s and exponential backoff with jitter.
+    """
+    global _concurrency_target
+    def _parse_retry_after(resp):
+        ra = resp.headers.get('Retry-After')
+        if not ra:
+            return None
+        try:
+            return float(ra)
+        except ValueError:
+            # Try HTTP-date
             try:
-                return response.json(), None
-            except ValueError as e:
-                return None, f"Error parsing JSON: {str(e)}"
-        elif response.status_code == 429:
-            if retries > 0:
-                print("Rate limit exceeded. Waiting 5 seconds before retry...")
-                time.sleep(5)
-                return fetch_api_data(url, retries - 1)
-            else:
-                return None, "Max retries reached"
-        else:
-            return None, f"Status code: {response.status_code}"
+                from email.utils import parsedate_to_datetime
+                dt = parsedate_to_datetime(ra)
+                return max(0.0, (dt - datetime.datetime.utcnow()).total_seconds())
+            except Exception:
+                return None
 
-    except requests.exceptions.Timeout:
-        return None, "Timeout error"
-    except requests.exceptions.RequestException as e:
-        return None, f"Network error: {str(e)}"
-    except Exception as e:
-        return None, f"Unexpected error: {str(e)}"
+    attempt = 0
+    total_wait = 0.0
+    notified_patience = False
+    max_total_wait = float(_MAX_WAIT_SECONDS)  # seconds
+    patience_notice_threshold = 8.0
+    while attempt < retries:
+        attempt += 1
+        try:
+            headers = {'Accept': 'application/json', 'User-Agent': 'inat.label.py (label generator)'}
+            _rate_limit_wait()
+            with _conc_lock:
+                global _active_requests
+                _active_requests += 1
+            try:
+                response = get_session().get(url, headers=headers, timeout=20)
+            finally:
+                with _conc_lock:
+                    _active_requests -= 1
 
-def get_taxon_details(taxon_id, retries=3):
+            if response.status_code == 200:
+                if not response.text.strip():
+                    return None, "Empty response"
+                try:
+                    return response.json(), None
+                except ValueError as e:
+                    return None, f"Error parsing JSON: {str(e)}"
+
+            if response.status_code == 404:
+                return None, "Not found (404)"
+
+            if response.status_code == 429:
+                wait = _parse_retry_after(response)
+                if wait is None:
+                    wait = min(60, 2 ** attempt)  # exponential backoff
+                # Jitter to avoid herd retry
+                wait *= random.uniform(0.8, 1.2)
+                # Clamp to keep total wait under budget
+                remaining = max_total_wait - total_wait
+                wait = max(0.5, min(wait, remaining))
+                # record 429 and possibly reduce concurrency
+                now_ts = time.time()
+                with _conc_lock:
+                    _recent_429.append(now_ts)
+                    # Keep only last 10 seconds
+                    while _recent_429 and now_ts - _recent_429[0] > 10:
+                        _recent_429.popleft()
+                    if len(_recent_429) >= 3 and _concurrency_target > 1:
+                        old = _concurrency_target
+                        _concurrency_target = max(1, _concurrency_target - 1)
+                        print_error(f"Reducing concurrency due to repeated 429s: {old} -> {_concurrency_target}")
+                # Inform the user (only phrase in red)
+                if not _QUIET:
+                    msg = (
+                        "iNaturalist returned HTTP 429 (" + Fore.RED + "Too Many Requests" + Style.RESET_ALL + "). "
+                        "This means we've sent too many requests in a short period. "
+                        f"Waiting {wait:.1f}s and retrying (attempt {attempt}/{retries}). "
+                        "Tip: lower concurrency with --workers or INAT_MAX_WORKERS, or reduce INAT_RATE_LIMIT_RPM."
+                    )
+                    print(msg)
+                if not notified_patience and (total_wait + wait) >= patience_notice_threshold:
+                    print("Note: experiencing API rate limiting; being patient (up to 30s) to avoid skipping labels.")
+                    notified_patience = True
+                time.sleep(wait)
+                total_wait += wait
+                continue
+
+            if 500 <= response.status_code < 600:
+                wait = min(30, 1.5 ** attempt)
+                wait *= random.uniform(0.8, 1.2)
+                remaining = max_total_wait - total_wait
+                wait = max(0.5, min(wait, remaining))
+                print_error(f"Server error {response.status_code}. Retrying in {wait:.1f}s (attempt {attempt}/{retries})")
+                if not notified_patience and (total_wait + wait) >= patience_notice_threshold:
+                    print("Note: experiencing server delays; being patient (up to 30s) to avoid skipping labels.")
+                    notified_patience = True
+                time.sleep(wait)
+                total_wait += wait
+                continue
+
+            return None, f"HTTP error {response.status_code}"
+
+        except (requests.exceptions.Timeout, requests.exceptions.SSLError):
+            wait = min(20, 1.5 ** attempt)
+            wait *= random.uniform(0.8, 1.2)
+            remaining = max_total_wait - total_wait
+            wait = max(0.5, min(wait, remaining))
+            print_error(f"Timeout/SSL error. Retrying in {wait:.1f}s (attempt {attempt}/{retries})")
+            if not notified_patience and (total_wait + wait) >= patience_notice_threshold:
+                print("Note: experiencing network delays; being patient (up to 30s) to avoid skipping labels.")
+                notified_patience = True
+            time.sleep(wait)
+            total_wait += wait
+            continue
+        except requests.exceptions.RequestException:
+            wait = min(20, 1.5 ** attempt)
+            wait *= random.uniform(0.8, 1.2)
+            remaining = max_total_wait - total_wait
+            wait = max(0.5, min(wait, remaining))
+            print_error(f"Network error. Retrying in {wait:.1f}s (attempt {attempt}/{retries})")
+            if not notified_patience and (total_wait + wait) >= patience_notice_threshold:
+                print("Note: experiencing network delays; being patient (up to 30s) to avoid skipping labels.")
+                notified_patience = True
+            time.sleep(wait)
+            total_wait += wait
+            continue
+        except Exception as e:
+            return None, f"Unexpected error: {str(e)}"
+
+    return None, "Exceeded maximum retries due to rate limiting or network errors"
+
+def get_taxon_details(taxon_id, retries=6):
     """Fetch detailed information about a taxon, including its ancestors."""
     url = f"https://api.inaturalist.org/v1/taxa/{taxon_id}"
     data, error = fetch_api_data(url, retries)
 
     if error:
-        print(f"Error fetching taxon {taxon_id}: {error}")
+        print_error(f"Error fetching taxon {taxon_id}: {error}")
         return None
 
     if data and data.get('results'):
@@ -336,7 +486,7 @@ def get_taxon_details(taxon_id, retries=3):
     else:
         return None
 
-def get_mushroom_observer_data(mo_id, retries=3):
+def get_mushroom_observer_data(mo_id, retries=6):
     """Fetch observation data from Mushroom Observer API"""
     mo_number = mo_id.replace("MO", "")
     url = f"https://mushroomobserver.org/api2/observations/{mo_number}?detail=high"
@@ -440,7 +590,7 @@ def get_mushroom_observer_data(mo_id, retries=3):
         print(f"Error: Mushroom Observer observation {mo_id} does not exist or has no results.")
         return None, 'Life'
 
-def get_observation_data(observation_id, retries=3):
+def get_observation_data(observation_id, retries=6):
     # Check if the observation ID is a Mushroom Observer ID
     if isinstance(observation_id, str) and observation_id.startswith("MO"):
         return get_mushroom_observer_data(observation_id, retries)
@@ -450,7 +600,7 @@ def get_observation_data(observation_id, retries=3):
     data, error = fetch_api_data(url, retries)
 
     if error:
-        print(f"Error fetching observation {observation_id}: {error}")
+        print_error(f"Error fetching observation {observation_id}: {error}")
         return None, 'Life'
 
     if data and data.get('results'):
@@ -822,7 +972,8 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
         label.append(("Voucher Number(s)", voucher_numbers))
 
     mushroom_observer_url = get_field_value(observation_data, 'Mushroom Observer URL')
-    if mushroom_observer_url:
+    # Avoid duplicating the MO URL if this is a Mushroom Observer observation
+    if mushroom_observer_url and not (isinstance(obs_number, str) and obs_number.startswith("MO")):
         # Format Mushroom Observer URL in the best possible way
         formatted_url = format_mushroom_observer_url(mushroom_observer_url)
         label.append(("Mushroom Observer URL", formatted_url))
@@ -875,9 +1026,9 @@ def create_pdf_content(labels, filename):
                 break
         
         if iconic_taxon_name == "Fungi":
-            print(f"\033[94mAdded label for {iconic_taxon_name}\033[0m {scientific_name}")
+            print(Fore.BLUE + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {scientific_name}")
         elif iconic_taxon_name == "Plantae":
-            print(f"\033[92mAdded label for {iconic_taxon_name}\033[0m {scientific_name}")
+            print(Fore.GREEN + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {scientific_name}")
         else:
             print(f"Added label for {iconic_taxon_name} {scientific_name}")
 
@@ -992,8 +1143,11 @@ def create_rtf_content(labels):
             for field, value in label:
                 if field == "iNaturalist URL":
                     rtf_content += str(value) + r"\line "
+                elif field == "Mushroom Observer URL":
+                    # Show raw URL without heading (requested behavior)
+                    rtf_content += str(value) + r"\line "
                 elif field.startswith("iNat") or field.startswith("iNaturalist") or field.startswith("Mushroom Observer"):
-                    # Special formatting for observation headers
+                    # Special formatting for observation headers (except MO URL which is handled above)
                     if field.startswith("Mushroom Observer"):
                         first_chars, rest = field[:2], field[2:]
                         rtf_content += r"{\ul\b " + first_chars + r"}{\scaps\ul\b " + rest + r":} " + str(value) + r"\line "
@@ -1004,9 +1158,9 @@ def create_rtf_content(labels):
                     rtf_content += r"{\scaps\ul\b " + field + r":} {\b\i " + str(value) + r"}\line "
                     # Tell the user which species is being added to the label on stdout.   Fungi in blue, plants in green, everything else in white.
                     if iconic_taxon_name == "Fungi":
-                        print(f"\033[94mAdded label for {iconic_taxon_name}\033[0m {value}")
+                        print(Fore.BLUE + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {value}")
                     elif iconic_taxon_name == "Plantae":
-                        print(f"\033[92mAdded label for {iconic_taxon_name}\033[0m {value}")
+                        print(Fore.GREEN + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {value}")
                     else:
                         print(f"Added label for {iconic_taxon_name} {value}")
                 elif field == "GPS Coordinates":
@@ -1044,6 +1198,9 @@ def create_rtf_content(labels):
             qr_hex, qr_size = generate_qr_code(qr_url) if qr_url else (None, None)
 
             if qr_hex:
+                # If there are no notes, remove a trailing \line to avoid an extra blank line before the QR code
+                if notes_length == 0 and rtf_content.endswith(r"\line "):
+                    rtf_content = rtf_content[:-6]
                 rtf_content += r"\par\pard\qr\ri360\sb57\sa0 " # Close paragraph, start new right-aligned one with minimal spacing (~1mm)
                 # Convert pixel dimensions to twips (1 pixel = 15 twips)
                 qr_width_twips = qr_size[0] * 15
@@ -1100,6 +1257,9 @@ def main():
     output_group.add_argument("--rtf", metavar="filename.rtf", help="Output to RTF file (filename must end with .rtf)")
     output_group.add_argument("--pdf", metavar="filename.pdf", help="Output to PDF file (filename must end with .pdf)")
     parser.add_argument("--find-ca", action="store_true", help="Find observations within California")
+    parser.add_argument("--workers", type=int, default=None, help="Max parallel API requests (default 5, or INAT_MAX_WORKERS env)")
+    parser.add_argument("--max-wait-seconds", type=float, default=None, help="Max total wait per API call when retrying (default 30s, or INAT_MAX_WAIT_SECONDS env)")
+    parser.add_argument("--quiet", action="store_true", help="Suppress detailed retry messages (e.g., 429 lines); still shows patience notes and summary")
     parser.add_argument('--debug', action='store_true', help='Print debug output')
 
     args = parser.parse_args()
@@ -1112,6 +1272,13 @@ def main():
     # Define rtf_mode and pdf_mode based on whether --rtf or --pdf argument is provided
     rtf_mode = bool(args.rtf)
     pdf_mode = bool(args.pdf)
+
+    # Apply global controls from CLI
+    global _MAX_WAIT_SECONDS, _QUIET
+    if args.max_wait_seconds is not None:
+        _MAX_WAIT_SECONDS = float(args.max_wait_seconds)
+    if args.quiet:
+        _QUIET = True
 
     if rtf_mode and not args.rtf.lower().endswith('.rtf'):
         parser.error("argument --rtf: filename must end with .rtf")
@@ -1137,42 +1304,50 @@ def main():
     observation_ids = [obs for obs in observation_ids if obs]
 
     labels = []
-    request_count = 0
+    failed = []
+    total_requested = len(observation_ids)
+    start_time = time.time()
 
-    for input_value in observation_ids:
-        observation_id = extract_observation_id(input_value, debug=args.debug)
+    def process_one(input_value):
+        try:
+            observation_id = extract_observation_id(input_value, debug=args.debug)
+            if observation_id is None:
+                return ('err', f"Invalid input '{input_value}'")
+            result = get_observation_data(observation_id)
+            if result is None:
+                return ('err', f"Failed to fetch observation {observation_id}")
+            observation_data, iconic_taxon_name = result
+            if args.find_ca:
+                geo = observation_data.get('geojson')
+                if geo and geo.get('coordinates'):
+                    coordinates = geo['coordinates']
+                    latitude, longitude = coordinates[1], coordinates[0]
+                    if is_within_california(latitude, longitude):
+                        print(f"https://www.inaturalist.org/observations/{observation_id}")
+                return ('skip', None)
+            else:
+                label, updated_iconic_taxon = create_inaturalist_label(
+                    observation_data, iconic_taxon_name, rtf_mode=rtf_mode
+                )
+                if label is not None:
+                    return ('ok', (label, updated_iconic_taxon))
+                return ('err', f"Could not create label for {observation_id}")
+        except Exception as e:
+            return ('err', f"Unexpected error for {input_value}: {str(e)}")
 
-        if observation_id is None:
-            print(f"Error: Invalid input '{input_value}'. Please provide a valid observation number or URL.")
-            continue
-
-        # Add delay if more than 20 requests
-        if request_count >= 20:
-            time.sleep(1)  # 1 second delay
-
-        result = get_observation_data(observation_id)
-
-        request_count += 1  # Increment the request counter
-
-        if result is None:
-            continue  # Skip to the next observation if there was an error
-
-        observation_data, iconic_taxon_name = result
-
-        # If the --find-ca command line option is given, only print out URL's of California observations
-        if args.find_ca:
-            if 'geojson' in observation_data and observation_data['geojson']:
-                coordinates = observation_data['geojson']['coordinates']
-                latitude, longitude = coordinates[1], coordinates[0]
-                if is_within_california(latitude, longitude):
-                    print(f"https://www.inaturalist.org/observations/{observation_id}")
-        # Otherwise create the label
-        else:
-            label, updated_iconic_taxon = create_inaturalist_label(
-                observation_data, iconic_taxon_name, rtf_mode=rtf_mode
-            )
-            if label is not None:
-                labels.append((label, updated_iconic_taxon))
+    # Respect API guidelines by limiting concurrency to a small number (<=5)
+    max_workers = args.workers if args.workers else int(os.environ.get('INAT_MAX_WORKERS', '5'))
+    # Initialize dynamic concurrency target to selected workers
+    global _concurrency_target
+    _concurrency_target = max_workers
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(process_one, input_value) for input_value in observation_ids]
+        for fut in as_completed(futures):
+            status, payload = fut.result()
+            if status == 'ok' and payload:
+                labels.append(payload)
+            elif status == 'err' and payload:
+                failed.append(payload)
 
     if not args.find_ca:
         if labels:
@@ -1195,11 +1370,21 @@ def main():
                             print(f"{field}: {value}")
                         elif field == "iNaturalist URL":
                             print(value)
+                        elif field == "Mushroom Observer URL":
+                            print(value)
                         else:
                             print(f"{field}: {value}")
                     print("\n")  # Blank line between labels
         else:
             print("No valid observations found.")
+
+        # Print summary last so it appears at the very end
+        elapsed = time.time() - start_time
+        failed_count_text = (Fore.RED + str(len(failed)) + Style.RESET_ALL) if failed else str(len(failed))
+        print(f"Summary: requested {total_requested}, generated {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s")
+        if failed:
+            for msg in failed:
+                print_error(f" - {msg}")
 
 if __name__ == "__main__":
     colorama.init()

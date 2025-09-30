@@ -1,12 +1,21 @@
 # Changelog
 
 
+## 2.7
+September 30, 2025
+
+- Uses parallel processing to vastly speed up requests for multiple labels.
+- Improved formatting of Mushroom Observer labels.
+- If there are errors we wait up to 30 seconds instead of exiting without creating all the labels the user requested.
+- Give a report on the success of our label generation
+- Better error messages
+
 ## 2.6
 September 30, 2025
 
 - Implemented connection pooling for more efficient and reliable API requests.
 - GPS accuracy is now displayed in kilometers when the accuracy is over 1000 meters.
-- RTF output has been improved with better spacing 
+- RTF output has been improved with better spacing.
 - Location formatting has been improved to standardize on "USA" instead of "US".
 
 ## 2.5

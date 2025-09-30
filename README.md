@@ -1,6 +1,6 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 2.6
+# iNaturalist Herbarium Label Generator version 2.7
 # By Alan Rockefeller
 # September 30, 2025
 
@@ -26,7 +26,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 
 - Fetches observation data using the iNaturalist / Mushroom Observer API.
 - Supports multiple iNat or MO observation IDs or URLs as input - or a file can be specified.
-- Uses connection pooling for faster and reliable API requests.
+- Uses parallel processing and a robust retry mechanism for reliable and fast label generation.
 - Generates labels with key information including:
   - Scientific Name (in italics)
   - Common Name (if different from scientific name)
@@ -53,8 +53,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 - Optionally creates PDF files for more compatibility
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
-- Includes a 1-second delay if there are more than 20 requests, which stops the iNaturalist API from denying requests for large label printing jobs.
-- Adds a QR code to the RTF labels which points to the iNaturalist URL
+- Adds a QR code to the PDF and RTF labels which points to the iNaturalist URL
 - When generating RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white.   This will help you quickly notice if an observation number is mistyped.
 
 ## Installation
@@ -74,7 +73,7 @@ Instead of installing this software, consider using the online version: https://
 
 3. Install the required dependencies:
    ```bash
-   pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab
+   pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab requests-toolbelt
    ```
 
 ## Usage
@@ -128,6 +127,7 @@ The script generates herbarium labels to the standard output by default, or labe
 
 - Python 3.6+
 - requests
+- requests-toolbelt
 - python-dateutil
 - beautifulsoup4
 - qrcode[pil]
@@ -159,4 +159,3 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 Alan Rockefeller - My email address is my full name at gmail, or message me on Facebook, Linkedin or Instagram
 
 Project Link: [https://github.com/AlanRockefeller/inat.label.py](https://github.com/AlanRockefeller/inat.label.py)
-
