@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 2.5
+# iNaturalist Herbarium Label Generator version 2.6
 # By Alan Rockefeller
-# September 23, 2025
+# September 30, 2025
 
 
 ## Description
@@ -24,8 +24,9 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 
 ## Features
 
-- Fetches observation data using the iNaturalisti / Mushroom Observer API
-- Supports multiple observation IDs or URLs as input - or a file can be specified
+- Fetches observation data using the iNaturalist / Mushroom Observer API.
+- Supports multiple iNat or MO observation IDs or URLs as input - or a file can be specified.
+- Uses connection pooling for faster and reliable API requests.
 - Generates labels with key information including:
   - Scientific Name (in italics)
   - Common Name (if different from scientific name)
@@ -48,8 +49,8 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - Voucher number(s) (if present)
   - Observation Notes
 - By default outputs labels to console for quick viewing / testing
-- Optionally creates formatted RTF files for high-quality printing (RTF output is strongly recommended)
-- Optionally creates two-column PDF files for more compatibility
+- Optionally creates RTF files for high-quality printing + QR code (RTF or PDF output is strongly recommended)
+- Optionally creates PDF files for more compatibility
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
 - Includes a 1-second delay if there are more than 20 requests, which stops the iNaturalist API from denying requests for large label printing jobs.
@@ -62,25 +63,25 @@ Instead of installing this software, consider using the online version: https://
 
 
 1. Clone this repository:
-   ```
-   bash git clone https://github.com/AlanRockefeller/inat.label.py
+   ```bash
+   git clone https://github.com/AlanRockefeller/inat.label.py
    ```
 
 2. Navigate to the project directory:
-   ```
-   bash cd inat.label.py
+   ```bash
+   cd inat.label.py
    ```
 
 3. Install the required dependencies:
-   ```
-   bash pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab
+   ```bash
+   pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab
    ```
 
 ## Usage
 
 Run the script from the command line, providing one or more iNaturalist observation IDs or URLs:
 
-```
+```bash
 python inat.label.py <observation_number_or_url> [<observation_number_or_url> ...]
 ```
 
