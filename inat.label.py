@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: September 30, 2025
-Version: 2.7
+Date: October 1, 2025
+Version: 2.8
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -107,6 +107,14 @@ RATE_LIMIT_RPM = int(os.environ.get("INAT_RATE_LIMIT_RPM", "60"))
 _rate_lock = threading.Lock()
 _request_times = deque()
 
+# Even spacing control derived from RATE_LIMIT_RPM
+_MIN_INTERVAL = 0.0
+if RATE_LIMIT_RPM > 0:
+    _MIN_INTERVAL = 60.0 / RATE_LIMIT_RPM
+_next_allowed_time = 0.0
+# Begin smoothing only after this many recent requests in the window (burst allowance for small jobs)
+_SMOOTH_THRESHOLD = int(os.environ.get('INAT_SMOOTH_THRESHOLD', str(max(1, RATE_LIMIT_RPM // 4))))
+
 # Dynamic concurrency control (can be lowered on repeated 429s)
 _conc_lock = threading.Lock()
 _concurrency_target = int(os.environ.get('INAT_MAX_WORKERS', '5'))
@@ -118,28 +126,47 @@ _MAX_WAIT_SECONDS = float(os.environ.get('INAT_MAX_WAIT_SECONDS', '30'))
 _QUIET = bool(int(os.environ.get('INAT_QUIET', '0')))
 
 def _rate_limit_wait():
-    """Block if we've made RATE_LIMIT_RPM requests in the last 60 seconds, and if active threads exceed target."""
+    """Respect RPM window with smoothing only after a small burst threshold.
+
+    - Allows a small initial burst (< _SMOOTH_THRESHOLD in the last 60s) with no artificial spacing
+    - Applies even spacing once activity is high enough to approach the RPM limit
+    - Always enforces the absolute window cap (RATE_LIMIT_RPM per 60 seconds)
+    """
     if RATE_LIMIT_RPM <= 0:
-        pass
-    window = 60.0
+        return
+    # Concurrency gate
     while True:
-        # Concurrency gate
         with _conc_lock:
             if _active_requests < _concurrency_target:
                 break
-        time.sleep(0.01)
-    # Rate window gate
+        time.sleep(0.005)
+
+    window = 60.0
+    min_interval = _MIN_INTERVAL
     while True:
         with _rate_lock:
             now = time.time()
             # Drop timestamps outside the window
             while _request_times and now - _request_times[0] > window:
                 _request_times.popleft()
+
+            # If under window cap, decide whether to smooth or burst
             if len(_request_times) < RATE_LIMIT_RPM:
-                _request_times.append(now)
-                return
-            # Need to wait until the oldest timestamp leaves the window
-            sleep_time = max(0.01, window - (now - _request_times[0]))
+                if len(_request_times) < _SMOOTH_THRESHOLD or min_interval <= 0:
+                    # Burst allowance: execute immediately
+                    _request_times.append(now)
+                    return
+                # Smooth: ensure minimum interval between starts
+                wait = _next_allowed_time - now
+                if wait <= 0:
+                    reserve_time = max(_next_allowed_time, now)
+                    globals()['_next_allowed_time'] = reserve_time + min_interval
+                    _request_times.append(now)
+                    return
+                sleep_time = min(wait, 0.02)
+            else:
+                # Over the RPM cap; wait until oldest leaves window
+                sleep_time = max(0.01, window - (now - _request_times[0]))
         time.sleep(sleep_time)
 
 def get_session():
@@ -164,15 +191,19 @@ def get_session():
     return _session
 
 def print_error(message):
-    """Print error message in red using colorama for cross-platform support."""
+    """Print an error message in red (cross-platform) to stderr.
+
+    Uses colorama for coloring when available; falls back to ANSI escape codes.
+    """
     try:
-        print(Fore.RED + str(message) + Style.RESET_ALL)
+        print(Fore.RED + str(message) + Style.RESET_ALL, file=sys.stderr)
     except Exception:
         # Fallback if colorama not available for some reason
-        print(f"\033[91m{message}\033[0m")
+        print(f"\033[91m{message}\033[0m", file=sys.stderr)
 
 
 def register_fonts():
+    """Register optional Liberation Serif fonts; fall back to default PDF_BASE_FONT."""
     global PDF_BASE_FONT
     try:
         pdfmetrics.registerFont(TTFont('Liberation Serif', 'LiberationSerif-Regular.ttf'))
@@ -208,6 +239,7 @@ RTF_HEADER = r"""{\rtf1\ansi\deff3\adeflang1025
 
 
 def generate_qr_code(url):
+    """Generate a small PNG QR code for the given URL and return (hex_string, size_tuple)."""
     try:
         qr = qrcode.QRCode(version=1, box_size=1, border=1)
         qr.add_data(url)
@@ -262,6 +294,7 @@ def escape_rtf(text):
 
 # Remove formatting tags in stdout
 def remove_formatting_tags(text):
+    """Strip internal formatting markers and prune empty/garbage lines for plaintext output."""
     tags_to_remove = ['__BOLD_START__', '__BOLD_END__', '__ITALIC_START__', '__ITALIC_END__']
     for tag in tags_to_remove:
         text = text.replace(tag, '')
@@ -276,6 +309,13 @@ def remove_formatting_tags(text):
 
 
 def parse_html_notes(notes):
+    """Convert HTML notes into simplified text with inline formatting markers.
+
+    - Unwraps paragraph tags
+    - Converts <a> to "text (url)"
+    - Replaces bold/italic with placeholder tokens understood by downstream RTF/Paragraph rendering
+    - Cleans specific duplicated cross-posting lines
+    """
     if not notes or '<' not in notes:
         return notes  # Return the original notes if it's empty or doesn't contain HTML tags
 
@@ -310,9 +350,15 @@ def parse_html_notes(notes):
     return processed_text
 
 def normalize_string(s):
+    """Lowercase, strip whitespace, and apply NFKD Unicode normalization for comparisons."""
     return unicodedata.normalize('NFKD', s.strip().lower())
 
 def extract_observation_id(input_string, debug = False):
+    """Normalize a user-supplied input into an observation identifier.
+
+    Accepts iNaturalist numeric IDs or URLs, and Mushroom Observer IDs like "MO12345" or MO URLs.
+    Returns a string ID (possibly with "MO" prefix) or None if unrecognized.
+    """
     # Check if the input is a Mushroom Observer ID (format MO followed by any number of digits)
     mo_match = re.match(r'^MO(\d+)$', input_string)
     if mo_match:
@@ -348,6 +394,7 @@ def fetch_api_data(url, retries=6):
     """
     global _concurrency_target
     def _parse_retry_after(resp):
+        """Parse HTTP Retry-After header as seconds, supporting both delta and HTTP-date."""
         ra = resp.headers.get('Retry-After')
         if not ra:
             return None
@@ -472,22 +519,104 @@ def fetch_api_data(url, retries=6):
 
     return None, "Exceeded maximum retries due to rate limiting or network errors"
 
-def get_taxon_details(taxon_id, retries=6):
-    """Fetch detailed information about a taxon, including its ancestors."""
-    url = f"https://api.inaturalist.org/v1/taxa/{taxon_id}"
-    data, error = fetch_api_data(url, retries)
+# Batched taxon-details cache and fetcher
+_taxon_cache = {}
+_taxon_pending = {}
+_taxon_pending_lock = threading.Lock()
+_taxon_batch_queue = deque()
+_taxon_batcher_thread = None
+_taxon_batcher_stop = threading.Event()
+_TAXON_BATCH_MAX = int(os.environ.get('INAT_TAXON_BATCH_MAX', '50'))
+_TAXON_BATCH_WINDOW = float(os.environ.get('INAT_TAXON_BATCH_WINDOW', '0.1'))
 
-    if error:
-        print_error(f"Error fetching taxon {taxon_id}: {error}")
+
+def _start_taxon_batcher():
+    """Start the background batcher thread for /taxa lookups if not already running."""
+    global _taxon_batcher_thread
+    if _taxon_batcher_thread and _taxon_batcher_thread.is_alive():
+        return
+
+    def _loop():
+        """Background loop that batches pending taxon IDs and fetches them via a single /taxa call."""
+        while not _taxon_batcher_stop.is_set():
+            ids = []
+            start_wait = time.time()
+            # Collect a batch up to max size or window
+            while len(ids) < _TAXON_BATCH_MAX:
+                with _taxon_pending_lock:
+                    if _taxon_batch_queue:
+                        tid = _taxon_batch_queue.popleft()
+                        if tid not in ids:
+                            ids.append(tid)
+                    else:
+                        # No work pending right now
+                        pass
+                if ids:
+                    if time.time() - start_wait >= _TAXON_BATCH_WINDOW:
+                        break
+                    # Small sleep to allow more IDs to accumulate
+                    time.sleep(0.01)
+                else:
+                    # Avoid tight loop when idle
+                    time.sleep(0.01)
+                    if not _taxon_batch_queue:
+                        # still nothing; continue outer while
+                        continue
+            if not ids:
+                # nothing to do this round
+                continue
+            # Perform a single batched request
+            url = "https://api.inaturalist.org/v1/taxa?id=" + ",".join(str(i) for i in ids)
+            data, error = fetch_api_data(url)
+            results_by_id = {}
+            if not error and data and data.get('results') is not None:
+                for item in data['results']:
+                    tid = item.get('id')
+                    if tid is not None:
+                        results_by_id[tid] = item
+            # Fulfill waiters and populate cache
+            with _taxon_pending_lock:
+                for tid in ids:
+                    _taxon_cache[tid] = results_by_id.get(tid)
+                    evt = _taxon_pending.get(tid)
+                    if evt:
+                        evt.set()
+                        _taxon_pending.pop(tid, None)
+
+    _taxon_batcher_thread = threading.Thread(target=_loop, name="inat-taxa-batcher", daemon=True)
+    _taxon_batcher_thread.start()
+
+
+def get_taxon_details(taxon_id, retries=6):
+    """Fetch taxon details (including ancestors) with caching.
+
+    Uses the /v1/taxa/{id} endpoint to ensure 'ancestors' are present. Caches results in-memory.
+    """
+    try:
+        tid = int(taxon_id)
+    except Exception:
         return None
+
+    # Cache fast-path; ensure we have ancestors
+    cached = _taxon_cache.get(tid)
+    if cached and cached.get('ancestors') is not None:
+        return cached
+
+    # Fetch directly (ensures ancestors are included)
+    url = f"https://api.inaturalist.org/v1/taxa/{tid}"
+    data, error = fetch_api_data(url, retries)
+    if error:
+        print_error(f"Error fetching taxon {tid}: {error}")
+        return cached  # Return whatever we had (may be None or partial)
 
     if data and data.get('results'):
-        return data['results'][0]
-    else:
-        return None
+        item = data['results'][0]
+        _taxon_cache[tid] = item
+        return item
+    return cached
 
 def get_mushroom_observer_data(mo_id, retries=6):
-    """Fetch observation data from Mushroom Observer API"""
+    """Fetch observation data from Mushroom Observer API."""
     mo_number = mo_id.replace("MO", "")
     url = f"https://mushroomobserver.org/api2/observations/{mo_number}?detail=high"
     data, error = fetch_api_data(url, retries)
@@ -591,6 +720,12 @@ def get_mushroom_observer_data(mo_id, retries=6):
         return None, 'Life'
 
 def get_observation_data(observation_id, retries=6):
+    """Fetch observation data from iNaturalist or Mushroom Observer.
+
+    Accepts either an iNaturalist observation ID (int/str) or an MO ID like "MO12345".
+    Returns a tuple (observation_dict, iconic_taxon_name) or (None, 'Life') on error.
+    May augment iNat observations with taxon_details (ancestors) when needed for formatting.
+    """
     # Check if the observation ID is a Mushroom Observer ID
     if isinstance(observation_id, str) and observation_id.startswith("MO"):
         return get_mushroom_observer_data(observation_id, retries)
@@ -610,9 +745,12 @@ def get_observation_data(observation_id, retries=6):
         
         if taxon and 'id' in taxon:
             taxon_id = taxon['id']
-            taxon_details = get_taxon_details(taxon_id)
-            if taxon_details:
-                observation['taxon_details'] = taxon_details
+            rank = str(taxon.get('rank', '')).lower()
+            # Only fetch ancestors when formatting needs them
+            if rank in {'subspecies', 'variety', 'form', 'section', 'subsection', 'subgenus'}:
+                taxon_details = get_taxon_details(taxon_id)
+                if taxon_details:
+                    observation['taxon_details'] = taxon_details
         
         return observation, iconic_taxon_name
     else:
@@ -620,15 +758,18 @@ def get_observation_data(observation_id, retries=6):
         return None, 'Life'
 
 def field_exists(observation_data, field_name):
+    """Return True if an observation has a custom field with the given name."""
     return any(field['name'].lower() == field_name.lower() for field in observation_data.get('ofvs', []))
 
 def get_field_value(observation_data, field_name):
+    """Return the value for a custom field by name, or None if absent."""
     for field in observation_data.get('ofvs', []):
         if field['name'].lower() == field_name.lower():
             return field['value']
     return None
 
 def format_mushroom_observer_url(url):
+    """Normalize Mushroom Observer URLs to https://mushroomobserver.org/obs/<id> when possible."""
     if url:
         match = re.search(r'https?://(?:www\.)?mushroomobserver\.org/(?:observations/|observer/show_observation/|obs/)?(\d+)(?:\?.*)?', url)
         if match:
@@ -636,6 +777,12 @@ def format_mushroom_observer_url(url):
     return url
 
 def get_coordinates(observation_data):
+    """Return ("lat, lon", accuracy_str) from observation geojson, if present.
+
+    - Formats lat/lon to 5 decimals. Accuracy is "Xm" or "Ykm" when available.
+    - For obscured observations, defaults accuracy to 20000m.
+    - Returns ("Not available", None) when no coordinates are present.
+    """
     if 'geojson' in observation_data and observation_data['geojson']:
         coordinates = observation_data['geojson']['coordinates']
         latitude = f"{coordinates[1]:.5f}"
@@ -665,6 +812,10 @@ def get_coordinates(observation_data):
     return 'Not available', None
 
 def parse_date(date_string):
+    """Parse a variety of date strings and return a datetime.date or None.
+
+    Tries common formats first, then falls back to dateutil parsing.
+    """
     date_formats = [
         '%Y-%m-%d',
         '%Y/%m/%d',
@@ -693,10 +844,15 @@ def parse_date(date_string):
         pass
 
 def format_scientific_name(observation_data):
-    """Format the scientific name based on taxonomic rank."""
+    """Format the scientific name based on taxonomic rank.
+
+    - Species-level and above: return the taxon's canonical name.
+    - Infraspecific (subspecies/variety/form): "<Genus species> <rank> <epithet>".
+    - Infrageneric (subgenus/section/subsection): "<Genus> <rank> <name>" using full rank words.
+    """
     
-    # Define rank abbreviations
-    rank_abbreviations = {
+    # Define rank label map; abbreviate infrageneric ranks; rank labels themselves are not italicized.
+    rank_label = {
         'subgenus': 'subg.',
         'section': 'sect.',
         'subsection': 'subsect.',
@@ -712,25 +868,33 @@ def format_scientific_name(observation_data):
     
     # Get the basic scientific name and rank
     scientific_name = taxon.get('name', 'Not available')
-    rank = taxon.get('rank', '').lower()
+    rank = str(taxon.get('rank', '')).lower()
     
     # If it's not in our special ranks list, use the name as is
-    if rank not in rank_abbreviations:
-        return scientific_name
+    if rank not in rank_label:
+        # Entire binomial or uninomial italicized in display contexts; mark for styling.
+        return f"__ITALIC_START__{scientific_name}__ITALIC_END__"
     
     # For complex, append 'complex' to the name
     if rank == 'complex':
-        return f"{scientific_name} complex"
+        # Complex label not italicized; italicize the uninomial name only
+        return f"__ITALIC_START__{scientific_name}__ITALIC_END__ complex"
     
     # Special handling for subspecies, variety, and form which follow species name
     if rank in ['subspecies', 'variety', 'form']:
-        taxon_details = observation_data.get('taxon_details', {})
+        taxon_details = observation_data.get('taxon_details')
+        # Lazy fetch if needed
+        if not taxon_details and taxon.get('id'):
+            fetched = get_taxon_details(taxon['id'])
+            if fetched:
+                taxon_details = fetched
+                observation_data['taxon_details'] = fetched
         
         # Check if the name already includes the parent species (e.g., "Amanita muscaria flavivolvata")
         name_parts = scientific_name.split()
         
         # If name has more than 2 parts, it might already include the parent species
-        if len(name_parts) > 2:
+        if len(name_parts) > 2 and taxon_details:
             # Find the species in the ancestors
             species_name = None
             ancestors = taxon_details.get('ancestors', [])
@@ -744,16 +908,15 @@ def format_scientific_name(observation_data):
             if species_name and species_name in scientific_name:
                 # Extract the infraspecific epithet (the part after the species name)
                 epithet = scientific_name.replace(species_name, '').strip()
-                return f"{species_name} {rank_abbreviations[rank]} {epithet}"
+                return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{epithet}__ITALIC_END__"
             # If the name has three parts but doesn't match our species ancestor,
             # it might be "Genus species epithet" format
             elif len(name_parts) == 3:
-                return f"{name_parts[0]} {name_parts[1]} {rank_abbreviations[rank]} {name_parts[2]}"
+                return f"__ITALIC_START__{name_parts[0]} {name_parts[1]}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{name_parts[2]}__ITALIC_END__"
         
         # If we get here, we need to find parent species from ancestors
-        ancestors = taxon_details.get('ancestors', [])
         species_name = None
-        
+        ancestors = (taxon_details or {}).get('ancestors', [])
         for ancestor in ancestors:
             if ancestor.get('rank') == 'species':
                 species_name = ancestor.get('name')
@@ -762,43 +925,48 @@ def format_scientific_name(observation_data):
         if species_name:
             # If the scientific_name is just the infraspecific epithet
             if len(name_parts) == 1:
-                return f"{species_name} {rank_abbreviations[rank]} {scientific_name}"
+                return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
             else:
                 # If scientific_name already contains full info, just make sure format is correct
-                return f"{species_name} {rank_abbreviations[rank]} {name_parts[-1]}"
+                return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{name_parts[-1]}__ITALIC_END__"
         else:
             # Fallback: couldn't find parent species
             return scientific_name
     
-    # For other ranks below genus (section, subsection, etc.)
-    taxon_details = observation_data.get('taxon_details', {})
-    ancestors = taxon_details.get('ancestors', [])
+    # Infrageneric ranks (below genus): subgenus, section, subsection
+    # We need the genus; fetch ancestors if not present
+    taxon_details = observation_data.get('taxon_details')
+    if not taxon_details and taxon.get('id'):
+        fetched = get_taxon_details(taxon['id'])
+        if fetched:
+            taxon_details = fetched
+            observation_data['taxon_details'] = fetched
+    ancestors = (taxon_details or {}).get('ancestors', [])
     
     # Find the genus in the ancestors
     genus = None
-    section = None
     for ancestor in ancestors:
         if ancestor.get('rank') == 'genus':
             genus = ancestor.get('name')
-        elif ancestor.get('rank') == 'section':
-            section = ancestor.get('name')
+            break
     
     # If we couldn't find the genus, use the name as is
     if not genus:
-        return scientific_name
+        # Fallback; italicize full name
+        return f"__ITALIC_START__{scientific_name}__ITALIC_END__"
     
-    # Construct the full scientific name based on rank
-    if rank == 'section':
-        return f"{genus} {rank_abbreviations[rank]} {scientific_name}"
-    elif rank == 'subsection' and section:
-        return f"{genus} sect. {section} {rank_abbreviations[rank]} {scientific_name}"
-    else:
-        return f"{genus} {rank_abbreviations[rank]} {scientific_name}"
+    # Construct: italicize genus and epithet, not the rank label
+    return f"__ITALIC_START__{genus}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
 
 def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False):
-    # Check if observation_data is None
+    """Build a label record from observation data.
+
+    Returns (label_fields, iconic_taxon_name) where label_fields is a list of (field, value) tuples
+    suitable for either RTF/PDF rendering or plaintext output. If observation_data is None, returns (None, None).
+    When rtf_mode is True, performs additional character substitutions for RTF compatibility.
+    """
+    # If no data, return quietly; upstream will report a single concise error.
     if observation_data is None:
-        print("Error: No observation data available to create label.")
         return None, None
         
     obs_number = observation_data['id']
@@ -816,7 +984,8 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
         common_name = ''
         scientific_name = 'Not available'
     else:
-        common_name = taxon.get('preferred_common_name', taxon.get('name', 'Not available'))
+        # Only use the preferred common name; do not fall back to scientific name
+        common_name = taxon.get('preferred_common_name') or ''
         # Use the new function to format the scientific name correctly
         scientific_name = format_scientific_name(observation_data)
 
@@ -857,22 +1026,22 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
 
     # Check if common name is contained in any part of the scientific name
     # Include common name only if it's not redundant with any part of the scientific name
-    scientific_name_parts = scientific_name.lower().split()
+    scientific_name_plain = scientific_name.replace('__ITALIC_START__','').replace('__ITALIC_END__','')
+    scientific_name_parts = scientific_name_plain.lower().split()
     common_name_normalized = normalize_string(common_name) if common_name else ''
     
     # Check if common name matches any part of the scientific name
     is_redundant = False
     if common_name:
-        # First check if it matches the full scientific name
-        if common_name_normalized == normalize_string(scientific_name):
+        # First check if it matches the full scientific name (plain)
+        if common_name_normalized == normalize_string(scientific_name_plain):
             is_redundant = True
         else:
             # Check if it matches any part of the scientific name
             for part in scientific_name_parts:
-                # Skip rank abbreviations (sect., subsp., etc.)
-                if part.endswith('.') or part == 'complex':
+                # Skip rank abbreviations (sect., subsp., subsect., subg., etc.) and keywords
+                if part.endswith('.') or part in {'complex'}:
                     continue
-                    
                 if normalize_string(part) == common_name_normalized:
                     is_redundant = True
                     break
@@ -986,6 +1155,10 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     return label, iconic_taxon_name
 
 def create_pdf_content(labels, filename):
+    """Render labels into a two-column PDF at the given filename.
+
+    Expects labels as an iterable of (label_fields, iconic_taxon_name). Adds a QR code when a URL is present.
+    """
     doc = BaseDocTemplate(filename, pagesize=letter, leftMargin=0.25*inch, rightMargin=0.25*inch, topMargin=0.25*inch, bottomMargin=0.25*inch)
 
     # Two columns
@@ -1024,20 +1197,14 @@ def create_pdf_content(labels, filename):
             if field == "Scientific Name":
                 scientific_name = value
                 break
-        
-        if iconic_taxon_name == "Fungi":
-            print(Fore.BLUE + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {scientific_name}")
-        elif iconic_taxon_name == "Plantae":
-            print(Fore.GREEN + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {scientific_name}")
-        else:
-            print(f"Added label for {iconic_taxon_name} {scientific_name}")
 
         for field, value in label:
             if field == "Notes":
                 notes_value = value
                 continue
             if field == "Scientific Name":
-                p = Paragraph(f"<b>{field}:</b> <i>{value}</i>", custom_normal_style)
+                sci_html = value.replace('__ITALIC_START__','<i>').replace('__ITALIC_END__','</i>')
+                p = Paragraph(f"<b>{field}:</b> {sci_html}", custom_normal_style)
                 pre_notes_content.append(p)
             elif field == "iNaturalist URL":
                 p = Paragraph(f"{value}", custom_normal_style)
@@ -1120,6 +1287,10 @@ def create_pdf_content(labels, filename):
     doc.build(story)
 
 def create_rtf_content(labels):
+    """Generate RTF content for the given labels and return it as a string.
+
+    Embeds a PNG QR code for each label's URL using RTF pict data; applies small layout tweaks for readability.
+    """
     rtf_header = RTF_HEADER
     rtf_footer = r"}"
 
@@ -1155,14 +1326,9 @@ def create_rtf_content(labels):
                         first_char, rest = field[0], field[1:]
                         rtf_content += r"{\ul\b " + first_char + r"}{\scaps\ul\b " + rest + r":} " + str(value) + r"\line "
                 elif field == "Scientific Name":
-                    rtf_content += r"{\scaps\ul\b " + field + r":} {\b\i " + str(value) + r"}\line "
-                    # Tell the user which species is being added to the label on stdout.   Fungi in blue, plants in green, everything else in white.
-                    if iconic_taxon_name == "Fungi":
-                        print(Fore.BLUE + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {value}")
-                    elif iconic_taxon_name == "Plantae":
-                        print(Fore.GREEN + f"Added label for {iconic_taxon_name}" + Style.RESET_ALL + f" {value}")
-                    else:
-                        print(f"Added label for {iconic_taxon_name} {value}")
+                    value_rtf = str(value)
+                    value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
+                    rtf_content += r"{\scaps\ul\b " + field + r":} " + value_rtf + r"\line "
                 elif field == "GPS Coordinates":
                     # Replace the ± symbol with the RTF escape code
                     value_rtf = value.replace("±", r"\'b1")
@@ -1191,6 +1357,7 @@ def create_rtf_content(labels):
                     rtf_content += r"{\scaps\ul\b " + field + r":} " + str(value) + r"\line "
 
             def split_hex_string(s, n):
+                """Split a long hex string into lines with at most n characters per line."""
                 # Split hex string into lines of n characters
                 return '\n'.join([s[i:i+n] for i in range(0, len(s), n)])
 
@@ -1241,6 +1408,7 @@ def create_rtf_content(labels):
 
 # Check to see if the observation is in California
 def is_within_california(latitude, longitude):
+    """Return True if the point lies within an approximate California bounding box."""
     # Approximate bounding box for California
     CA_NORTH = 42.0
     CA_SOUTH = 32.5
@@ -1321,6 +1489,7 @@ def main():
     start_time = time.time()
 
     def process_one(input_value):
+        """Process one input: normalize ID, fetch data, optionally find-CA, and build label."""
         try:
             observation_id = extract_observation_id(input_value, debug=args.debug)
             if observation_id is None:
@@ -1342,6 +1511,15 @@ def main():
                     observation_data, iconic_taxon_name, rtf_mode=rtf_mode
                 )
                 if label is not None:
+                    # Print as soon as the label is created
+                    scientific_name = next((v for f, v in label if f == "Scientific Name"), "")
+                    scientific_name_plain = scientific_name.replace('__ITALIC_START__','').replace('__ITALIC_END__','')
+                    if updated_iconic_taxon == "Fungi":
+                        print(Fore.BLUE + f"Added label for {updated_iconic_taxon}" + Style.RESET_ALL + f" {scientific_name_plain}", flush=True)
+                    elif updated_iconic_taxon == "Plantae":
+                        print(Fore.GREEN + f"Added label for {updated_iconic_taxon}" + Style.RESET_ALL + f" {scientific_name_plain}", flush=True)
+                    else:
+                        print(f"Added label for {updated_iconic_taxon} {scientific_name_plain}", flush=True)
                     return ('ok', (label, updated_iconic_taxon))
                 return ('err', f"Could not create label for {observation_id}")
         except Exception as e:
@@ -1403,6 +1581,8 @@ def main():
                         elif field == "Mushroom Observer URL":
                             print(value)
                         else:
+                            if field == "Scientific Name":
+                                value = value.replace('__ITALIC_START__','').replace('__ITALIC_END__','')
                             print(f"{field}: {value}")
                     print("\n")  # Blank line between labels
         else:
@@ -1420,5 +1600,6 @@ def main():
                 print_error(f" - {msg}")
 
 if __name__ == "__main__":
-    colorama.init()
+    # Do not strip ANSI when piping to the Flask server so colors reach the browser
+    colorama.init(strip=False, convert=False)
     main()

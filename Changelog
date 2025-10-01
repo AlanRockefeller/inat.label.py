@@ -1,6 +1,18 @@
 # Changelog
 
 
+## 2.8
+October 1, 2025
+
+- **Major Performance Improvements**: Implemented intelligent rate limiting with burst allowance for small jobs and smooth spacing for large batches, significantly improving API efficiency
+- **Advanced Taxon Caching**: Added batched taxon-details caching system with background thread processing to reduce API calls and improve speed
+- **Optimized Taxon Fetching**: Only fetch taxon details when needed for specific taxonomic ranks (subspecies, variety, form, section, subsection, subgenus), reducing unnecessary API calls
+- **Enhanced Scientific Name Formatting**: Improved italicization handling with proper formatting markers for RTF, PDF, and console output
+- **Better Common Name Handling**: Refined logic to avoid redundant common names that match parts of scientific names
+- **Improved Error Handling**: Enhanced error messages to stderr with better cross-platform color support
+- **Web Server Compatibility**: Modified colorama initialization to preserve ANSI colors when piping to web servers
+- **Code Quality**: Renamed variables for clarity and improved documentation
+
 ## 2.7
 September 30, 2025
 

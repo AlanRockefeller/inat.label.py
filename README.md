@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 2.7
+# iNaturalist Herbarium Label Generator version 2.8
 # By Alan Rockefeller
-# September 30, 2025
+# October 1, 2025
 
 
 ## Description
@@ -26,7 +26,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 
 - Fetches observation data using the iNaturalist / Mushroom Observer API.
 - Supports multiple iNat or MO observation IDs or URLs as input - or a file can be specified.
-- Uses parallel processing and a robust retry mechanism for reliable and fast label generation.
+- Uses parallel processing, intelligent rate limiting, and advanced caching for reliable and fast label generation.
 - Generates labels with key information including:
   - Scientific Name (in italics)
   - Common Name (if different from scientific name)
