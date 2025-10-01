@@ -1355,10 +1355,28 @@ def main():
                 rtf_content = create_rtf_content(labels)
                 with open(args.rtf, 'w') as rtf_file:
                     rtf_file.write(rtf_content)
-                print(f"RTF file created: {args.rtf}")
+                try:
+                    size_bytes = os.path.getsize(args.rtf)
+                    size_kb = (size_bytes + 1023) // 1024
+                except Exception:
+                    size_kb = None
+                basename = os.path.basename(args.rtf)
+                if size_kb is not None:
+                    print(f"RTF file created: {basename} ({size_kb} kb)")
+                else:
+                    print(f"RTF file created: {basename}")
             elif pdf_mode:
                 create_pdf_content(labels, args.pdf)
-                print(f"PDF file created: {args.pdf}")
+                try:
+                    size_bytes = os.path.getsize(args.pdf)
+                    size_kb = (size_bytes + 1023) // 1024
+                except Exception:
+                    size_kb = None
+                basename = os.path.basename(args.pdf)
+                if size_kb is not None:
+                    print(f"PDF file created: {basename} ({size_kb} kb)")
+                else:
+                    print(f"PDF file created: {basename}")
             else:
                 # Print labels to stdout
                 for label, _ in labels:
@@ -1381,7 +1399,10 @@ def main():
         # Print summary last so it appears at the very end
         elapsed = time.time() - start_time
         failed_count_text = (Fore.RED + str(len(failed)) + Style.RESET_ALL) if failed else str(len(failed))
-        print(f"Summary: requested {total_requested}, generated {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s")
+        generated_word = "generated"
+        if total_requested != len(labels):
+            generated_word = Fore.RED + "generated" + Style.RESET_ALL
+        print(f"Summary: requested {total_requested}, {generated_word} {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s")
         if failed:
             for msg in failed:
                 print_error(f" - {msg}")
