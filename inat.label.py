@@ -4,7 +4,7 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: September 23, 2025
+Date: September 30, 2025
 Version: 2.7
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
@@ -1250,6 +1250,18 @@ def is_within_california(latitude, longitude):
     return (CA_SOUTH <= latitude <= CA_NORTH) and (CA_WEST <= longitude <= CA_EAST)
 
 def main():
+    """
+    Command-line entry point that builds herbarium labels from iNaturalist or Mushroom Observer observation identifiers and writes them to stdout, an RTF file, or a PDF file.
+    
+    Parses command-line arguments to accept observation numbers or URLs (or a file of them), fetches observation data in parallel, and generates formatted labels. Supported behaviors include:
+    - Writing labels to an RTF file (--rtf) or a PDF file (--pdf), or printing human-readable labels to stdout when no output file is specified. When writing files, prints the created filename and its size in kilobytes when available.
+    - A discovery mode (--find-ca) that prints iNaturalist observation URLs for observations located within California instead of generating labels.
+    - Reading observation identifiers from a file via --file; accepts space-, comma-, or newline-separated entries.
+    - Concurrency tuning via --workers (or INAT_MAX_WORKERS env var) and global retry timeout adjustment via --max-wait-seconds (or INAT_MAX_WAIT_SECONDS env var).
+    - Minimal verbosity control (--quiet) and a debug flag (--debug).
+    
+    Updates module-global controls used by API calls (e.g., max wait time and quiet mode), enforces filename extensions for RTF/PDF outputs, and respects API rate/concurrency constraints while fetching data. Prints a final summary of requested, generated, and failed counts with elapsed time; prints per-failure messages to stderr. Exits with an error if no CLI arguments are supplied or if the provided input file cannot be read.
+    """
     parser = argparse.ArgumentParser(description="Create herbarium labels from iNaturalist observation numbers or URLs")
     parser.add_argument("observation_ids", nargs="*", help="Observation number(s) or URL(s)")
     parser.add_argument("--file", metavar="filename", help="File containing observation numbers or URLs (separated by spaces, commas, or newlines)")
