@@ -1214,13 +1214,15 @@ def create_pdf_content(labels, filename):
                 pre_notes_content.append(p)
 
         notes_paragraph = None
+        print(notes_value)
         if notes_value:
             notes_text = notes_value.replace('__BOLD_START__', '<b>').replace('__BOLD_END__', '</b>')
             notes_text = notes_text.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
+            print (notes_text)
             # Remove the line about the MO to iNat import, as this isn't important on a label since we already include the MO URL
-            notes_text = re.sub(r'\\line Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', notes_text)
+            notes_text = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', notes_text)
             # Remove line about the inat to MO import, as this isn't important on a label since we already include the MO URL (added by MO on import)
-            notes_text = re.sub(r'((\\line)\s+\2+\s+\2 Imported|Imported) by Mushroom Observer \d{4}-\d{2}-\d{2}', '', notes_text)
+            notes_text = re.sub(r'Imported by Mushroom Observer \d{4}-\d{2}-\d{2}', '', notes_text)
             notes_text = notes_text.replace('\n', '<br/>')
             notes_paragraph = Paragraph(f"<b>Notes:</b> {notes_text}", custom_normal_style)
 
