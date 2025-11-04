@@ -1307,7 +1307,7 @@ def create_rtf_content(labels):
 
     try:
         total = len(labels)
-        for idx, (label, iconic_taxon_name) in enumerate(labels):
+        for idx, (label, _iconic_taxon_name) in enumerate(labels):
             # start one label, force zero space-after here
             rtf_content += r"{\keep\pard\ql\keepn\sa0 "
 
