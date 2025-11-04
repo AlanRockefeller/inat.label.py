@@ -958,7 +958,7 @@ def format_scientific_name(observation_data):
     # Construct: italicize genus and epithet, not the rank label
     return f"__ITALIC_START__{genus}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
 
-def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False):
+def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False, show_common_names=False):
     """Build a label record from observation data.
 
     Returns (label_fields, iconic_taxon_name) where label_fields is a list of (field, value) tuples
@@ -1047,7 +1047,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
                     break
     
     # Only add common name if it's not redundant
-    if common_name and not is_redundant:
+    if show_common_names and common_name and not is_redundant:
         label.append(("Common Name", common_name))
 
     # Add these fields to all labels
@@ -1293,122 +1293,126 @@ def create_pdf_content(labels, filename):
 def create_rtf_content(labels):
     """Generate RTF content for the given labels and return it as a string.
 
-    Embeds a PNG QR code for each label's URL using RTF pict data; applies small layout tweaks for readability.
+    - keeps QR code right-justified
+    - avoids blank space at the top of the right column in LibreOffice
+    - avoids a trailing blank paragraph after the last label
     """
     rtf_header = RTF_HEADER
     rtf_footer = r"}"
 
     rtf_content = rtf_header
 
+    def split_hex_string(s, n):
+        return '\n'.join([s[i:i+n] for i in range(0, len(s), n)])
+
     try:
-        for label, iconic_taxon_name in labels:
-            rtf_content += r"{\keep\pard\ql\keepn\sa0 " # Start of label with keep, default alignment, keepn, and space after 0
-            # Get the URL for the QR code - could be either iNaturalist or Mushroom Observer
+        total = len(labels)
+        for idx, (label, iconic_taxon_name) in enumerate(labels):
+            # start one label, force zero space-after here
+            rtf_content += r"{\keep\pard\ql\keepn\sa0 "
+
+            # find url and notes length first
             qr_url = next(
                 (value for field, value in label
                  if field in ("iNaturalist URL", "Mushroom Observer URL")),
-                None)
-            
-            # Track notes length to determine spacing after QR code
-            notes_length = 0
+                None
+            )
             notes_value = next((value for field, value in label if field == "Notes"), "")
-            if notes_value:
-                notes_length = len(str(notes_value))
+            notes_length = len(str(notes_value)) if notes_value else 0
 
+            # body fields
             for field, value in label:
                 if field == "iNaturalist URL":
                     rtf_content += str(value) + r"\line "
                 elif field == "Mushroom Observer URL":
-                    # Show raw URL without heading (requested behavior)
                     rtf_content += str(value) + r"\line "
                 elif field.startswith("iNat") or field.startswith("iNaturalist") or field.startswith("Mushroom Observer"):
-                    # Special formatting for observation headers (except MO URL which is handled above)
                     if field.startswith("Mushroom Observer"):
                         first_chars, rest = field[:2], field[2:]
-                        rtf_content += r"{\ul\b " + first_chars + r"}{\scaps\ul\b " + rest + r":} " + str(value) + r"\line "
+                        rtf_content += (
+                            r"{\ul\b " + first_chars + r"}{\scaps\ul\b " + rest + r":} "
+                            + str(value) + r"\line "
+                        )
                     else:
                         first_char, rest = field[0], field[1:]
-                        rtf_content += r"{\ul\b " + first_char + r"}{\scaps\ul\b " + rest + r":} " + str(value) + r"\line "
+                        rtf_content += (
+                            r"{\ul\b " + first_char + r"}{\scaps\ul\b " + rest + r":} "
+                            + str(value) + r"\line "
+                        )
                 elif field == "Scientific Name":
                     value_rtf = str(value)
                     value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
                     rtf_content += r"{\scaps\ul\b " + field + r":} " + value_rtf + r"\line "
                 elif field == "GPS Coordinates":
-                    # Replace the ± symbol with the RTF escape code
                     value_rtf = value.replace("±", r"\'b1")
                     rtf_content += r"{\scaps\ul\b " + field + r":} " + value_rtf + r"\line "
                 elif field == "Notes":
                     if value:
-                        # Remove blank lines (lines with only whitespace) from notes
+                        # strip blank lines out of Notes
                         lines = str(value).split('\n')
                         non_blank_lines = [line for line in lines if line.strip()]
                         value = '\n'.join(non_blank_lines)
-                        
+
                         rtf_content += r"{\scaps\ul\b " + field + r":} "
                         value = escape_rtf(value)
                         value_rtf = str(value)
-                        # Replace newlines with RTF line breaks
                         value_rtf = value_rtf.replace('\n', r'\line ')
-                        # Handle bold and italics text properly
                         value_rtf = value_rtf.replace('__BOLD_START__', r'{\b ').replace('__BOLD_END__', r'}')
                         value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
-                        # Remove the line about the MO to iNat import, as this isn't important on a label since we already include the MO URL
-                        value_rtf = re.sub(r'\\line Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value_rtf)
-                        # Remove the line about the inat to MO import, as this isn't important on a label since we already include the MO URL (added by MO on import)
-                        value_rtf = re.sub(r'((\\line)\s+\2+\s+\2 Imported|Imported) by Mushroom Observer \d{4}-\d{2}-\d{2}', '', value_rtf)
-                        rtf_content += value_rtf  # No trailing \line after notes
+                        # MO import cleanup
+                        value_rtf = re.sub(
+                            r'\\line Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.',
+                            '',
+                            value_rtf
+                        )
+                        value_rtf = re.sub(
+                            r'((\\line)\s+\2+\s+\2 Imported|Imported) by Mushroom Observer \d{4}-\d{2}-\d{2}',
+                            '',
+                            value_rtf
+                        )
+                        rtf_content += value_rtf
                 else:
                     rtf_content += r"{\scaps\ul\b " + field + r":} " + str(value) + r"\line "
 
-            def split_hex_string(s, n):
-                """Split a long hex string into lines with at most n characters per line."""
-                # Split hex string into lines of n characters
-                return '\n'.join([s[i:i+n] for i in range(0, len(s), n)])
-
-            # Add the QR code to the label
+            # QR code (right aligned)
             qr_hex, qr_size = generate_qr_code(qr_url) if qr_url else (None, None)
-
             if qr_hex:
-                # If there are no notes, remove a trailing \line to avoid an extra blank line before the QR code
+                # if we had no notes and we ended with "\line ", drop it so QR sits right under text
                 if notes_length == 0 and rtf_content.endswith(r"\line "):
                     rtf_content = rtf_content[:-6]
-                rtf_content += r"\par\pard\qr\ri360\sb57\sa0 " # Close paragraph, start new right-aligned one with minimal spacing (~1mm)
-                # Convert pixel dimensions to twips (1 pixel = 15 twips)
+
+                rtf_content += r"\par\pard\qr\ri360\sb57\sa0 "
                 qr_width_twips = qr_size[0] * 15
                 qr_height_twips = qr_size[1] * 15
-
-                # Embed the base64-encoded QR code image in RTF
-                rtf_content += r'{\pict\pngblip\picw'
-                rtf_content += str(qr_width_twips)
-                rtf_content += r'\pich'
-                rtf_content += str(qr_height_twips)
-                rtf_content += r'\picwgoal'
-                rtf_content += str(qr_width_twips)
-                rtf_content += r'\pichgoal'
-                rtf_content += str(qr_height_twips)
-                rtf_content += r' '
-
-                # Split the base64 string into chunks of 76 characters (standard for RTF)
-                hex_chunks = split_hex_string(qr_hex, 76)
-                rtf_content += hex_chunks
+                rtf_content += (
+                    r'{\pict\pngblip\picw' + str(qr_width_twips) +
+                    r'\pich' + str(qr_height_twips) +
+                    r'\picwgoal' + str(qr_width_twips) +
+                    r'\pichgoal' + str(qr_height_twips) + r' '
+                )
+                rtf_content += split_hex_string(qr_hex, 76)
                 rtf_content += r'}'
-                # Add extra carriage return only if notes are 200 characters or less
-                if notes_length <= 200:
-                    rtf_content += r"\par\par" # End QR code paragraph with extra carriage return
-                else:
-                    rtf_content += r"\par" # End QR code paragraph with single carriage return for long notes
+                # always just one paragraph after QR so we don't create tall gaps
+                rtf_content += r"\par"
             else:
-                print("Failed to generate QR code.")
+                # no QR – just end paragraph cleanly
+                rtf_content += r"\par"
 
-            rtf_content += r"}" # Close the label group started at line 973
-            rtf_content += r"\par " # Additional vertical space between labels
+            # close label group
+            rtf_content += r"}"
+
+            # add spacing ONLY between labels, and make it a zero-space paragraph so Writer
+            # doesn’t push a tall blank line to the top of the next column
+            if idx < total - 1:
+                rtf_content += r"\par\par\pard\sa0\sl0\slmult1 "
+            # if this was the last label, do NOT add another \par — prevents blank after last
 
         rtf_content += rtf_footer
     except Exception as e:
-        print(f"Error in create_rtf_content: {e}")
-        return rtf_header + r"Error generating content" + rtf_footer
+        return rtf_header + "Error generating content: " + escape_rtf(str(e)) + rtf_footer
 
     return rtf_content
+
 
 # Check to see if the observation is in California
 def is_within_california(latitude, longitude):
@@ -1443,6 +1447,7 @@ def main():
     parser.add_argument("--find-ca", action="store_true", help="Find observations within California")
     parser.add_argument("--workers", type=int, default=None, help="Max parallel API requests (default 5, or INAT_MAX_WORKERS env)")
     parser.add_argument("--max-wait-seconds", type=float, default=None, help="Max total wait per API call when retrying (default 30s, or INAT_MAX_WAIT_SECONDS env)")
+    parser.add_argument("--common-names", action="store_true", help="Include common names in labels (off by default)")
     parser.add_argument("--quiet", action="store_true", help="Suppress detailed retry messages (e.g., 429 lines); still shows patience notes and summary")
     parser.add_argument('--debug', action='store_true', help='Print debug output')
 
@@ -1512,7 +1517,7 @@ def main():
                 return ('skip', None)
             else:
                 label, updated_iconic_taxon = create_inaturalist_label(
-                    observation_data, iconic_taxon_name, rtf_mode=rtf_mode
+                    observation_data, iconic_taxon_name, rtf_mode=rtf_mode, show_common_names=args.common_names,
                 )
                 if label is not None:
                     # Print as soon as the label is created
