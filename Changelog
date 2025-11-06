@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.1 
+November 6, 2025
+- Add the --no-qr command line option to optionally omit QR codes.   Suggested by James Mickley, who commented that QR codes can confuse herbarium digitization systems like the one used at the Oregon State herbarium.
+
+## 3.0
+November 3, 2025
+- Don't print common names unless --common-names argument is given
+- Make sure there aren't any extra blank spaces in RTF labels
 
 ## 2.9
 October 24, 2025

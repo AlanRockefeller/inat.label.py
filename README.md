@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.0
+# iNaturalist Herbarium Label Generator version 3.1
 # By Alan Rockefeller
-# November 3, 2025
+# November 6, 2025
 
 
 ## Description
@@ -54,7 +54,8 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
 - Adds a QR code to the PDF and RTF labels which points to the iNaturalist URL
-- When generating RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white.   This will help you quickly notice if an observation number is mistyped.
+- When generating PDF or RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white.   This will help you quickly notice if an observation number is mistyped.
+- You can use the --no-qr command line option to omit QR codes.
 
 ## Installation
 
