@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: October 24, 2025
-Version: 2.9
+Date: November 6, 2025
+Version: 3.1
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -1154,7 +1154,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
 
     return label, iconic_taxon_name
 
-def create_pdf_content(labels, filename):
+def create_pdf_content(labels, filename, no_qr=False):
     """Render labels into a two-column PDF at the given filename.
 
     Expects labels as an iterable of (label_fields, iconic_taxon_name). Adds a QR code when a URL is present.
@@ -1225,7 +1225,7 @@ def create_pdf_content(labels, filename):
             notes_paragraph = Paragraph(f"<b>Notes:</b> {notes_text}", custom_normal_style)
 
         qr_image = None
-        if qr_url:
+        if qr_url and not no_qr:
             qr_hex, _ = generate_qr_code(qr_url)
             if qr_hex:
                 qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
@@ -1290,7 +1290,7 @@ def create_pdf_content(labels, filename):
 
     doc.build(story)
 
-def create_rtf_content(labels):
+def create_rtf_content(labels, no_qr=False):
     """Generate RTF content for the given labels and return it as a string.
 
     - keeps QR code right-justified
@@ -1375,25 +1375,29 @@ def create_rtf_content(labels):
                     rtf_content += r"{\scaps\ul\b " + field + r":} " + str(value) + r"\line "
 
             # QR code (right aligned)
-            qr_hex, qr_size = generate_qr_code(qr_url) if qr_url else (None, None)
-            if qr_hex:
-                # if we had no notes and we ended with "\line ", drop it so QR sits right under text
-                if notes_length == 0 and rtf_content.endswith(r"\line "):
-                    rtf_content = rtf_content[:-6]
+            if not no_qr:
+                qr_hex, qr_size = generate_qr_code(qr_url) if qr_url else (None, None)
+                if qr_hex:
+                    # if we had no notes and we ended with "\line ", drop it so QR sits right under text
+                    if notes_length == 0 and rtf_content.endswith(r"\line "):
+                        rtf_content = rtf_content[:-6]
 
-                rtf_content += r"\par\pard\qr\ri360\sb57\sa0 "
-                qr_width_twips = qr_size[0] * 15
-                qr_height_twips = qr_size[1] * 15
-                rtf_content += (
-                    r'{\pict\pngblip\picw' + str(qr_width_twips) +
-                    r'\pich' + str(qr_height_twips) +
-                    r'\picwgoal' + str(qr_width_twips) +
-                    r'\pichgoal' + str(qr_height_twips) + r' '
-                )
-                rtf_content += split_hex_string(qr_hex, 76)
-                rtf_content += r'}'
-                # always just one paragraph after QR so we don't create tall gaps
-                rtf_content += r"\par"
+                    rtf_content += r"\par\pard\qr\ri360\sb57\sa0 "
+                    qr_width_twips = qr_size[0] * 15
+                    qr_height_twips = qr_size[1] * 15
+                    rtf_content += (
+                        r'{\pict\pngblip\picw' + str(qr_width_twips) +
+                        r'\pich' + str(qr_height_twips) +
+                        r'\picwgoal' + str(qr_width_twips) +
+                        r'\pichgoal' + str(qr_height_twips) + r' '
+                    )
+                    rtf_content += split_hex_string(qr_hex, 76)
+                    rtf_content += r'}'
+                    # always just one paragraph after QR so we don't create tall gaps
+                    rtf_content += r"\par"
+                else:
+                    # no QR – just end paragraph cleanly
+                    rtf_content += r"\par"
             else:
                 # no QR – just end paragraph cleanly
                 rtf_content += r"\par"
@@ -1450,6 +1454,7 @@ def main():
     parser.add_argument("--common-names", action="store_true", help="Include common names in labels (off by default)")
     parser.add_argument("--quiet", action="store_true", help="Suppress detailed retry messages (e.g., 429 lines); still shows patience notes and summary")
     parser.add_argument('--debug', action='store_true', help='Print debug output')
+    parser.add_argument("--no-qr", action="store_true", help="Omit QR code from PDF and RTF labels")
 
     args = parser.parse_args()
 
@@ -1551,7 +1556,7 @@ def main():
     if not args.find_ca:
         if labels:
             if rtf_mode:
-                rtf_content = create_rtf_content(labels)
+                rtf_content = create_rtf_content(labels, no_qr=args.no_qr)
                 with open(args.rtf, 'w') as rtf_file:
                     rtf_file.write(rtf_content)
                 try:
@@ -1565,7 +1570,7 @@ def main():
                 else:
                     print(f"RTF file created: {basename}")
             elif pdf_mode:
-                create_pdf_content(labels, args.pdf)
+                create_pdf_content(labels, args.pdf, no_qr=args.no_qr)
                 try:
                     size_bytes = os.path.getsize(args.pdf)
                     size_kb = (size_bytes + 1023) // 1024
