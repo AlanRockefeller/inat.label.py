@@ -1064,9 +1064,6 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
                     break
     
     # Only add common name if it's not redundant
-    # if show_common_names and common_name and not is_redundant:
-    #     label.append(("Common Name", common_name))
-    # Temporarily bypass redundancy check for debugging
     if show_common_names and common_name:
         label.append(("Common Name", common_name))
 
@@ -1780,6 +1777,9 @@ def main():
     if not args.find_ca:
         if labels:
             if args.minilabel:
+                if not (rtf_mode or pdf_mode):
+                    print_error("Error: --minilabel requires either --rtf or --pdf output")
+                    sys.exit(1)
                 if rtf_mode:
                     rtf_content = create_minilabel_rtf_content(labels)
                     with open(args.rtf, 'w') as rtf_file:
