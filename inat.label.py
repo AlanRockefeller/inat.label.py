@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: November 6, 2025
-Version: 3.1
+Date: November 9, 2025
+Version: 3.3
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -18,7 +18,7 @@ Features:
 - Supports Mushroom Observer URLs in various formats
 - Can output labels to the console or to an RTF file
 - Includes various data fields such as scientific name, common name, location,
-  GPS coordinates, observation date, observer, and more
+  coordinates, observation date, observer, and more
 - Handles special fields like DNA Barcode ITS (and LSU, TEF1, RPB1, RPB2), GenBank Accession Number,
   Provisional Species Name, Mobile or Traditional Photography?, Microscopy Performed, Herbarium Catalog Number,
   Herbarium Name, Mycoportal ID, Voucher number(s)
@@ -96,6 +96,8 @@ from reportlab.lib.colors import black, blue, green, white
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+
+
 
 PDF_BASE_FONT = os.environ.get('PDF_BASE_FONT', 'Times-Roman')
 
@@ -217,6 +219,25 @@ def register_fonts():
 
 register_fonts()
 
+MINILABEL_RTF_HEADER = r"""{\rtf1\ansi\deff3\adeflang1025
+{\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\froman\fprq2\fcharset0 Arial;}{\f5\froman\fprq2\fcharset0 Tahoma;}{\f6\froman\fprq2\fcharset0 Times New Roman;}{\f7\froman\fprq2\fcharset0 Courier New;}{\f8\fnil\fprq2\fcharset0 Times New Roman;}{\f9\fnil\fprq2\fcharset0 Lohit Hindi;}{\f10\fnil\fprq2\fcharset0 DejaVu Sans;}}
+{\colortbl;\red0\green0\blue0;\red0\green0\blue255;\red0\green255\blue255;\red0\green255\blue0;\red255\green0\blue255;\red255\green0\blue0;\red255\green255\blue0;\red255\green255\blue255;\red0\green0\blue128;\red0\green128\blue128;\red0\green128\blue0;\red128\green0\blue128;\red128\green0\blue0;\red128\green128\blue0;\red128\green128\blue128;\red192\green192\blue192;}
+{\stylesheet{\s0\snext0\ql\keep\nowidCtl\sb0\sa720\ltrpar\hyphpar0\aspalpha\cf0\f6\fs24\lang1033\kerning1 Normal;}
+{\*\cs15\snext15 Default Paragraph Font;}
+{\s16\sbasedon0\snext17\ql\keep\nowidctl\sb240\sa120\keepn\ltrpar\cf0\f4\fs28\lang1033\kerning1 Heading;}
+{\s17\sbasedon0\snext17\ql\keep\nowidctl\sb0\sa120\ltrpar\cf0\f6\fs24\lang1033\kerning1 Text Body;}
+{\s18\sbasedon17\snext18\ql\keep\nowidctl\sb0\sa120\ltrpar\cf0\f7\fs24\lang1033\kerning1 List;}
+{\s19\sbasedon0\snext19\ai\ql\keep\nowidctl\sb120\sa120\ltrpar\cf0\f6\fs24\lang1033\i\kerning1 Caption;}
+{\s20\sbasedon0\snext20\ql\keep\nowidctl\sb0\sa720\ltrpar\cf0\f7\fs24\lang1033\kerning1 Index;}
+{\s21\sbasedon0\snext21\ai\ql\keep\nowidctl\sb120\sa120\ltrpar\cf0\f7\fs24\lang1033\i\kerning1 caption;}
+{\s22\sbasedon0\snext22\ql\keep\nowidctl\sb0\sa720\ltrpar\cf0\f5\fs16\lang1033\kerning1 Balloon Text;}
+{\s23\sbasedon0\snext23\ql\keep\nowidctl\sb0\sa720\ltrpar\cf0\f6\fs24\lang1033\kerning1 Table Contents;}
+{\s24\sbasedon23\snext24\ab\qc\keep\nowidctl\sb0\sa720\ltrpar\cf0\f6\fs24\lang1033\b\kerning1 Table Heading;}
+}
+\formshade\paperh15840\paperw12240\margl360\margr360\margt360\margb360\sectd\sbknone\sectunlocked1\pgndec\pgwsxn12240\pghsxn15840\marglsxn360\margrsxn360\margtsxn360\margbsxn360\ftnbj\ftnstart1\ftnrstcont\ftnnar\aenddoc\aftnrstcont\aftnstart1\aftnnrlc
+\pard\plain \s0\ql\tx113
+"""
+
 RTF_HEADER = r"""{\rtf1\ansi\deff3\adeflang1025
 {\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\froman\fprq2\fcharset0 Arial;}{\f5\froman\fprq2\fcharset0 Tahoma;}{\f6\froman\fprq2\fcharset0 Times New Roman;}{\f7\froman\fprq2\fcharset0 Courier New;}{\f8\fnil\fprq2\fcharset0 Times New Roman;}{\f9\fnil\fprq2\fcharset0 Lohit Hindi;}{\f10\fnil\fprq2\fcharset0 DejaVu Sans;}}
 {\colortbl;\red0\green0\blue0;\red0\green0\blue255;\red0\green255\blue255;\red0\green255\blue0;\red255\green0\blue255;\red255\green0\blue0;\red255\green255\blue0;\red255\green255\blue255;\red0\green0\blue128;\red0\green128\blue128;\red0\green128\blue0;\red128\green0\blue128;\red128\green0\blue0;\red128\green128\blue0;\red128\green128\blue128;\red192\green192\blue192;}
@@ -238,25 +259,21 @@ RTF_HEADER = r"""{\rtf1\ansi\deff3\adeflang1025
 
 
 
-def generate_qr_code(url):
+def generate_qr_code(url, minilabel_mode=False):
     """Generate a small PNG QR code for the given URL and return (hex_string, size_tuple)."""
     try:
-        qr = qrcode.QRCode(version=1, box_size=1, border=1)
+        if minilabel_mode:
+            qr = qrcode.QRCode(version=1, box_size=1, border=1)
+        else:
+            qr = qrcode.QRCode(version=1, box_size=2, border=1)
         qr.add_data(url)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
-
-        # Resize the QR code here if desired
-        scale_factor = 2 # Resize to 2x the original size
-        img = img.resize((int(img.size[0] * scale_factor), int(img.size[1] * scale_factor)), Image.LANCZOS)
 
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         img_bytes = buffered.getvalue()
         img_hex = binascii.hexlify(img_bytes).decode('utf-8')
-
-        # Save the QR code to a PNG file for debugging
-        # img.save(filename)
         return img_hex, img.size  # Return the hex string and the size of the image
     except Exception as e:
         print(f"Error generating QR code: {e}")
@@ -1047,7 +1064,10 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
                     break
     
     # Only add common name if it's not redundant
-    if show_common_names and common_name and not is_redundant:
+    # if show_common_names and common_name and not is_redundant:
+    #     label.append(("Common Name", common_name))
+    # Temporarily bypass redundancy check for debugging
+    if show_common_names and common_name:
         label.append(("Common Name", common_name))
 
     # Add these fields to all labels
@@ -1058,7 +1078,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
             ("Mushroom Observer Number", mo_number),
             ("Mushroom Observer URL", url),
             ("Location", location),
-            ("GPS Coordinates", gps_coords),
+            ("Coordinates", gps_coords),
             ("Date Observed", date_observed_str),
             ("Observer", observer)
         ])
@@ -1068,7 +1088,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
             ("iNaturalist Observation Number", str(obs_number)),
             ("iNaturalist URL", url),
             ("Location", location),
-            ("GPS Coordinates", gps_coords),
+            ("Coordinates", gps_coords),
             ("Date Observed", date_observed_str),
             ("Observer", observer)
         ])
@@ -1123,6 +1143,10 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     herbarium_catalog_number = get_field_value(observation_data, 'Herbarium Catalog Number')
     if herbarium_catalog_number:
         label.append(("Herbarium Catalog Number", herbarium_catalog_number))
+
+    fungarium_catalog_number = get_field_value(observation_data, 'Fungarium Catalog Number')
+    if fungarium_catalog_number:
+        label.append(("Fungarium Catalog Number", fungarium_catalog_number))
 
     herbarium_secondary_catalog_number = get_field_value(observation_data, 'Herbarium Secondary Catalog Number')
     if herbarium_secondary_catalog_number:
@@ -1226,7 +1250,7 @@ def create_pdf_content(labels, filename, no_qr=False):
 
         qr_image = None
         if qr_url and not no_qr:
-            qr_hex, _ = generate_qr_code(qr_url)
+            qr_hex, _ = generate_qr_code(qr_url, minilabel_mode=False)
             if qr_hex:
                 qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
                 qr_image = ReportLabImage(qr_img_data, width=0.75*inch, height=0.75*inch)
@@ -1290,6 +1314,120 @@ def create_pdf_content(labels, filename, no_qr=False):
 
     doc.build(story)
 
+
+def create_minilabel_pdf_content(labels, filename):
+    """Render minilabels into an 8-column PDF, with QR on left and 'iNat' + number top-aligned on the right."""
+    from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Image as ReportLabImage, Table, TableStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    import binascii
+    from io import BytesIO
+
+    # page + margins
+    doc = BaseDocTemplate(
+        filename,
+        pagesize=letter,
+        leftMargin=0.5 * inch,
+        rightMargin=0.5 * inch,
+        topMargin=0.5 * inch,
+        bottomMargin=0.5 * inch,
+    )
+
+    num_columns = 8
+    usable_width = doc.width   # inside margins
+    col_width = usable_width / num_columns
+
+    # make 8 skinny frames
+    frames = []
+    for i in range(num_columns):
+        x = doc.leftMargin + i * col_width
+        frames.append(
+            Frame(
+                x,
+                doc.bottomMargin,
+                col_width,
+                doc.height,
+                id=f"mini-col-{i}",
+                leftPadding=0,
+                rightPadding=0,
+                topPadding=0,
+                bottomPadding=0,
+            )
+        )
+
+    doc.addPageTemplates([PageTemplate(id="MiniLabels", frames=frames)])
+
+    styles = getSampleStyleSheet()
+    text_style = ParagraphStyle(
+        "MiniLabelText",
+        parent=styles["Normal"],
+        fontName=PDF_BASE_FONT,
+        fontSize=7.5,
+        leading=8.5,
+    )
+
+    story = []
+
+    for label, _ in labels:
+        # get the two things we actually need
+        obs_number = next((v for f, v in label if "Observation Number" in f), None)
+        qr_url = next((v for f, v in label if "URL" in f), None)
+
+        if not obs_number or not qr_url:
+            story.append(Spacer(1, 0.04 * inch))
+            continue
+
+        # make small QR
+        qr_hex, _ = generate_qr_code(qr_url, minilabel_mode=True)
+        if not qr_hex:
+            story.append(Spacer(1, 0.04 * inch))
+            continue
+
+        qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
+        qr_size = 0.33 * inch  # small but scannable
+        qr_image = ReportLabImage(qr_img_data, width=qr_size, height=qr_size)
+
+        # right-hand stacked text
+        p_title = Paragraph("iNaturalist", text_style)
+        p_id = Paragraph(str(obs_number), text_style)
+
+        text_width = col_width - qr_size
+        if text_width < 0.28 * inch:
+            text_width = col_width * 0.55
+
+        # text table: 2 rows, top-aligned
+        text_table = Table(
+            [[p_title],
+             [p_id]],
+            colWidths=[text_width],
+        )
+        text_table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+
+        # outer table: [ QR | text_table ]
+        outer = Table(
+            [[qr_image, text_table]],
+            colWidths=[qr_size, text_width],
+        )
+        outer.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+
+        story.append(outer)
+        story.append(Spacer(1, 0.04 * inch))
+
+    doc.build(story)
+
+
 def create_rtf_content(labels, no_qr=False):
     """Generate RTF content for the given labels and return it as a string.
 
@@ -1343,7 +1481,7 @@ def create_rtf_content(labels, no_qr=False):
                     value_rtf = str(value)
                     value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
                     rtf_content += r"{\scaps\ul\b " + field + r":} " + value_rtf + r"\line "
-                elif field == "GPS Coordinates":
+                elif field == "Coordinates":
                     value_rtf = value.replace("±", r"\'b1")
                     rtf_content += r"{\scaps\ul\b " + field + r":} " + value_rtf + r"\line "
                 elif field == "Notes":
@@ -1376,7 +1514,7 @@ def create_rtf_content(labels, no_qr=False):
 
             # QR code (right aligned)
             if not no_qr:
-                qr_hex, qr_size = generate_qr_code(qr_url) if qr_url else (None, None)
+                qr_hex, qr_size = generate_qr_code(qr_url, minilabel_mode=False) if qr_url else (None, None)
                 if qr_hex:
                     # if we had no notes and we ended with "\line ", drop it so QR sits right under text
                     if notes_length == 0 and rtf_content.endswith(r"\line "):
@@ -1396,7 +1534,7 @@ def create_rtf_content(labels, no_qr=False):
                     # always just one paragraph after QR so we don't create tall gaps
                     rtf_content += r"\par"
                 else:
-                    # no QR – just end paragraph cleanly
+                    # no QR - just end paragraph cleanly
                     rtf_content += r"\par"
             else:
                 # no QR – just end paragraph cleanly
@@ -1415,6 +1553,91 @@ def create_rtf_content(labels, no_qr=False):
     except Exception as e:
         return rtf_header + "Error generating content: " + escape_rtf(str(e)) + rtf_footer
 
+    return rtf_content
+
+
+
+def create_minilabel_rtf_content(labels):
+    """Generate RTF content for minilabels and return it as a string."""
+    rtf_header = MINILABEL_RTF_HEADER
+    rtf_footer = r"}"
+    rtf_content = rtf_header
+
+    num_columns = 8
+    page_width_twips = 12240
+    margins = 720  # 0.5 inch
+    usable_width = page_width_twips - (2 * margins)
+    col_width = usable_width // num_columns
+
+    # Build the table rows
+    table_rows = []
+    for i in range(0, len(labels), num_columns):
+        row_labels = labels[i:i + num_columns]
+        row = []
+        for label, _ in row_labels:
+            obs_number = next((value for field, value in label if 'Observation Number' in field), None)
+            qr_url = next((value for field, value in label if 'URL' in field), None)
+
+            if not obs_number or not qr_url:
+                row.append("")
+                continue
+
+            qr_hex, qr_size = generate_qr_code(qr_url, minilabel_mode=True)
+            if not qr_hex:
+                row.append("")
+                continue
+
+            qr_pixel_width = qr_size[0]
+            qr_pixel_height = qr_size[1]
+            desired_twips = 500  # QR display size (500 twips ≈ 0.35 inch)
+
+            # Build cell content
+            cell_content = "{"
+            cell_content += (
+                r'{\pict\pngblip'
+                r'\picw' + str(qr_pixel_width) +
+                r'\pich' + str(qr_pixel_height) +
+                r'\picwgoal' + str(desired_twips) +
+                r'\pichgoal' + str(desired_twips) +
+                r' ' + qr_hex + r'}'
+            )
+            # Observation number, slightly spaced but no redundant paragraph breaks
+            cell_content += r'\pard\fs16 ' + str(obs_number)
+            cell_content += "}"
+            row.append(cell_content)
+
+        # Pad the row to full width
+        while len(row) < num_columns:
+            row.append("")
+        table_rows.append(row)
+
+    # Emit the RTF table
+    rtf_content += r'\pard\par'
+    for row in table_rows:
+        # Define the row, no gap, rely on cell padding for vertical spacing
+        rtf_content += r'\trowd\trgaph0'
+        for i in range(num_columns):
+            # No borders, add small vertical padding
+            rtf_content += (
+                r'\clbrdrt\brdrnil'
+                r'\clbrdrl\brdrnil'
+                r'\clbrdrb\brdrnil'
+                r'\clbrdrr\brdrnil'
+                r'\clpadl0'
+                r'\clpadt80'   # top padding: 80 twips (~0.055")
+                r'\clpadr0'
+                r'\clpadb80'   # bottom padding: 80 twips
+                r'\clpadfl3\clpadft3\clpadfr3\clpadfb3'
+                f'\\cellx{(i + 1) * col_width}'
+            )
+
+        # Add the cell content
+        rtf_content += r'\pard\intbl'
+        for cell in row:
+            rtf_content += cell + r'\cell'
+        rtf_content += r'\row'
+
+    rtf_content += rtf_footer
     return rtf_content
 
 
@@ -1455,6 +1678,7 @@ def main():
     parser.add_argument("--quiet", action="store_true", help="Suppress detailed retry messages (e.g., 429 lines); still shows patience notes and summary")
     parser.add_argument('--debug', action='store_true', help='Print debug output')
     parser.add_argument("--no-qr", action="store_true", help="Omit QR code from PDF and RTF labels")
+    parser.add_argument("--minilabel", action="store_true", help="Generate minilabels with only observation number and QR code")
 
     args = parser.parse_args()
 
@@ -1555,7 +1779,16 @@ def main():
 
     if not args.find_ca:
         if labels:
-            if rtf_mode:
+            if args.minilabel:
+                if rtf_mode:
+                    rtf_content = create_minilabel_rtf_content(labels)
+                    with open(args.rtf, 'w') as rtf_file:
+                        rtf_file.write(rtf_content)
+                    print(f"RTF file created: {os.path.basename(args.rtf)}")
+                elif pdf_mode:
+                    create_minilabel_pdf_content(labels, args.pdf)
+                    print(f"PDF file created: {os.path.basename(args.pdf)}")
+            elif rtf_mode:
                 rtf_content = create_rtf_content(labels, no_qr=args.no_qr)
                 with open(args.rtf, 'w') as rtf_file:
                     rtf_file.write(rtf_content)

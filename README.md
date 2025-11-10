@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.1
+# iNaturalist Herbarium Label Generator version 3.3
 # By Alan Rockefeller
-# November 6, 2025
+# November 9, 2025
 
 
 ## Description
@@ -33,7 +33,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - iNaturalist / Mushroom Observer Observation Number
   - iNaturalist / Mushroom Observer URL 
   - Location (in text format)
-  - GPS Coordinates (with accuracy - accuracy is set to 20km if observation geoprivacy is obscured)
+  - Coordinates (with accuracy - accuracy is set to 20km if observation geoprivacy is obscured)
   - Date Observed
   - Observer Name and iNaturalist login
   - DNA Barcode ITS, LSU, RPB1, RPB2 and TEF1 (if present)
@@ -43,7 +43,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - Mushroom Observer URL (if present, formatted in best URL form so it's accessible to users who aren't logged in)
   - Microscopy Performed (if present)
   - Traditional or Mobile Photography (if present)
-  - Herbarium Catalog Number (if present)
+  - Herbarium / Fungarium Catalog Number (if present)
   - Herbarium Name (if present)
   - Mycoportal ID (if present)
   - Voucher number(s) (if present)
@@ -55,7 +55,8 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
 - Adds a QR code to the PDF and RTF labels which points to the iNaturalist URL
 - When generating PDF or RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white.   This will help you quickly notice if an observation number is mistyped.
-- You can use the --no-qr command line option to omit QR codes.
+- You can use the --no-qr command line argument to omit QR codes.
+- You can use the --minilabel command line argument to make tiny labels that have only the observation # and QR code.
 
 ## Installation
 
