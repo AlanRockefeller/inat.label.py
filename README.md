@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.3
+# iNaturalist Herbarium Label Generator version 3.5
 # By Alan Rockefeller
-# November 9, 2025
+# November 14, 2025
 
 
 ## Description
@@ -47,6 +47,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - Herbarium Name (if present)
   - Mycoportal ID (if present)
   - Voucher number(s) (if present)
+  - Habitat, Microhabitat, Collection Number and Associated species (if present)
   - Observation Notes
 - By default outputs labels to console for quick viewing / testing
 - Optionally creates RTF files for high-quality printing + QR code (RTF or PDF output is strongly recommended)
