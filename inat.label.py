@@ -894,6 +894,59 @@ def parse_date(date_string):
     except (ValueError, TypeError):
         pass
 
+def parse_date(date_string):
+    """Parse a variety of date strings and return a datetime.date or None.
+
+    Only the calendar date is kept; any time-of-day or timezone (e.g. PST)
+    is ignored before parsing.
+    """
+    if not date_string:
+        return None
+
+    s = str(date_string).strip()
+
+    # Try to extract just the date portion in common patterns, dropping time/TZ.
+    # Examples we handle explicitly:
+    #   2025-11-14 03:25 PM PST   -> 2025-11-14
+    #   2025/11/14 03:25 PM PST   -> 2025/11/14
+    #   November 14, 2025 3:25 PM PST -> November 14, 2025
+    iso_match = re.search(r'\d{4}-\d{2}-\d{2}', s)
+    slash_match = re.search(r'\d{4}/\d{1,2}/\d{1,2}', s)
+    long_match = re.search(r'[A-Za-z]+ \d{1,2}, \d{4}', s)
+
+    if iso_match:
+        s_clean = iso_match.group(0)
+    elif slash_match:
+        s_clean = slash_match.group(0)
+    elif long_match:
+        s_clean = long_match.group(0)
+    else:
+        # Fall back to the original string if we can't detect a date substring
+        s_clean = s
+
+    date_formats = [
+        '%Y-%m-%d',
+        '%Y/%m/%d',
+        '%B %d, %Y',
+    ]
+
+    # First, try our explicit formats on the cleaned date-only string
+    for fmt in date_formats:
+        try:
+            parsed_date = datetime.datetime.strptime(s_clean, fmt)
+            return parsed_date.date()
+        except ValueError:
+            continue
+
+    # If that fails, let dateutil try, but on the cleaned string that no longer
+    # contains time-of-day or timezone tokens like "PST".
+    try:
+        parsed_date = dateutil_parser.parse(s_clean, fuzzy=True)
+        if parsed_date:
+            return parsed_date.date()
+    except (ValueError, TypeError):
+        return None
+
 def format_scientific_name(observation_data):
     """Format the scientific name based on taxonomic rank.
 
@@ -1154,7 +1207,8 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
 
     species_name_override = get_field_value(observation_data, 'Species Name Override')
     if species_name_override:
-        label.append(("Species Name Override", species_name_override))
+        # I guess we don't really need the species name override field on the label - just go ahead and make it actually override the name
+        # label.append(("Species Name Override", species_name_override))
 
         # If there is a scientific name override, actually override the scientific name
         label[0] = ("Scientific Name", species_name_override)
@@ -1842,7 +1896,7 @@ def main():
     _concurrency_target = max_workers
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(process_one, input_value) for input_value in observation_ids]
-        for fut in as_completed(futures):
+        for fut in futures:
             status, payload = fut.result()
             if status == 'ok' and payload:
                 labels.append(payload)

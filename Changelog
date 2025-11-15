@@ -3,7 +3,9 @@
 # 3.5
 November 14, 2025
 
-Habitat, Microhabitat, Collection Number and Associated species observation fields now appear on labels.
+- Labels are now printed in the order that they were submitted.
+- Date parsing was updated so it doesn't give a warning when certain timezones are used.
+- Habitat, Microhabitat, Collection Number and Associated species observation fields now appear on labels.
 
 # 3.4
 November 10, 2025
