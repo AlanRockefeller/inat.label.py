@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: November 9, 2025
-Version: 3.3
+Date: November 14, 2025
+Version: 3.5
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -75,6 +75,7 @@ import time
 import unicodedata
 import random
 from io import BytesIO
+import subprocess
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -204,18 +205,53 @@ def print_error(message):
         print(f"\033[91m{message}\033[0m", file=sys.stderr)
 
 
+import subprocess
+
 def register_fonts():
-    """Register optional Liberation Serif fonts; fall back to default PDF_BASE_FONT."""
+    """Register both a preferred font and a system Unicode font to be used conditionally."""
     global PDF_BASE_FONT
+
+    # Set the default preferred font.
+    PDF_BASE_FONT = 'Liberation Serif'
+
+    # Attempt to register the preferred font family.
     try:
         pdfmetrics.registerFont(TTFont('Liberation Serif', 'LiberationSerif-Regular.ttf'))
         pdfmetrics.registerFont(TTFont('Liberation Serif-Bold', 'LiberationSerif-Bold.ttf'))
         pdfmetrics.registerFont(TTFont('Liberation Serif-Italic', 'LiberationSerif-Italic.ttf'))
         pdfmetrics.registerFont(TTFont('Liberation Serif-BoldItalic', 'LiberationSerif-BoldItalic.ttf'))
         pdfmetrics.registerFontFamily('Liberation Serif', normal='Liberation Serif', bold='Liberation Serif-Bold', italic='Liberation Serif-Italic', boldItalic='Liberation Serif-BoldItalic')
-        PDF_BASE_FONT = 'Liberation Serif'
-    except Exception as e:
-        print_error("Warning: Liberation Serif font not found. Falling back to default font.")
+    except Exception:
+        print_error("Warning: Preferred font 'Liberation Serif' not found. PDF output may use a fallback.")
+        PDF_BASE_FONT = 'Times-Roman' # A core PDF font
+
+    # Attempt to find and register a system Unicode font for special characters.
+    try:
+        styles = {
+            'normal': 'sans-serif:lang=vi', 'bold': 'sans-serif:lang=vi:weight=bold',
+            'italic': 'sans-serif:lang=vi:slant=italic', 'boldItalic': 'sans-serif:lang=vi:weight=bold:slant=italic'
+        }
+        font_paths = {}
+        all_found = True
+        for style, query in styles.items():
+            command = ['fc-match', query, '-f', '%{file}']
+            process = subprocess.run(command, capture_output=True, text=True, check=True)
+            path = process.stdout.strip()
+            if path:
+                font_paths[style] = path
+            else:
+                all_found = False
+                break
+        
+        if all_found:
+            family_name = 'SystemUnicodeFont'
+            pdfmetrics.registerFont(TTFont(family_name, font_paths['normal']))
+            pdfmetrics.registerFont(TTFont(f"{family_name}-Bold", font_paths['bold']))
+            pdfmetrics.registerFont(TTFont(f"{family_name}-Italic", font_paths['italic']))
+            pdfmetrics.registerFont(TTFont(f"{family_name}-BoldItalic", font_paths['boldItalic']))
+            pdfmetrics.registerFontFamily(family_name, normal=family_name, bold=f"{family_name}-Bold", italic=f"{family_name}-Italic", boldItalic=f"{family_name}-BoldItalic")
+    except Exception:
+        print_error("Warning: Could not find or register a system Unicode font. Special characters in PDF may not render correctly.")
 
 register_fonts()
 
@@ -280,34 +316,32 @@ def generate_qr_code(url, minilabel_mode=False):
         return None, None
 
 def escape_rtf(text):
-    """Escape special characters for RTF output.  This section may need additional changes as more unusual characters are encountered, usually in the location."""
-    rtf_char_map = {
-        '\\': '\\\\',
-        '{': '\\{',
-        '}': '\\}',
-        '\n': '\\line ',
-        'í': '\\u237\'',
-        '\\"': '\\u34\'',           #  Does not work, yet - see https://www.perplexity.ai/search/If-the-RTF-gOdEwtp2TnmQZoPfQGqpsQ
-        'µ': '\\u181?',
-        '×': '\\u215?',
-        '“': '\\ldblquote ',   # left double quotation mark U+201C
-        '”': '\\rdblquote ',   # right double quotation mark U+201D
-        '‘': '\\lquote ',      # left single quotation mark U+2018
-        '’': '\\rquote ',      # right single quotation mark U+2019
-        '–': '\\endash ',
-        '—': '\\emdash ',
-        'é': '\\\'e9',
-        'à': '\\u224\'',
-        'á': '\\u225\'',
-        'ä': '\\\'e4',
-        'ö': '\\\'f6',
-        'ü': '\\\'fc',
-        'ß': '\\\'df',
-        '\'': '\\\'27',
-    }
-    for char, replacement in rtf_char_map.items():
-        text = text.replace(char, replacement)
-    return text
+    """Escape special characters for RTF output. This function handles standard RTF control
+    characters and encodes any non-ASCII characters using RTF's \\uXXXX notation."""
+    if not text:
+        return ""
+    text = str(text)
+
+    # First, escape RTF control characters and handle newlines.
+    text = text.replace('\\', '\\\\')
+    text = text.replace('{', '\\{')
+    text = text.replace('}', '\\}')
+    text = text.replace('\n', '\\line ')
+
+    # Create a new string with non-ASCII characters properly escaped.
+    res = []
+    for char in text:
+        codepoint = ord(char)
+        if codepoint < 128:
+            res.append(char)
+        else:
+            # For non-ASCII characters, use the \uXXXX escape sequence.
+            # RTF uses a signed 16-bit integer for the Unicode value.
+            # A '?' is appended as a fallback for older RTF readers.
+            if codepoint > 32767:
+                codepoint -= 65536
+            res.append(f'\\u{codepoint}?')
+    return "".join(res)
 
 # Remove formatting tags in stdout
 def remove_formatting_tags(text):
@@ -1020,10 +1054,6 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
         if comma_index != -1:
             location = location[comma_index + 1:].strip()
 
-    # Remove unusual characters if we are in rtf mode - rtf readers don't handle these well
-    if rtf_mode:
-        location = replace_accents_characters(location)
-
     coords, accuracy = get_coordinates(observation_data)
     gps_coords = f"{coords} (±{accuracy})" if accuracy else coords  # accuracy now includes unit (m or km)
 
@@ -1149,6 +1179,22 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     if herbarium_secondary_catalog_number:
         label.append(("Herbarium Secondary Catalog Number", herbarium_secondary_catalog_number))
 
+    habitat = get_field_value(observation_data, 'Habitat')
+    if habitat:
+        label.append(("Habitat", habitat))
+
+    microhabitat = get_field_value(observation_data, 'Microhabitat')
+    if microhabitat:
+        label.append(("Microhabitat", microhabitat))
+
+    collection_number = get_field_value(observation_data, 'Collection Number')
+    if collection_number:
+        label.append(("Collection Number", collection_number))
+
+    assosciated_species = get_field_value(observation_data, 'Associated Species')
+    if assosciated_species:
+        label.append(("Associated Species", assosciated_species))
+
     herbarium_name = get_field_value(observation_data, 'Herbarium Name')
     if herbarium_name:
         label.append(("Herbarium Name", herbarium_name))
@@ -1175,6 +1221,20 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
 
     return label, iconic_taxon_name
 
+def find_non_ascii_chars(labels):
+    """Find all non-ASCII characters in the label data, ignoring certain common symbols."""
+    non_ascii_chars = set()
+    # The default font handles '±' (U+00B1) correctly
+    ignore_chars = {'±'}
+
+    for label, _ in labels:
+        for _, value in label:
+            if isinstance(value, str):
+                for char in value:
+                    if ord(char) >= 128 and char not in ignore_chars:
+                        non_ascii_chars.add(char)
+    return non_ascii_chars
+
 def create_pdf_content(labels, filename, no_qr=False):
     """Render labels into a two-column PDF at the given filename.
 
@@ -1196,10 +1256,24 @@ def create_pdf_content(labels, filename, no_qr=False):
     ])
 
     styles = getSampleStyleSheet()
+    
+    # Conditionally select the font based on label content
+    base_font = PDF_BASE_FONT
+    non_ascii_found = find_non_ascii_chars(labels)
+    if non_ascii_found:
+        try:
+            # Verify that the system font was successfully registered before using it
+            pdfmetrics.getFont('SystemUnicodeFont')
+            base_font = 'SystemUnicodeFont'
+            char_report = ", ".join(f"'{c}'" for c in sorted(list(non_ascii_found)))
+            print_error(f"Info: Non-ASCII characters detected: {char_report}. Switching to system Unicode font for PDF.")
+        except KeyError:
+            print_error("Warning: Non-ASCII characters detected, but the system Unicode font is not available. Characters may not render correctly.")
+
     custom_normal_style = ParagraphStyle(
         'CustomNormal',
         parent=styles['Normal'],
-        fontName=PDF_BASE_FONT,
+        fontName=base_font,
         fontSize=12,
         leading=14
     )
@@ -1440,6 +1514,12 @@ def create_rtf_content(labels, no_qr=False):
     def split_hex_string(s, n):
         return '\n'.join([s[i:i+n] for i in range(0, len(s), n)])
 
+    def _format_rtf_text(text):
+        text = escape_rtf(text)
+        text = text.replace('__BOLD_START__', r'{\b ').replace('__BOLD_END__', r'}')
+        text = text.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
+        return text
+
     try:
         total = len(labels)
         for idx, (label, _iconic_taxon_name) in enumerate(labels):
@@ -1458,29 +1538,28 @@ def create_rtf_content(labels, no_qr=False):
             # body fields
             for field, value in label:
                 if field == "iNaturalist URL":
-                    rtf_content += str(value) + r"\line "
+                    rtf_content += escape_rtf(str(value)) + r" \line "
                 elif field == "Mushroom Observer URL":
-                    rtf_content += str(value) + r"\line "
+                    rtf_content += escape_rtf(str(value)) + r"\line "
                 elif field.startswith("iNat") or field.startswith("iNaturalist") or field.startswith("Mushroom Observer"):
                     if field.startswith("Mushroom Observer"):
                         first_chars, rest = field[:2], field[2:]
                         rtf_content += (
                             r"{\ul\b " + first_chars + r"}{\scaps\ul\b " + rest + r":} "
-                            + str(value) + r"\line "
+                            + escape_rtf(str(value)) + r"\line "
                         )
                     else:
                         first_char, rest = field[0], field[1:]
                         rtf_content += (
                             r"{\ul\b " + first_char + r"}{\scaps\ul\b " + rest + r":} "
-                            + str(value) + r"\line "
+                            + escape_rtf(str(value)) + r"\line "
                         )
                 elif field == "Scientific Name":
-                    value_rtf = str(value)
-                    value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
-                    rtf_content += r"{\scaps\ul\b " + field + r":} " + value_rtf + r"\line "
+                    value_rtf = _format_rtf_text(str(value))
+                    rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} " + value_rtf + r"\line "
                 elif field == "Coordinates":
-                    value_rtf = value.replace("±", r"\'b1")
-                    rtf_content += r"{\scaps\ul\b " + field + r":} " + value_rtf + r"\line "
+                    value_rtf = escape_rtf(value)
+                    rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} " + value_rtf + r"\line "
                 elif field == "Notes":
                     if value:
                         # strip blank lines out of Notes
@@ -1488,12 +1567,8 @@ def create_rtf_content(labels, no_qr=False):
                         non_blank_lines = [line for line in lines if line.strip()]
                         value = '\n'.join(non_blank_lines)
 
-                        rtf_content += r"{\scaps\ul\b " + field + r":} "
-                        value = escape_rtf(value)
-                        value_rtf = str(value)
-                        value_rtf = value_rtf.replace('\n', r'\line ')
-                        value_rtf = value_rtf.replace('__BOLD_START__', r'{\b ').replace('__BOLD_END__', r'}')
-                        value_rtf = value_rtf.replace('__ITALIC_START__', r'{\i ').replace('__ITALIC_END__', r'}')
+                        rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} "
+                        value_rtf = _format_rtf_text(value)
                         # MO import cleanup
                         value_rtf = re.sub(
                             r'\\line Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.',
@@ -1507,7 +1582,7 @@ def create_rtf_content(labels, no_qr=False):
                         )
                         rtf_content += value_rtf
                 else:
-                    rtf_content += r"{\scaps\ul\b " + field + r":} " + str(value) + r"\line "
+                    rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} " + escape_rtf(str(value)) + r"\line "
 
             # QR code (right aligned)
             if not no_qr:
