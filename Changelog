@@ -1,5 +1,17 @@
 # Changelog
 
+# 3.5
+November 14, 2025
+
+- Labels are now printed in the order that they were submitted.
+- Date parsing was updated so it doesn't give a warning when certain timezones are used.
+- Habitat, Microhabitat, Collection Number and Associated species observation fields now appear on labels.
+
+# 3.4
+November 10, 2025
+
+- Fix bug with foreign characters, for example those in the name field of inat # 282809791.    Foreign characters are now handled better in both RTF and PDF output.   If unusual characters are detected in the label, the PDF output switches to a font that handles them better.
+
 # 3.3
 November 9, 2025
 - Now adds the Fungarium Catalog Number field if it exists in the observation
