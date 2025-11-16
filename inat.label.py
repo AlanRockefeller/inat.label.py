@@ -1178,7 +1178,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
         # label.append(("Species Name Override", species_name_override))
 
         # If there is a scientific name override, actually override the scientific name
-        label[0] = ("Scientific Name", species_name_override)
+        label[0] = ("Scientific Name", f"__ITALIC_START__{species_name_override}__ITALIC_END__")
 
     microscopy = get_field_value(observation_data, 'Microscopy Performed')
     if microscopy:
