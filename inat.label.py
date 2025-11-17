@@ -214,7 +214,7 @@ def register_fonts():
         pdfmetrics.registerFont(TTFont('Liberation Serif-Italic', 'LiberationSerif-Italic.ttf'))
         pdfmetrics.registerFont(TTFont('Liberation Serif-BoldItalic', 'LiberationSerif-BoldItalic.ttf'))
         pdfmetrics.registerFontFamily('Liberation Serif', normal='Liberation Serif', bold='Liberation Serif-Bold', italic='Liberation Serif-Italic', boldItalic='Liberation Serif-BoldItalic')
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, TTFError) as e:
         print_error(f"Warning: Preferred font 'Liberation Serif' not found or invalid: {e}. PDF output may use a fallback.")
         PDF_BASE_FONT = 'Times-Roman' # A core PDF font
 
