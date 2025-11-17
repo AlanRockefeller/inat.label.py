@@ -79,22 +79,17 @@ import subprocess
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import threading
 from collections import deque
-from replace_accents import replace_accents_characters
 import binascii
 from bs4 import BeautifulSoup
 from dateutil import parser as dateutil_parser
 import qrcode
-from PIL import Image
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Image as ReportLabImage, KeepTogether, Table, TableStyle, KeepInFrame
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.units import inch
-from reportlab.lib.colors import black, blue, green, white
-from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -205,8 +200,6 @@ def print_error(message):
         print(f"\033[91m{message}\033[0m", file=sys.stderr)
 
 
-import subprocess
-
 def register_fonts():
     """Register both a preferred font and a system Unicode font to be used conditionally."""
     global PDF_BASE_FONT
@@ -221,8 +214,8 @@ def register_fonts():
         pdfmetrics.registerFont(TTFont('Liberation Serif-Italic', 'LiberationSerif-Italic.ttf'))
         pdfmetrics.registerFont(TTFont('Liberation Serif-BoldItalic', 'LiberationSerif-BoldItalic.ttf'))
         pdfmetrics.registerFontFamily('Liberation Serif', normal='Liberation Serif', bold='Liberation Serif-Bold', italic='Liberation Serif-Italic', boldItalic='Liberation Serif-BoldItalic')
-    except Exception:
-        print_error("Warning: Preferred font 'Liberation Serif' not found. PDF output may use a fallback.")
+    except (OSError, ValueError) as e:
+        print_error(f"Warning: Preferred font 'Liberation Serif' not found or invalid: {e}. PDF output may use a fallback.")
         PDF_BASE_FONT = 'Times-Roman' # A core PDF font
 
     # Attempt to find and register a system Unicode font for special characters.
@@ -240,6 +233,7 @@ def register_fonts():
             if path:
                 font_paths[style] = path
             else:
+                print_error(f"Info: fc-match found no path for font style '{style}' with query '{query}'.")
                 all_found = False
                 break
         
@@ -250,8 +244,8 @@ def register_fonts():
             pdfmetrics.registerFont(TTFont(f"{family_name}-Italic", font_paths['italic']))
             pdfmetrics.registerFont(TTFont(f"{family_name}-BoldItalic", font_paths['boldItalic']))
             pdfmetrics.registerFontFamily(family_name, normal=family_name, bold=f"{family_name}-Bold", italic=f"{family_name}-Italic", boldItalic=f"{family_name}-BoldItalic")
-    except Exception:
-        print_error("Warning: Could not find or register a system Unicode font. Special characters in PDF may not render correctly.")
+    except (subprocess.CalledProcessError, OSError, ValueError) as e:
+        print_error(f"Warning: Could not find or register a system Unicode font: {e}. Special characters in PDF may not render correctly.")
 
 register_fonts()
 
@@ -382,11 +376,11 @@ def parse_html_notes(notes):
 
     # Mark bold and italic text for RTF formatting
     for tag in soup.find_all(['strong', 'b']):
-        tag.replace_with('__BOLD_START__' + (tag.string or '') + '__BOLD_END__')
+        tag.replace_with('__BOLD_START__' + tag.get_text() + '__BOLD_END__')
     for tag in soup.find_all(['em', 'i']):
-        tag.replace_with('__ITALIC_START__' + (tag.string or '') + '__ITALIC_END__')
+        tag.replace_with('__ITALIC_START__' + tag.get_text() + '__ITALIC_END__')
     for tag in soup.find_all(['ins', 'u']):
-        tag.replace_with('' + (tag.string or '') + '')
+        tag.replace_with(tag.get_text())
 
     processed_text = str(soup).strip()
 
@@ -865,38 +859,6 @@ def get_coordinates(observation_data):
 def parse_date(date_string):
     """Parse a variety of date strings and return a datetime.date or None.
 
-    Tries common formats first, then falls back to dateutil parsing.
-    """
-    date_formats = [
-        '%Y-%m-%d',
-        '%Y/%m/%d',
-        '%B %d, %Y',
-    ]
-
-    # First, try to extract just the date part if there's more information
-    if not date_string:
-        return None
-    date_part = str(date_string).split()[0]
-
-    for format in date_formats:
-        try:
-            parsed_date = datetime.datetime.strptime(date_part, format)
-            if parsed_date:
-                return parsed_date.date()  # Return only the date part
-        except ValueError:
-            continue
-
-    # If the above fails, try parsing the full string but only keep the date
-    try:
-        parsed_date = dateutil_parser.parse(date_string, fuzzy=True)
-        if parsed_date:
-            return parsed_date.date()  # Return only the date part
-    except (ValueError, TypeError):
-        pass
-
-def parse_date(date_string):
-    """Parse a variety of date strings and return a datetime.date or None.
-
     Only the calendar date is kept; any time-of-day or timezone (e.g. PST)
     is ignored before parsing.
     """
@@ -1147,7 +1109,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
                     break
     
     # Only add common name if it's not redundant
-    if show_common_names and common_name:
+    if show_common_names and common_name and not is_redundant:
         label.append(("Common Name", common_name))
 
     # Add these fields to all labels
@@ -1211,7 +1173,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
         # label.append(("Species Name Override", species_name_override))
 
         # If there is a scientific name override, actually override the scientific name
-        label[0] = ("Scientific Name", species_name_override)
+        label[0] = ("Scientific Name", f"__ITALIC_START__{species_name_override}__ITALIC_END__")
 
     microscopy = get_field_value(observation_data, 'Microscopy Performed')
     if microscopy:
@@ -1245,9 +1207,9 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     if collection_number:
         label.append(("Collection Number", collection_number))
 
-    assosciated_species = get_field_value(observation_data, 'Associated Species')
-    if assosciated_species:
-        label.append(("Associated Species", assosciated_species))
+    associated_species = get_field_value(observation_data, 'Associated Species')
+    if associated_species:
+        label.append(("Associated Species", associated_species))
 
     herbarium_name = get_field_value(observation_data, 'Herbarium Name')
     if herbarium_name:
@@ -1340,12 +1302,6 @@ def create_pdf_content(labels, filename, no_qr=False):
             (value for field, value in label
              if field in ("iNaturalist URL", "Mushroom Observer URL")),
             None)
-
-        scientific_name = ""
-        for field, value in label:
-            if field == "Scientific Name":
-                scientific_name = value
-                break
 
         for field, value in label:
             if field == "Notes":
