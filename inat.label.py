@@ -5,7 +5,7 @@ iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: November 17, 2025
-Version: 3.6
+Version: 3.7
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -1024,7 +1024,7 @@ def format_scientific_name(observation_data):
     # Construct: italicize genus and epithet, not the rank label
     return f"__ITALIC_START__{genus}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
 
-def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False, show_common_names=False):
+def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False, show_common_names=False, omit_notes=False):
     """Build a label record from observation data.
 
     Returns (label_fields, iconic_taxon_name) where label_fields is a list of (field, value) tuples
@@ -1230,10 +1230,11 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
         formatted_url = format_mushroom_observer_url(mushroom_observer_url)
         label.append(("Mushroom Observer URL", formatted_url))
 
-    notes = observation_data.get('description') or ''
-    # Convert HTML in notes field to text
-    notes_parsed = parse_html_notes(notes)
-    label.append(("Notes", notes_parsed))
+    if not omit_notes:
+        notes = observation_data.get('description') or ''
+        # Convert HTML in notes field to text
+        notes_parsed = parse_html_notes(notes)
+        label.append(("Notes", notes_parsed))
 
     return label, iconic_taxon_name
 
@@ -1761,6 +1762,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Print debug output')
     parser.add_argument("--no-qr", action="store_true", help="Omit QR code from PDF and RTF labels")
     parser.add_argument("--minilabel", action="store_true", help="Generate minilabels with only observation number and QR code")
+    parser.add_argument("--omit-notes", action="store_true", help="Omit the Notes field from all labels")
 
     args = parser.parse_args()
 
@@ -1828,7 +1830,7 @@ def main():
                 return ('skip', None)
             else:
                 label, updated_iconic_taxon = create_inaturalist_label(
-                    observation_data, iconic_taxon_name, rtf_mode=rtf_mode, show_common_names=args.common_names,
+                    observation_data, iconic_taxon_name, rtf_mode=rtf_mode, show_common_names=args.common_names, omit_notes=args.omit_notes,
                 )
                 if label is not None:
                     # Print as soon as the label is created
