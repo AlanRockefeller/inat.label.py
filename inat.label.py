@@ -79,22 +79,17 @@ import subprocess
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import threading
 from collections import deque
-from replace_accents import replace_accents_characters
 import binascii
 from bs4 import BeautifulSoup
 from dateutil import parser as dateutil_parser
 import qrcode
-from PIL import Image
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Image as ReportLabImage, KeepTogether, Table, TableStyle, KeepInFrame
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.units import inch
-from reportlab.lib.colors import black, blue, green, white
-from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -381,11 +376,11 @@ def parse_html_notes(notes):
 
     # Mark bold and italic text for RTF formatting
     for tag in soup.find_all(['strong', 'b']):
-        tag.replace_with('__BOLD_START__' + (tag.string or '') + '__BOLD_END__')
+        tag.replace_with('__BOLD_START__' + tag.get_text() + '__BOLD_END__')
     for tag in soup.find_all(['em', 'i']):
-        tag.replace_with('__ITALIC_START__' + (tag.string or '') + '__ITALIC_END__')
+        tag.replace_with('__ITALIC_START__' + tag.get_text() + '__ITALIC_END__')
     for tag in soup.find_all(['ins', 'u']):
-        tag.replace_with('' + (tag.string or '') + '')
+        tag.replace_with(tag.get_text())
 
     processed_text = str(soup).strip()
 
@@ -1114,7 +1109,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
                     break
     
     # Only add common name if it's not redundant
-    if show_common_names and common_name:
+    if show_common_names and common_name and not is_redundant:
         label.append(("Common Name", common_name))
 
     # Add these fields to all labels
@@ -1307,12 +1302,6 @@ def create_pdf_content(labels, filename, no_qr=False):
             (value for field, value in label
              if field in ("iNaturalist URL", "Mushroom Observer URL")),
             None)
-
-        scientific_name = ""
-        for field, value in label:
-            if field == "Scientific Name":
-                scientific_name = value
-                break
 
         for field, value in label:
             if field == "Notes":
