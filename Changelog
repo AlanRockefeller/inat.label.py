@@ -1,5 +1,12 @@
 # Changelog
 
+# 3.6
+November 17, 2025
+
+- Handle diacritics and local characters better when making RTF labels.
+- Fixed Associated Species field handling and removed redundant common-name entries.
+- Improved font discovery and rendering with better fallback and error reporting.
+
 # 3.5
 November 14, 2025
 
