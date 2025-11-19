@@ -5,7 +5,7 @@ iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: November 17, 2025
-Version: 3.6
+Version: 3.7
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -1024,12 +1024,13 @@ def format_scientific_name(observation_data):
     # Construct: italicize genus and epithet, not the rank label
     return f"__ITALIC_START__{genus}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
 
-def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False, show_common_names=False):
+def create_inaturalist_label(observation_data, iconic_taxon_name, show_common_names=False, omit_notes=False, debug=False):
     """Build a label record from observation data.
 
     Returns (label_fields, iconic_taxon_name) where label_fields is a list of (field, value) tuples
     suitable for either RTF/PDF rendering or plaintext output. If observation_data is None, returns (None, None).
-    When rtf_mode is True, performs additional character substitutions for RTF compatibility.
+    When omit_notes is True, the Notes field is omitted entirely. When debug is True, custom
+    observation fields (OFVs) are logged to stderr to aid troubleshooting.
     """
     # If no data, return quietly; upstream will report a single concise error.
     if observation_data is None:
@@ -1156,6 +1157,11 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
                 if bp_count > 0:  # Only add if there are actual bases
                     label.append((field_name, f"{bp_count} bp"))
 
+    # If we are in debug mode, print the fields that are found
+    if debug:
+        for f in observation_data.get("ofvs", []):
+            print_error("OFV FIELD: " + repr(f.get("name")) + " → " + repr(f.get("value")))
+
     # Include these fields only if they are populated
     genbank_accession = get_field_value(observation_data, 'GenBank Accession Number')
     if not genbank_accession:
@@ -1179,9 +1185,17 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     if microscopy:
         label.append(("Microscopy Performed", microscopy))
 
+    fungal_microscopy = get_field_value(observation_data, 'Fungal Microscopy')
+    if fungal_microscopy:
+        label.append(("Fungal Microscopy", fungal_microscopy))
+
     photography_type = get_field_value(observation_data, 'Mobile or Traditional Photography?')
     if photography_type:
         label.append(("Mobile or Traditional Photography", photography_type))
+
+    collectors_name = get_field_value(observation_data, 'Collector\'s name')
+    if collectors_name:
+        label.append(("Collector's name", collectors_name))
 
     herbarium_catalog_number = get_field_value(observation_data, 'Herbarium Catalog Number')
     if herbarium_catalog_number:
@@ -1219,6 +1233,10 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     if mycoportal_id:
         label.append(("Mycoportal ID", mycoportal_id))
 
+    voucher_number = get_field_value(observation_data, 'Voucher Number')
+    if voucher_number:
+        label.append(("Voucher Number", voucher_number))
+
     voucher_numbers = get_field_value(observation_data, 'Voucher Number(s)')
     if voucher_numbers:
         label.append(("Voucher Number(s)", voucher_numbers))
@@ -1230,10 +1248,11 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
         formatted_url = format_mushroom_observer_url(mushroom_observer_url)
         label.append(("Mushroom Observer URL", formatted_url))
 
-    notes = observation_data.get('description') or ''
-    # Convert HTML in notes field to text
-    notes_parsed = parse_html_notes(notes)
-    label.append(("Notes", notes_parsed))
+    if not omit_notes:
+        notes = observation_data.get('description') or ''
+        # Convert HTML in notes field to text
+        notes_parsed = parse_html_notes(notes)
+        label.append(("Notes", notes_parsed))
 
     return label, iconic_taxon_name
 
@@ -1761,6 +1780,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Print debug output')
     parser.add_argument("--no-qr", action="store_true", help="Omit QR code from PDF and RTF labels")
     parser.add_argument("--minilabel", action="store_true", help="Generate minilabels with only observation number and QR code")
+    parser.add_argument("--omit-notes", action="store_true", help="Omit the Notes field from all labels")
 
     args = parser.parse_args()
 
@@ -1828,7 +1848,7 @@ def main():
                 return ('skip', None)
             else:
                 label, updated_iconic_taxon = create_inaturalist_label(
-                    observation_data, iconic_taxon_name, rtf_mode=rtf_mode, show_common_names=args.common_names,
+                    observation_data, iconic_taxon_name, show_common_names=args.common_names, omit_notes=args.omit_notes,debug=args.debug
                 )
                 if label is not None:
                     # Print as soon as the label is created

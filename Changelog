@@ -1,5 +1,10 @@
 # Changelog
 
+# 3.7
+November 17, 2025
+
+- Add the --omit-notes command line argument to omit the Notes: field from labels.
+
 # 3.6
 November 17, 2025
 
