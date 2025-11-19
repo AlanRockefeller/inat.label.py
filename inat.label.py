@@ -1029,7 +1029,8 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, show_common_na
 
     Returns (label_fields, iconic_taxon_name) where label_fields is a list of (field, value) tuples
     suitable for either RTF/PDF rendering or plaintext output. If observation_data is None, returns (None, None).
-    When rtf_mode is True, performs additional character substitutions for RTF compatibility.
+    When omit_notes is True, the Notes field is omitted entirely. When debug is True, custom
+    observation fields (OFVs) are logged to stderr to aid troubleshooting.
     """
     # If no data, return quietly; upstream will report a single concise error.
     if observation_data is None:
