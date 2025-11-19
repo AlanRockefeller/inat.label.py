@@ -1024,7 +1024,7 @@ def format_scientific_name(observation_data):
     # Construct: italicize genus and epithet, not the rank label
     return f"__ITALIC_START__{genus}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
 
-def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False, show_common_names=False, omit_notes=False, debug=False):
+def create_inaturalist_label(observation_data, iconic_taxon_name, show_common_names=False, omit_notes=False, debug=False):
     """Build a label record from observation data.
 
     Returns (label_fields, iconic_taxon_name) where label_fields is a list of (field, value) tuples
@@ -1159,7 +1159,7 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, rtf_mode=False
     # If we are in debug mode, print the fields that are found
     if debug:
         for f in observation_data.get("ofvs", []):
-            print("OFV FIELD:", repr(f.get("name")), "→", repr(f.get("value")))
+            print_error("OFV FIELD: " + repr(f.get("name")) + " → " + repr(f.get("value")))
 
     # Include these fields only if they are populated
     genbank_accession = get_field_value(observation_data, 'GenBank Accession Number')
@@ -1847,7 +1847,7 @@ def main():
                 return ('skip', None)
             else:
                 label, updated_iconic_taxon = create_inaturalist_label(
-                    observation_data, iconic_taxon_name, rtf_mode=rtf_mode, show_common_names=args.common_names, omit_notes=args.omit_notes,debug=args.debug
+                    observation_data, iconic_taxon_name, show_common_names=args.common_names, omit_notes=args.omit_notes,debug=args.debug
                 )
                 if label is not None:
                     # Print as soon as the label is created
