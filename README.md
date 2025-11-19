@@ -36,25 +36,39 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - Coordinates (with accuracy - accuracy is set to 20km if observation geoprivacy is obscured)
   - Date Observed
   - Observer Name and iNaturalist login
-  - DNA Barcode ITS, LSU, RPB1, RPB2 and TEF1 (if present)
-  - GenBank Accession Number (if present)
-  - Provisional Species Name (if present)
-  - Species Name Override (if present - and it actually overrides the name on the label)
-  - Mushroom Observer URL (if present, formatted in best URL form so it's accessible to users who aren't logged in)
-  - Microscopy Performed (if present)
-  - Traditional or Mobile Photography (if present)
-  - Herbarium / Fungarium Catalog Number (if present)
-  - Herbarium Name (if present)
-  - Mycoportal ID (if present)
-  - Voucher number(s) (if present)
-  - Habitat, Microhabitat, Collection Number and Associated species (if present)
-  - Observation Notes
+  - Observation Notes (optional)
+  - The Species Name Override observation field overrides the scientific name
+  - The following observation fields are included on the labels if they are present in the observation:
+    GenBank Accession Number
+    GenBank Accession
+    Provisional Species Name
+    Microscopy Performed
+    Fungal Microscopy
+    Mobile or Traditional Photography?
+    Herbarium Catalog Number
+    Fungarium Catalog Number
+    Herbarium Secondary Catalog Number
+    Habitat
+    Microhabitat
+    Collection Number
+    Collector's name
+    Associated Species
+    Herbarium Name
+    Mycoportal ID
+    Voucher Number
+    Voucher Number(s)
+    Mushroom Observer URL
+    DNA Barcode ITS
+    DNA Barcode LSU
+    DNA Barcode RPB1
+    DNA Barcode RPB2
+    DNA Barcode TEF1
 - By default outputs labels to console for quick viewing / testing
 - Optionally creates RTF files for high-quality printing + QR code (RTF or PDF output is strongly recommended)
 - Optionally creates PDF files for more compatibility
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
 - An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
-- Adds a QR code to the PDF and RTF labels which points to the iNaturalist URL
+- Adds a QR code to the PDF and RTF labels which points to the iNaturalist or Mushroom Observer URL
 - When generating PDF or RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white.   This will help you quickly notice if an observation number is mistyped.
 - You can use the --no-qr command line argument to omit QR codes.
 - You can use the --minilabel command line argument to make tiny labels that have only the observation # and QR code.
