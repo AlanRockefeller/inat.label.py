@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.7 
+# iNaturalist Herbarium Label Generator version 3.8 
 # By Alan Rockefeller
-# November 17, 2025
+# November 28, 2025
 
 
 ## Description
