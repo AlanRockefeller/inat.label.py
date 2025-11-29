@@ -16,8 +16,6 @@ from functools import partial
 
 import threading
 from logging.handlers import RotatingFileHandler
-import time
-import io # Added import for time and io
 
 def log_pipe_reader(pipe, job_log, job_lock, done_event, ready_event):
     """Reads lines from a pipe, appends them to a list, and signals completion and readiness."""
@@ -162,10 +160,6 @@ def labels():
 def favicon():
     return send_from_directory(os.path.join(app.root_path, 'static'),
                                'favicon.ico', mimetype='image/vnd.microsoft.icon')
-
-@app.route('/omdl-form')
-def omdl_form_redirect():
-    return redirect(url_for('/'), code=302)
 
 @app.route('/labels/lookup', methods=['POST'])
 def lookup():
@@ -873,4 +867,4 @@ def todo():
     return render_template('todo.html', todos=todos)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true')
