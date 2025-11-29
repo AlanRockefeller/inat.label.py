@@ -1,5 +1,11 @@
 # Changelog
 
+# 3.8
+November 28, 2025
+
+- Now gives a time estimate if we make more than 25 labels.
+- Added the 'flask web frontend' directory, which contains the code that runs the web version via flask.
+
 # 3.7
 November 17, 2025
 

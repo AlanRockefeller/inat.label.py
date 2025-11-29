@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: November 17, 2025
-Version: 3.7
+Date: November 28, 2025
+Version: 3.8
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -1826,6 +1826,34 @@ def main():
     labels = []
     failed = []
     total_requested = len(observation_ids)
+
+    if total_requested > 25:
+        # The rate limiter smooths requests to one per second when busy.
+        # Add 5% for the API call itself and other small delays.
+        estimated_time = total_requested * 1.05
+
+        hours = int(estimated_time // 3600)
+        minutes = int((estimated_time % 3600) // 60)
+        seconds = int(estimated_time % 60)
+
+        time_parts = []
+        if hours > 0:
+            time_parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+        if minutes > 0:
+            time_parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+        if seconds > 0 or (hours == 0 and minutes == 0 and total_requested > 0): # Include seconds if it's less than a minute, but only if there are labels to generate
+            time_parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+
+        if not time_parts: # Handle case where estimated_time is 0
+            time_str_human_readable = "no time"
+        else:
+            time_str_human_readable = ", ".join(time_parts)
+            if len(time_parts) > 1:
+                # Replace the last comma with " and " for better readability
+                time_str_human_readable = time_str_human_readable.rsplit(', ', 1)[0] + ' and ' + time_str_human_readable.rsplit(', ', 1)[1]
+
+        print(f'Generating {total_requested} labels, this will take about {time_str_human_readable}')
+
     start_time = time.time()
 
     def process_one(input_value):
