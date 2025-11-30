@@ -761,6 +761,51 @@
 	    }
 
 
+function renderObservationResult(data, original) {
+    const resultItem = $('<div class="result-item"></div>');
+    if (data.error) {
+        resultItem.html(
+            `<span style="color: var(--danger);">
+                <i class="fas fa-exclamation-circle"></i>
+                ${escapeHtml(original)}: ${escapeHtml(data.error || '')}
+            </span>`
+        );
+    } else {
+        // pick a display label based on what the user typed
+        let displayText;
+        const lower = (original || '').toLowerCase();
+
+        if (/^mo:\d+$/i.test(original)) {
+            const moNum = original.substring(3);
+            if ((data.inat_id || '').toLowerCase().startsWith('mo')) {
+                displayText = `MO${moNum}`;
+            } else {
+                displayText = `MO${moNum} → iNat#${data.inat_id}`;
+            }
+        } else if (/^mo\d+$/i.test(original)) {
+            displayText = original.toUpperCase();
+        } else if (lower.startsWith('motoinat') || lower.startsWith('moinat') || lower.startsWith('inatmo')) {
+            const moNum = original.replace(/\D+/g, '');
+            displayText = `MO${moNum} → iNat#${data.inat_id}`;
+        } else {
+            displayText = `#${data.inat_id}`;
+        }
+
+        resultItem.html(
+            `<span>
+                ${displayText}:
+                <span style="color:${validateColor(data.color)}" class="species-name">
+                    ${escapeHtml(data.scientific_name || '')}
+                </span>
+                <small style="color: var(--grey-600);">
+                    <i class="fas fa-user"></i> ${escapeHtml(data.user_id || '')}
+                </small>
+            </span>`
+        );
+    }
+    return resultItem;
+}
+
 	// 2. Actually look up an observation and render the result
 	function lookupObservation($input) {
 	    const resultSpan = $input.siblings('.result');
@@ -785,48 +830,7 @@
 
 		    items.forEach(function(data, index) {
 			const original = data.original_input || data.input || obsIds[index];
-			const resultItem = $('<div class="result-item"></div>');
-
-			if (data.error) {
-			    resultItem.html(
-				`<span style="color: var(--danger);">
-				    <i class="fas fa-exclamation-circle"></i>
-				    ${escapeHtml(original)}: ${escapeHtml(data.error || '')}
-				</span>`
-			    );
-			} else {
-			    // pick a display label based on what the user typed
-			    let displayText;
-			    const lower = (original || '').toLowerCase();
-
-			    if (/^mo:\d+$/i.test(original)) {
-				const moNum = original.substring(3);
-				if ((data.inat_id || '').toLowerCase().startsWith('mo')) {
-				    displayText = `MO${moNum}`;
-				} else {
-				    displayText = `MO${moNum} → iNat#${data.inat_id}`;
-				}
-			    } else if (/^mo\d+$/i.test(original)) {
-				displayText = original.toUpperCase();
-			    } else if (lower.startsWith('motoinat') || lower.startsWith('moinat') || lower.startsWith('inatmo')) {
-				const moNum = original.replace(/\D+/g, '');
-				displayText = `MO${moNum} → iNat#${data.inat_id}`;
-			    } else {
-				displayText = `#${data.inat_id}`;
-			    }
-
-			    resultItem.html(
-				`<span>
-				    ${displayText}:
-				    <span style="color:${data.color}" class="species-name">
-					${escapeHtml(data.scientific_name || '')}
-				    </span>
-				    <small style="color: var(--grey-600);">
-					<i class="fas fa-user"></i> ${escapeHtml(data.user_id || '')}
-				    </small>
-				</span>`
-			    );
-			}
+			const resultItem = renderObservationResult(data, original);
 
 			if (index < items.length - 1) {
 			    resultItem.append('<hr style="margin: 4px 0; border-top: 1px dashed var(--grey-300);">');
@@ -973,7 +977,25 @@
             });
         });
 
-function collectObservationsFormData() {
+function validateColor(color) {
+            if (!color) return 'black'; // Fallback to black as a safe default
+
+            // Allow basic hex, rgb, rgba, and var()
+            const simpleColorRegex = /^(#[0-9a-f]{3,6}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)|rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)|var\(--[a-zA-Z0-9-]+\))$/i;
+            if (simpleColorRegex.test(color)) {
+                return color;
+            }
+
+            // Explicitly allowed named colors
+            const namedColors = new Set(['black', 'magenta', 'green', 'purple', 'red', 'blue']);
+            if (namedColors.has(color.toLowerCase())) {
+                return color;
+            }
+
+            return 'black'; // Fallback for any other invalid color
+        }
+
+        function collectObservationsFormData() {
             var formData = new FormData();
             $('.obs-input').each(function() {
                 const inputValue = $(this).val().trim();
@@ -1150,7 +1172,7 @@ el.innerHTML = '<i class="fa-solid fa-circle-exclamation" style="color: var(--da
         resultItem.html(
             `<span>
                 ${displayText}:
-                <span style="color:${obsData.color || 'black'}" class="species-name">
+                <span style="color:${validateColor(obsData.color) || 'black'}" class="species-name">
                     ${escapeHtml(obsData.scientific_name || 'Unknown')}
                 </span>
             </span>`
@@ -1188,47 +1210,8 @@ el.innerHTML = '<i class="fa-solid fa-circle-exclamation" style="color: var(--da
 
 			const resultSpan = $input.siblings('.result');
 			const original = data.original_input || data.input || obsIds[index];
-			const resultItem = $('<div class="result-item"></div>');
-
-			if (data.error) {
-			    resultItem.html(
-				`<span style="color: var(--danger);">
-				    <i class="fas fa-exclamation-circle"></i>
-				    ${escapeHtml(original)}: ${escapeHtml(data.error || '')}
-				</span>`
-			    );
-			} else {
-			    let displayText;
-			    const lower = (original || '').toLowerCase();
-
-			    if (/^mo:\d+$/i.test(original)) {
-				const moNum = original.substring(3);
-				if ((data.inat_id || '').toLowerCase().startsWith('mo')) {
-				    displayText = `MO${moNum}`;
-				} else {
-				    displayText = `MO${moNum} → iNat#${data.inat_id}`;
-				}
-			    } else if (/^mo\d+$/i.test(original)) {
-				displayText = original.toUpperCase();
-			    } else if (lower.startsWith('motoinat') || lower.startsWith('moinat') || lower.startsWith('inatmo')) {
-				const moNum = original.replace(/\D+/g, '');
-				displayText = `MO${moNum} → iNat#${data.inat_id}`;
-			    } else {
-				displayText = `#${data.inat_id}`;
-			    }
-
-			    resultItem.html(
-				`<span>
-				    ${displayText}:
-				    <span style="color:${data.color}" class="species-name">
-					${escapeHtml(data.scientific_name || '')}
-				    </span>
-				    <small style="color: var(--grey-600);">
-					<i class="fas fa-user"></i> ${escapeHtml(data.user_id || '')}
-				    </small>
-				</span>`
-			    );
-			}
+			const resultItem = renderObservationResult(data, original);
+			
 			resultSpan.empty().append(resultItem);
 		    });
 		},
@@ -1309,7 +1292,9 @@ el.innerHTML = '<i class="fa-solid fa-circle-exclamation" style="color: var(--da
                             showToast(successMsg);
                             clearInterval(poller);
                         }
-                    } catch (_) {}
+                    } catch (e) {
+                        console.debug('Fallback poll error:', e);
+                    }
                 }, 2000);
 
                 es.addEventListener('log', (ev) => {
@@ -1496,7 +1481,7 @@ el.innerHTML = '<i class="fa-solid fa-circle-exclamation" style="color: var(--da
                       $('#addObsConfirm').prop('disabled', true);
                       return;
                   }
-                  const rows = items.map(x => `<label style=\"display:block; margin:2px 0;\"><input type=\"checkbox\" class=\"addObsRowCk\" data-id=\"${x.id}\" checked> #${x.id} — <span class="species-name" style="color:${escapeHtml(x.color || 'black')}">${escapeHtml(x.scientific_name || '')}</span></label>`).join('');
+                  const rows = items.map(x => `<label style=\"display:block; margin:2px 0;\"><input type=\"checkbox\" class=\"addObsRowCk\" data-id=\"${x.id}\" checked> #${x.id} — <span class="species-name" style="color:${validateColor(x.color || 'black')}">${escapeHtml(x.scientific_name || '')}</span></label>`).join('');
                   const header = `<div style=\"display:flex; align-items:center; justify-content:space-between;\"><div style=\"font-size:0.95rem;\">Found ${lastPreviewIds.length} observations</div><div><label style=\"user-select:none;\"><input type=\"checkbox\" id=\"addObsSelectAll\" checked> Select all</label></div></div>`;
                   const body = `<div id=\"addObsList\" style=\"margin-top:0.5rem;\">${rows}</div>`;
                   const footer = `<div id=\"addObsSelectedCount\" style=\"margin-top:0.5rem; font-size:0.9rem;\">Selected: ${items.length} of ${lastPreviewIds.length}</div>`;

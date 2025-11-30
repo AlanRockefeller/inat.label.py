@@ -17,22 +17,6 @@ from functools import partial
 import threading
 from logging.handlers import RotatingFileHandler
 
-def log_pipe_reader(pipe, job_log, job_lock, done_event, ready_event):
-    """Reads lines from a pipe, appends them to a list, and signals completion and readiness."""
-    app.logger.debug("log_pipe_reader started")
-    text_pipe = io.TextIOWrapper(pipe, encoding='utf-8', errors='replace', newline='\n', line_buffering=True)
-    ready_event.set() # Signal that the reader is ready
-    try:
-        for line in iter(text_pipe.readline, ''): # Read decoded strings
-            with job_lock:
-                job_log.append(line) # Store as decoded string
-    finally:
-        text_pipe.close()
-        pipe.close()
-        done_event.set()
-        app.logger.debug("log_pipe_reader finished")
-
-
 INAT_HEADERS = {
     'Accept': 'application/json',
     'User-Agent': 'flask-labels (inat.label.py frontend)'
@@ -642,32 +626,17 @@ def print_start():
     proc = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT
+        stderr=subprocess.STDOUT,
+        bufsize=1,        # line-buffered
+        text=False        # raw bytes; we'll decode ourselves
     )
-
-    job_log = []
-    job_lock = threading.Lock()
-    done_event = threading.Event()
-    ready_event = threading.Event() # New event for readiness
-
-    reader_thread = threading.Thread(
-        target=log_pipe_reader,
-        args=(proc.stdout, job_log, job_lock, done_event, ready_event),
-        daemon=True
-    )
-    reader_thread.start()
-    ready_event.wait(timeout=5) # Wait for the reader to be ready (with a timeout)
 
     _jobs[job_id] = {
         'proc': proc,
         'output_path': output_path,
         'filename': filename,
-        'log_list': job_log,
-        'log_lock': job_lock,
-        'done_event': done_event,
-        'ready_event': ready_event, # Add ready_event to job data
-        'log_index': 0 # To track what's been sent to client
     }
+
     return jsonify({'job_id': job_id})
 
 
@@ -681,52 +650,67 @@ def print_stream():
     proc = job['proc']
     output_path = job['output_path']
     filename = job['filename']
-    log_list = job['log_list']
-    log_lock = job['log_lock']
-    done_event = job['done_event']
 
-    # Pre-calculate the download URL within the application context
-    rel_path = os.path.relpath(output_path, os.path.join(app.root_path, 'static')).replace('\\', '/')
+    rel_path = os.path.relpath(
+        output_path,
+        os.path.join(app.root_path, 'static')
+    ).replace('\\', '/')
     download_url = url_for('static', filename=rel_path)
 
     def generate():
-        current_index = 0
-        # Send any logs that were captured before the client connected
-        with log_lock:
-            for i in range(len(log_list)):
-                # Already decoded strings
-                yield f"event: log\ndata: {json.dumps(log_list[i].rstrip('\n'))}\n\n"
-            current_index = len(log_list)
+        try:
+            # Stream already-written and future output
+            for raw in iter(proc.stdout.readline, b''):
+                line = raw.decode('utf-8', 'replace').rstrip('\n')
 
-        # Then, tail the log for new entries until the process is done
-        while not done_event.is_set() or current_index < len(log_list):
-            with log_lock:
-                while current_index < len(log_list):
-                    # Already decoded strings
-                    yield f"event: log\ndata: {json.dumps(log_list[current_index].rstrip('\n'))}\n\n"
-                    current_index += 1
-            if not done_event.is_set() and current_index == len(log_list):
-                time.sleep(0.1)  # Avoid busy-waiting
+                # Small debug hook if you want:
+                # app.logger.debug(f"SSE log line: {line!r}")
 
-        # Process final exit code and send completion message
-        exit_code = proc.wait()
-        if os.path.exists(output_path):
-            done_payload = json.dumps({'success': True, 'download_url': download_url})
-        else:
-            error_message = f'Output file was not created. Process exited with code {exit_code}.'
-            done_payload = json.dumps({'success': False, 'error': error_message})
-        yield f"event: done\ndata: {done_payload}\n\n"
+                yield f"event: log\ndata: {json.dumps(line)}\n\n"
 
-        # Clean up job after streaming is fully complete
-        with log_lock:
-            _jobs.pop(job_id, None)
+            # When the loop ends, the process has finished
+            exit_code = proc.wait()
+
+            if os.path.exists(output_path):
+                done_payload = json.dumps({
+                    'success': True,
+                    'download_url': download_url,
+                    'exit_code': exit_code,
+                })
+            else:
+                error_message = (
+                    f'Output file was not created. '
+                    f'Process exited with code {exit_code}.'
+                )
+                done_payload = json.dumps({
+                    'success': False,
+                    'error': error_message,
+                    'exit_code': exit_code,
+                })
+
+            yield f"event: done\ndata: {done_payload}\n\n"
+
+        finally:
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except Exception:
+                pass
             try:
                 if proc.poll() is None:
                     proc.terminate()
             except Exception:
                 pass
+            _jobs.pop(job_id, None)
 
-    return app.response_class(generate(), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+    return app.response_class(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',  # nginx hint; harmless even if not used
+        }
+    )
 
 
 @app.route('/labels/find_observations', methods=['POST'])

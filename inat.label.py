@@ -1,17 +1,3 @@
-import sys
-import os
-
-# Force line-buffered output
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(line_buffering=True)
-else:
-    # Fallback for older Python versions or environments without reconfigure
-    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
-
-# Ensure the new sys.stdout is used immediately
-sys.stdout.flush()
-
-# Original content starts here
 #!/usr/bin/env python3
 
 """
@@ -526,9 +512,9 @@ def fetch_api_data(url, retries=6):
                         f"Waiting {wait:.1f}s and retrying (attempt {attempt}/{retries}). "
                         "Tip: lower concurrency with --workers or INAT_MAX_WORKERS, or reduce INAT_RATE_LIMIT_RPM."
                     )
-                    print(msg)
+                    print(msg, flush=True)
                 if not notified_patience and (total_wait + wait) >= patience_notice_threshold:
-                    print("Note: experiencing API rate limiting; being patient (up to 30s) to avoid skipping labels.")
+                    print("Note: experiencing API rate limiting; being patient (up to 30s) to avoid skipping labels.", flush=True)
                     notified_patience = True
                 time.sleep(wait)
                 total_wait += wait
@@ -541,8 +527,7 @@ def fetch_api_data(url, retries=6):
                 wait = max(0.5, min(wait, remaining))
                 print_error(f"Server error {response.status_code}. Retrying in {wait:.1f}s (attempt {attempt}/{retries})")
                 if not notified_patience and (total_wait + wait) >= patience_notice_threshold:
-                    print("Note: experiencing server delays; being patient (up to 30s) to avoid skipping labels.")
-                    notified_patience = True
+                    print("Note: experiencing server delays; being patient (up to 30s) to avoid skipping labels.", flush=True)
                 time.sleep(wait)
                 total_wait += wait
                 continue
@@ -556,8 +541,7 @@ def fetch_api_data(url, retries=6):
             wait = max(0.5, min(wait, remaining))
             print_error(f"Timeout/SSL error. Retrying in {wait:.1f}s (attempt {attempt}/{retries})")
             if not notified_patience and (total_wait + wait) >= patience_notice_threshold:
-                print("Note: experiencing network delays; being patient (up to 30s) to avoid skipping labels.")
-                notified_patience = True
+                print("Note: experiencing network delays; being patient (up to 30s) to avoid skipping labels.", flush=True)
             time.sleep(wait)
             total_wait += wait
             continue
@@ -568,8 +552,7 @@ def fetch_api_data(url, retries=6):
             wait = max(0.5, min(wait, remaining))
             print_error(f"Network error. Retrying in {wait:.1f}s (attempt {attempt}/{retries})")
             if not notified_patience and (total_wait + wait) >= patience_notice_threshold:
-                print("Note: experiencing network delays; being patient (up to 30s) to avoid skipping labels.")
-                notified_patience = True
+                print("Note: experiencing network delays; being patient (up to 30s) to avoid skipping labels.", flush=True)
             time.sleep(wait)
             total_wait += wait
             continue
@@ -682,15 +665,15 @@ def get_mushroom_observer_data(mo_id, retries=6):
 
     if error:
         if "Status code: 404" in error:
-            print(f"Error: Mushroom Observer observation {mo_id} does not exist.")
+            print(f"Error: Mushroom Observer observation {mo_id} does not exist.", flush=True)
         else:
-            print(f"Error fetching Mushroom Observer observation {mo_id}: {error}")
+            print(f"Error fetching Mushroom Observer observation {mo_id}: {error}", flush=True)
         return None, 'Life'
 
     if data and 'results' in data and data['results']:
         mo_observation = data['results'][0]
         if isinstance(mo_observation, int):
-            print(f"Error: Insufficient data from Mushroom Observer API for observation {mo_id}. Skipping.")
+            print(f"Error: Insufficient data from Mushroom Observer API for observation {mo_id}. Skipping.", flush=True)
             return None, 'Life'
         
         observation = {
@@ -813,7 +796,7 @@ def get_observation_data(observation_id, retries=6):
         
         return observation, iconic_taxon_name
     else:
-        print(f"Error: Observation {observation_id} does not exist.")
+        print(f"Error: Observation {observation_id} does not exist.", flush=True)
         return None, 'Life'
 
 def field_exists(observation_data, field_name):
@@ -1866,7 +1849,7 @@ def main():
                 # Replace the last comma with " and " for better readability
                 time_str_human_readable = time_str_human_readable.rsplit(', ', 1)[0] + ' and ' + time_str_human_readable.rsplit(', ', 1)[1]
 
-        print(f'Generating {total_requested} labels, this will take about {time_str_human_readable}')
+        print(f'Generating {total_requested} labels, this will take about {time_str_human_readable}', flush=True)
 
     start_time = time.time()
 
@@ -1931,10 +1914,10 @@ def main():
                     rtf_content = create_minilabel_rtf_content(labels)
                     with open(args.rtf, 'w') as rtf_file:
                         rtf_file.write(rtf_content)
-                    print(f"RTF file created: {os.path.basename(args.rtf)}")
+                    print(f"RTF file created: {os.path.basename(args.rtf)}", flush=True)
                 elif pdf_mode:
                     create_minilabel_pdf_content(labels, args.pdf)
-                    print(f"PDF file created: {os.path.basename(args.pdf)}")
+                    print(f"PDF file created: {os.path.basename(args.pdf)}", flush=True)
             elif rtf_mode:
                 rtf_content = create_rtf_content(labels, no_qr=args.no_qr)
                 with open(args.rtf, 'w') as rtf_file:
@@ -1946,9 +1929,9 @@ def main():
                     size_kb = None
                 basename = os.path.basename(args.rtf)
                 if size_kb is not None:
-                    print(f"RTF file created: {basename} ({size_kb} kb)")
+                    print(f"RTF file created: {basename} ({size_kb} kb)", flush=True)
                 else:
-                    print(f"RTF file created: {basename}")
+                    print(f"RTF file created: {basename}", flush=True)
             elif pdf_mode:
                 create_pdf_content(labels, args.pdf, no_qr=args.no_qr)
                 try:
@@ -1958,9 +1941,9 @@ def main():
                     size_kb = None
                 basename = os.path.basename(args.pdf)
                 if size_kb is not None:
-                    print(f"PDF file created: {basename} ({size_kb} kb)")
+                    print(f"PDF file created: {basename} ({size_kb} kb)", flush=True)
                 else:
-                    print(f"PDF file created: {basename}")
+                    print(f"PDF file created: {basename}", flush=True)
             else:
                 # Print labels to stdout
                 for label, _ in labels:
@@ -1969,18 +1952,18 @@ def main():
                             value = remove_formatting_tags(value)
                             value = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', value)
                             value = re.sub(r'Imported by Mushroom Observer \d{4}-\d{2}-\d{2}', '', value)
-                            print(f"{field}: {value}")
+                            print(f"{field}: {value}", flush=True)
                         elif field == "iNaturalist URL":
-                            print(value)
+                            print(value, flush=True)
                         elif field == "Mushroom Observer URL":
-                            print(value)
+                            print(value, flush=True)
                         else:
                             if field == "Scientific Name":
                                 value = value.replace('__ITALIC_START__','').replace('__ITALIC_END__','')
-                            print(f"{field}: {value}")
-                    print("\n")  # Blank line between labels
+                            print(f"{field}: {value}", flush=True)
+                    print("\n", flush=True)  # Blank line between labels
         else:
-            print("No valid observations found.")
+            print("No valid observations found.", flush=True)
 
         # Print summary last so it appears at the very end
         elapsed = time.time() - start_time
@@ -1988,12 +1971,22 @@ def main():
         generated_word = "generated"
         if total_requested != len(labels):
             generated_word = Fore.RED + "generated" + Style.RESET_ALL
-        print(f"Summary: requested {total_requested}, {generated_word} {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s")
+        print(f"Summary: requested {total_requested}, {generated_word} {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s", flush=True)
         if failed:
             for msg in failed:
                 print_error(f" - {msg}")
 
 if __name__ == "__main__":
+    # Force line-buffered output
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(line_buffering=True)
+    else:
+        # Fallback for older Python versions or environments without reconfigure
+        sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
+
+    # Ensure the new sys.stdout is used immediately
+    sys.stdout.flush()
+
     # Do not strip ANSI when piping to the Flask server so colors reach the browser
     colorama.init(strip=False, convert=False)
     main()
