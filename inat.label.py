@@ -1,3 +1,17 @@
+import sys
+import os
+
+# Force line-buffered output
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+else:
+    # Fallback for older Python versions or environments without reconfigure
+    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
+
+# Ensure the new sys.stdout is used immediately
+sys.stdout.flush()
+
+# Original content starts here
 #!/usr/bin/env python3
 
 """
