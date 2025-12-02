@@ -35,6 +35,11 @@ ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS')  # comma-separated list of a
 # In-memory job store for streaming print jobs
 _jobs = {}
 
+def _reap_finished_jobs():
+    finished = [job_id for job_id, job in _jobs.items()
+                if job['proc'].poll() is not None]
+    for job_id in finished:
+        _jobs.pop(job_id, None)
 
 app = Flask(__name__)
 
@@ -353,7 +358,6 @@ def submit():
 
         # Partition into iNat and MO
         inat_ids = [str(x) for x in resolved if not (isinstance(x, str) and x.upper().startswith('MO'))]
-        mo_ids = [str(x) for x in resolved if isinstance(x, str) and x.upper().startswith('MO')]
 
         # Batch fetch iNat observations in chunks
         id_to_inat = {}
@@ -560,6 +564,7 @@ def print_labels_pdf():
 # Streaming printing support
 @app.route('/labels/print_start', methods=['POST'])
 def print_start():
+    _reap_finished_jobs()  # clean out any completed jobs
     fmt = (request.form.get('format') or 'rtf').lower()
     if fmt not in ('rtf', 'pdf'):
         app.logger.warning(f"print_start: Invalid format requested: {fmt}")
@@ -628,7 +633,9 @@ def print_start():
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=1,        # line-buffered
-        text=False        # raw bytes; we'll decode ourselves
+        text=True,
+        encoding='utf-8',
+        errors='replace',
     )
 
     _jobs[job_id] = {
@@ -649,7 +656,6 @@ def print_stream():
     job = _jobs[job_id]
     proc = job['proc']
     output_path = job['output_path']
-    filename = job['filename']
 
     rel_path = os.path.relpath(
         output_path,
@@ -660,9 +666,8 @@ def print_stream():
     def generate():
         try:
             # Stream already-written and future output
-            for raw in iter(proc.stdout.readline, b''):
-                line = raw.decode('utf-8', 'replace').rstrip('\n')
-
+            for line in iter(proc.stdout.readline, ''):
+                line = line.rstrip('\n')
                 # Small debug hook if you want:
                 # app.logger.debug(f"SSE log line: {line!r}")
 
@@ -692,15 +697,21 @@ def print_stream():
 
         finally:
             try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            try:
                 if proc.stdout:
                     proc.stdout.close()
             except Exception:
                 pass
-            try:
-                if proc.poll() is None:
-                    proc.terminate()
-            except Exception:
-                pass
+
             _jobs.pop(job_id, None)
 
     return app.response_class(
