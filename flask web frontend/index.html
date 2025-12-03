@@ -184,6 +184,12 @@
             transition: var(--transition);
         }
 
+	.btn-sm {
+            padding: 0.35rem 0.75rem;
+            font-size: 0.85rem;
+            border-radius: calc(var(--border-radius) - 2px);
+        }
+
         .btn:disabled {
             opacity: 0.7;
             cursor: not-allowed;
@@ -1008,11 +1014,13 @@ function validateColor(color) {
         }
 
         function escapeHtml(s) {
-            return s
+            if (s == null) return '';
+            return String(s)
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
         }
+
 
         function ansiToHtml(ansiText) {
             if (!ansiText) return '';
@@ -1064,13 +1072,6 @@ function validateColor(color) {
                 }
             }
             return esc;
-        }
-
-        function showLogModal(ansiLog) {
-            const html = ansiToHtml(ansiLog);
-            $('#logModalTitle').text('Label Generation Output');
-            $('#logContent').html(html);
-            $('#logModal').css('display', 'flex');
         }
 
         function showTooManyJobsModal(message) {
@@ -1188,41 +1189,6 @@ el.innerHTML = '<i class="fa-solid fa-circle-exclamation" style="color: var(--da
 	    showToast(`Added ${observations.length} observations`);
 	}
 
-	function batchLookupObservations(inputs) { // inputs is an array of jQuery objects
-	    const obsIds = inputs.map($input => $input.val().trim());
-	    
-	    inputs.forEach($input => {
-		$input.siblings('.result').html('<i class="fas fa-spinner fa-spin"></i> Loading...');
-	    });
-
-	    if (obsIds.length === 0) return;
-
-	    $.ajax({
-		url: '/labels/lookup_batch',
-		type: 'POST',
-		data: $.param({ 'obs_ids[]': obsIds }),
-		success: function(resp) {
-		    const items = (resp && resp.items) ? resp.items : [];
-
-		    items.forEach((data, index) => {
-			const $input = inputs[index];
-			if (!$input) return;
-
-			const resultSpan = $input.siblings('.result');
-			const original = data.original_input || data.input || obsIds[index];
-			const resultItem = renderObservationResult(data, original);
-			
-			resultSpan.empty().append(resultItem);
-		    });
-		},
-		error: function() {
-		    inputs.forEach($input => {
-			const resultSpan = $input.siblings('.result');
-			resultSpan.html('<span style="color: var(--danger);"><i class="fas fa-exclamation-circle"></i> Error fetching details</span>');
-		    });
-		}
-	    });
-	}
 
         async function handlePrintStream(btn, format, downloadName, successMsg) {
             const totalObservations = countTotalObservations();

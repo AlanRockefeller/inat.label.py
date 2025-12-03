@@ -29,6 +29,7 @@ next_api_call_time = 0.0
 # Hardening settings
 MAX_OBS_PER_REQUEST = int(os.environ.get('MAX_OBS_PER_REQUEST', '500'))
 MAX_CONCURRENT_JOBS = int(os.environ.get('MAX_CONCURRENT_JOBS', '3'))
+FINISHED_JOB_TTL = int(os.environ.get('FINISHED_JOB_TTL', '300')) # Time in seconds to keep finished jobs
 ENABLE_MO_DEBUG = bool(int(os.environ.get('ENABLE_MO_DEBUG', '0')))
 ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS')  # comma-separated list of allowed origins
 
@@ -38,10 +39,40 @@ _jobs_lock = threading.Lock()
 
 def _reap_finished_jobs():
     with _jobs_lock:
-        finished = [job_id for job_id, job in _jobs.items()
-                    if job['proc'].poll() is not None]
-        for job_id in finished:
+        now = time.time()
+        finished_to_reap = []
+        for job_id, job in _jobs.items():
+            if job.get('finished_time'):
+                if now > job['finished_time'] + FINISHED_JOB_TTL:
+                    finished_to_reap.append(job_id)
+            elif job['proc'].poll() is not None:
+                # Process finished, but not yet marked. Mark it now.
+                job['finished_time'] = now
+
+        for job_id in finished_to_reap:
             _jobs.pop(job_id, None)
+
+
+def inat_api_get(url, **kwargs):
+    """A rate-limited GET request helper for the iNaturalist API."""
+    global next_api_call_time
+    with api_lock:
+        now = time.time()
+        if now < next_api_call_time:
+            time.sleep(next_api_call_time - now)
+
+        try:
+            kwargs.setdefault('headers', INAT_HEADERS)
+            kwargs.setdefault('timeout', 20)
+            response = requests.get(url, **kwargs)
+            next_api_call_time = time.time() + 1.0
+            response.raise_for_status()
+            return response
+        except requests.exceptions.RequestException as e:
+            app.logger.exception(e)
+            next_api_call_time = time.time() + 1.0
+            raise e
+
 
 app = Flask(__name__)
 
@@ -152,21 +183,6 @@ def favicon():
     return send_from_directory(os.path.join(app.root_path, 'static'),
                                'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
-@app.route('/labels/lookup', methods=['POST'])
-def lookup():
-    # Backward-compatible single-lookup using the batch implementation
-    obs_input = request.form.get('obs_id')
-    if not obs_input:
-        return jsonify({'error': 'No observation ID provided'}), 400
-    resp = lookup_batch_internal([obs_input])
-    if 'items' in resp and resp['items']:
-        item = resp['items'][0]
-        if 'error' in item:
-            return jsonify({'error': item['error']}), item.get('status', 400)
-        return jsonify(item)
-    return jsonify({'error': 'Lookup failed'}), 500
-
-
 def lookup_batch_internal(obs_inputs):
     # Prepare containers
     results = [{'input': oi} for oi in obs_inputs]
@@ -201,32 +217,22 @@ def lookup_batch_internal(obs_inputs):
         for i in range(0, len(inat_ids), chunk_size):
             chunk = inat_ids[i:i + chunk_size]
             
-            with api_lock:
-                now = time.time()
-                if now < next_api_call_time:
-                    time.sleep(next_api_call_time - now)
-                
-                try:
-                    params = {'id': ','.join(chunk)}
-                    response = requests.get('https://api.inaturalist.org/v1/observations', params=params, headers=INAT_HEADERS, timeout=20)
-                    next_api_call_time = time.time() + 1.0
-                    
-                    response.raise_for_status()
-                    data = response.json()
-                    for r in data.get('results', []):
-                        if 'id' in r:
-                            id_to_result[str(r['id'])] = r
-                except requests.exceptions.RequestException as e:
-                    app.logger.exception(e)
-                    next_api_call_time = time.time() + 1.0
-                    # Apply a generic error to all inat IDs in the failed chunk
-                    msg = f'Error fetching iNaturalist data: {str(e)}'
-                    for inat_id in chunk:
-                        for idx in inat_map_indices.get(inat_id, []):
-                            if 'error' not in results[idx]: # Avoid overwriting previous errors
-                                results[idx]['error'] = msg
-                                results[idx]['status'] = 500
-                    continue
+            try:
+                params = {'id': ','.join(chunk)}
+                response = inat_api_get('https://api.inaturalist.org/v1/observations', params=params)
+                data = response.json()
+                for r in data.get('results', []):
+                    if 'id' in r:
+                        id_to_result[str(r['id'])] = r
+            except requests.exceptions.RequestException as e:
+                # Apply a generic error to all inat IDs in the failed chunk
+                msg = f'Error fetching iNaturalist data: {str(e)}'
+                for inat_id in chunk:
+                    for idx in inat_map_indices.get(inat_id, []):
+                        if 'error' not in results[idx]: # Avoid overwriting previous errors
+                            results[idx]['error'] = msg
+                            results[idx]['status'] = 500
+                continue
 
         # Fill results from the fetched data
         for inat_id in inat_ids:
@@ -316,7 +322,11 @@ def lookup_batch_internal(obs_inputs):
     items = []
     for idx, base in enumerate(results):
         if 'error' in base:
-            items.append({'input': obs_inputs[idx], 'error': base['error']})
+            items.append({
+                'input': obs_inputs[idx],
+                'error': base['error'],
+                'status': base.get('status', 400)
+            })
         else:
             items.append({
                 'original_input': base.get('original_input', obs_inputs[idx]),
@@ -369,8 +379,7 @@ def submit():
                 chunk = inat_ids[i:i+CHUNK]
                 try:
                     params = {'id': ','.join(chunk)}
-                    resp = requests.get('https://api.inaturalist.org/v1/observations', params=params, headers=INAT_HEADERS, timeout=30)
-                    resp.raise_for_status()
+                    resp = inat_api_get('https://api.inaturalist.org/v1/observations', params=params, timeout=30)
                     data = resp.json()
                     for r in data.get('results', []):
                         if 'id' in r:
@@ -443,130 +452,9 @@ def submit():
         return "An internal error occurred while generating the CSV file.", 500
 
 
-@app.route('/labels/print_labels_rtf', methods=['POST'])
-def print_labels_rtf():
-    raw_observations = request.form.getlist('observations[]')
-    omit_qr_codes = request.form.get('omit_qr_codes')
-
-    if not raw_observations:
-        return jsonify({'error': 'No observations provided'}), 400
-
-    inat_ids = []
-    for obs in raw_observations:
-        try:
-            inat_id = get_inat_id(obs)
-            inat_ids.append(inat_id)
-        except ValueError as e:
-            app.logger.warning(str(e))
-            continue
-
-    if not inat_ids:
-        return jsonify({'error': 'No valid observations provided'}), 400
-
-    try:
-        script_path = os.path.join(app.root_path, 'inat.label.py')
-        static_dir = os.path.join(app.root_path, 'static')
-        output_path = os.path.join(static_dir, 'labels.rtf')
-
-        os.makedirs(static_dir, exist_ok=True)
-        if os.path.exists(output_path):
-            os.remove(output_path)
-
-        command = ['python', script_path] + inat_ids + ['--rtf', output_path]
-        if omit_qr_codes:
-            command.append('--no-qr')
-        if request.form.get('minilabel'):
-            command.append('--minilabel')
-        if request.form.get('common_names'):
-            command.append('--common-names')
-        if request.form.get('omit_notes'):
-            command.append('--omit-notes')
-        cmd_logger.info(' '.join(command))
-        app.logger.debug(f"Executing command: {' '.join(command)}")
-
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
-
-        if not os.path.exists(output_path):
-            app.logger.error(f"Labels file not created at {output_path}")
-            return jsonify({'error': 'Failed to generate RTF labels'}), 500
-
-        return jsonify({'download_url': url_for('static', filename='labels.rtf')}), 200
-
-    except subprocess.CalledProcessError as e:
-        app.logger.exception(e)
-        app.logger.error(f"Script execution failed: {str(e)}")
-        app.logger.error(f"Script output: {e.output}")
-        app.logger.error(f"Script error output: {e.stderr}")
-        return jsonify({'error': f'Script execution failed: {str(e)}'}), 500
-    except Exception as e:
-        app.logger.exception(e)
-        app.logger.error(f"An error occurred: {str(e)}", exc_info=True)
-        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
-
-
-@app.route('/labels/print_labels_pdf', methods=['POST'])
-def print_labels_pdf():
-    raw_observations = request.form.getlist('observations[]')
-    omit_qr_codes = request.form.get('omit_qr_codes')
-    if not raw_observations:
-        return jsonify({'error': 'No observations provided'}), 400
-
-    inat_ids = []
-    for obs in raw_observations:
-        try:
-            inat_id = get_inat_id(obs)
-            inat_ids.append(inat_id)
-        except ValueError as e:
-            app.logger.warning(str(e))
-            continue
-
-    if not inat_ids:
-        return jsonify({'error': 'No valid observations provided'}), 400
-
-    try:
-        script_path = os.path.join(app.root_path, 'inat.label.py')
-        static_dir = os.path.join(app.root_path, 'static')
-        output_path = os.path.join(static_dir, 'labels.pdf')
-
-        os.makedirs(static_dir, exist_ok=True)
-        if os.path.exists(output_path):
-            os.remove(output_path)
-
-        command = ['python', script_path] + inat_ids + ['--pdf', output_path]
-        if omit_qr_codes:
-            command.append('--no-qr')
-        if request.form.get('minilabel'):
-            command.append('--minilabel')
-        if request.form.get('common_names'):
-            command.append('--common-names')
-        if request.form.get('omit_notes'):
-            command.append('--omit-notes')
-        cmd_logger.info(' '.join(command))
-        app.logger.debug(f"Executing command: {' '.join(command)}")
-
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
-
-        if not os.path.exists(output_path):
-            app.logger.error(f"Labels PDF not created at {output_path}")
-            return jsonify({'error': 'Failed to generate PDF labels'}), 500
-
-        return jsonify({'download_url': url_for('static', filename='labels.pdf'), 'log': result.stdout}), 200
-    except subprocess.CalledProcessError as e:
-        app.logger.exception(e)
-        app.logger.error(f"Script execution failed: {str(e)}")
-        app.logger.error(f"Script output: {e.output}")
-        app.logger.error(f"Script error output: {e.stderr}")
-        return jsonify({'error': f'Script execution failed: {str(e)}'}), 500
-    except Exception as e:
-        app.logger.exception(e)
-        app.logger.error(f"An error occurred: {str(e)}", exc_info=True)
-        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
-
-
 # Streaming printing support
 @app.route('/labels/print_start', methods=['POST'])
 def print_start():
-    _reap_finished_jobs()  # clean out any completed jobs
     fmt = (request.form.get('format') or 'rtf').lower()
     if fmt not in ('rtf', 'pdf'):
         app.logger.warning(f"print_start: Invalid format requested: {fmt}")
@@ -654,10 +542,23 @@ def print_start():
 @app.route('/labels/print_stream')
 def print_stream():
     job_id = request.args.get('job_id')
+
     with _jobs_lock:
         if not job_id or job_id not in _jobs:
-            return jsonify({'error': 'Invalid job id'}), 400
-
+            # Job is already gone, possibly reaped.
+            # Return an immediate SSE 'done' event with an error.
+            def generate_reaped_error():
+                error_payload = json.dumps({
+                    'success': False,
+                    'error': 'Job not found. It may have been completed and cleaned up.',
+                    'exit_code': -1,
+                })
+                yield f"event: done\ndata: {error_payload}\n\n"
+            return app.response_class(
+                generate_reaped_error(),
+                mimetype='text/event-stream',
+                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
+            )
         job = _jobs[job_id]
         proc = job['proc']
         output_path = job['output_path']
@@ -718,7 +619,8 @@ def print_stream():
                 app.logger.debug(f"Error closing stdout: {e}")
 
             with _jobs_lock:
-                _jobs.pop(job_id, None)
+                if job_id in _jobs:
+                    _jobs[job_id]['finished_time'] = time.time()
 
     return app.response_class(
         generate(),
@@ -760,13 +662,11 @@ def find_observations():
         taxon_id = int(taxon_input)
     else:
         try:
-            resp = requests.get(
+            resp = inat_api_get(
                 'https://api.inaturalist.org/v1/taxa',
                 params={'q': taxon_input, 'per_page': 1},
-                headers=INAT_HEADERS,
                 timeout=15,
             )
-            resp.raise_for_status()
             tdata = resp.json()
             if tdata.get('results'):
                 taxon_id = tdata['results'][0].get('id')
@@ -796,8 +696,7 @@ def find_observations():
             if last_id > 0:
                 params['id_above'] = last_id
 
-            resp = requests.get('https://api.inaturalist.org/v1/observations', params=params, headers=INAT_HEADERS, timeout=30)
-            resp.raise_for_status()
+            resp = inat_api_get('https://api.inaturalist.org/v1/observations', params=params, timeout=30)
             data = resp.json()
             results = data.get('results', [])
             if not results:
@@ -867,5 +766,16 @@ def todo():
             todos = [line.strip() for line in f.readlines()]
     return render_template('todo.html', todos=todos)
 
+# Start a background thread to reap finished jobs
+def _reaper_thread():
+    while True:
+        time.sleep(60)
+        _reap_finished_jobs()
+
+reaper = threading.Thread(target=_reaper_thread, daemon=True)
+reaper.start()
+
 if __name__ == '__main__':
-    app.run(debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true')
+    # Only for local dev; never auto-enable from env
+    app.run(debug=False)
+
