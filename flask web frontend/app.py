@@ -34,7 +34,14 @@ ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS')  # comma-separated list of a
 
 # In-memory job store for streaming print jobs
 _jobs = {}
+_jobs_lock = threading.Lock()
 
+def _reap_finished_jobs():
+    with _jobs_lock:
+        finished = [job_id for job_id, job in _jobs.items()
+                    if job['proc'].poll() is not None]
+        for job_id in finished:
+            _jobs.pop(job_id, None)
 
 app = Flask(__name__)
 
@@ -353,7 +360,6 @@ def submit():
 
         # Partition into iNat and MO
         inat_ids = [str(x) for x in resolved if not (isinstance(x, str) and x.upper().startswith('MO'))]
-        mo_ids = [str(x) for x in resolved if isinstance(x, str) and x.upper().startswith('MO')]
 
         # Batch fetch iNat observations in chunks
         id_to_inat = {}
@@ -560,6 +566,7 @@ def print_labels_pdf():
 # Streaming printing support
 @app.route('/labels/print_start', methods=['POST'])
 def print_start():
+    _reap_finished_jobs()  # clean out any completed jobs
     fmt = (request.form.get('format') or 'rtf').lower()
     if fmt not in ('rtf', 'pdf'):
         app.logger.warning(f"print_start: Invalid format requested: {fmt}")
@@ -573,10 +580,11 @@ def print_start():
     if len(raw_observations) > MAX_OBS_PER_REQUEST:
         app.logger.warning(f"print_start: Too many observations requested: {len(raw_observations)}, max is {MAX_OBS_PER_REQUEST}")
         return jsonify({'error': f'Too many observations in one request (max {MAX_OBS_PER_REQUEST})'}), 400
-    if len(_jobs) >= MAX_CONCURRENT_JOBS:
-        error_message = f'Too many concurrent jobs ({len(_jobs)}), max is {MAX_CONCURRENT_JOBS}. Please try again shortly.'
-        app.logger.warning(f"print_start: {error_message}")
-        return jsonify({'error': error_message}), 429
+    with _jobs_lock:
+        if len(_jobs) >= MAX_CONCURRENT_JOBS:
+            error_message = f'Too many concurrent jobs ({len(_jobs)}), max is {MAX_CONCURRENT_JOBS}. Please try again shortly.'
+            app.logger.warning(f"print_start: {error_message}")
+            return jsonify({'error': error_message}), 429
 
     inat_ids = []
     for obs in raw_observations:
@@ -628,14 +636,17 @@ def print_start():
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=1,        # line-buffered
-        text=False        # raw bytes; we'll decode ourselves
+        text=True,
+        encoding='utf-8',
+        errors='replace',
     )
 
-    _jobs[job_id] = {
-        'proc': proc,
-        'output_path': output_path,
-        'filename': filename,
-    }
+    with _jobs_lock:
+        _jobs[job_id] = {
+            'proc': proc,
+            'output_path': output_path,
+            'filename': filename,
+        }
 
     return jsonify({'job_id': job_id})
 
@@ -643,13 +654,13 @@ def print_start():
 @app.route('/labels/print_stream')
 def print_stream():
     job_id = request.args.get('job_id')
-    if not job_id or job_id not in _jobs:
-        return jsonify({'error': 'Invalid job id'}), 400
+    with _jobs_lock:
+        if not job_id or job_id not in _jobs:
+            return jsonify({'error': 'Invalid job id'}), 400
 
-    job = _jobs[job_id]
-    proc = job['proc']
-    output_path = job['output_path']
-    filename = job['filename']
+        job = _jobs[job_id]
+        proc = job['proc']
+        output_path = job['output_path']
 
     rel_path = os.path.relpath(
         output_path,
@@ -660,9 +671,8 @@ def print_stream():
     def generate():
         try:
             # Stream already-written and future output
-            for raw in iter(proc.stdout.readline, b''):
-                line = raw.decode('utf-8', 'replace').rstrip('\n')
-
+            for line in iter(proc.stdout.readline, ''):
+                line = line.rstrip('\n')
                 # Small debug hook if you want:
                 # app.logger.debug(f"SSE log line: {line!r}")
 
@@ -692,16 +702,23 @@ def print_stream():
 
         finally:
             try:
-                if proc.stdout:
-                    proc.stdout.close()
-            except Exception:
-                pass
-            try:
                 if proc.poll() is None:
                     proc.terminate()
-            except Exception:
-                pass
-            _jobs.pop(job_id, None)
+                    try:
+                        proc.wait(timeout=5)
+                    except Exception as e:
+                        app.logger.debug(f"Error waiting for process termination: {e}")
+                        pass
+            except Exception as e:
+                app.logger.debug(f"Error terminating process: {e}")
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except Exception as e:
+                app.logger.debug(f"Error closing stdout: {e}")
+
+            with _jobs_lock:
+                _jobs.pop(job_id, None)
 
     return app.response_class(
         generate(),
