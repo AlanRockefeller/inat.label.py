@@ -1811,6 +1811,11 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    # User can not use 'Notes" as title field
+    if args.title == "Notes":
+        parser.error("argument --title: 'Notes' field can not be used as title")
+        sys.exit(1)
+
     # Define rtf_mode and pdf_mode based on whether --rtf or --pdf argument is provided
     rtf_mode = bool(args.rtf)
     pdf_mode = bool(args.pdf)
