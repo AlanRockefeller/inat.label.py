@@ -1238,6 +1238,10 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, show_common_na
     if voucher_numbers:
         label.append(("Voucher Number(s)", voucher_numbers))
 
+    accession_number = get_field_value(observation_data, 'Accession Number')
+    if accession_number:
+        label.append(("Accession Number", accession_number))
+
     mushroom_observer_url = get_field_value(observation_data, 'Mushroom Observer URL')
     # Avoid duplicating the MO URL if this is a Mushroom Observer observation
     if mushroom_observer_url and not (isinstance(obs_number, str) and obs_number.startswith("MO")):
@@ -1267,7 +1271,7 @@ def find_non_ascii_chars(labels):
                         non_ascii_chars.add(char)
     return non_ascii_chars
 
-def create_pdf_content(labels, filename, no_qr=False):
+def create_pdf_content(labels, filename, no_qr=False, title_field=None):
     """Render labels into a two-column PDF at the given filename.
 
     Expects labels as an iterable of (label_fields, iconic_taxon_name). Adds a QR code when a URL is present.
@@ -1309,6 +1313,13 @@ def create_pdf_content(labels, filename, no_qr=False):
         fontSize=12,
         leading=14
     )
+    title_normal_style = ParagraphStyle(
+        'TitleNormal',
+        parent=styles['Title'],
+        fontName=base_font,
+        fontSize=16,
+        leading=18,
+    )   
     story = []
 
     for label, iconic_taxon_name in labels:
@@ -1318,12 +1329,22 @@ def create_pdf_content(labels, filename, no_qr=False):
             (value for field, value in label
              if field in ("iNaturalist URL", "Mushroom Observer URL")),
             None)
+        
+        if title_field:
+            for field, value in label:
+                if field == title_field:
+                    p = Paragraph(f"<b>{value}</b>", title_normal_style)
+                    pre_notes_content.append(p)
+                    pre_notes_content.append(Spacer(1, 0.1*inch))
+                    break
 
         for field, value in label:
             if field == "Notes":
                 notes_value = value
                 continue
-            if field == "Scientific Name":
+            if title_field and field == title_field:
+                continue
+            elif field == "Scientific Name":
                 sci_html = value.replace('__ITALIC_START__','<i>').replace('__ITALIC_END__','</i>')
                 p = Paragraph(f"<b>{field}:</b> {sci_html}", custom_normal_style)
                 pre_notes_content.append(p)
@@ -1778,6 +1799,7 @@ def main():
     parser.add_argument("--no-qr", action="store_true", help="Omit QR code from PDF and RTF labels")
     parser.add_argument("--minilabel", action="store_true", help="Generate minilabels with only observation number and QR code")
     parser.add_argument("--omit-notes", action="store_true", help="Omit the Notes field from all labels")
+    parser.add_argument("--title", type=str, default=None, help="Field to use as title  (only for PDF output)")
 
     args = parser.parse_args()
 
@@ -1933,7 +1955,7 @@ def main():
                 else:
                     print(f"RTF file created: {basename}", flush=True)
             elif pdf_mode:
-                create_pdf_content(labels, args.pdf, no_qr=args.no_qr)
+                create_pdf_content(labels, args.pdf, no_qr=args.no_qr, title_field=args.title)
                 try:
                     size_bytes = os.path.getsize(args.pdf)
                     size_kb = (size_bytes + 1023) // 1024
