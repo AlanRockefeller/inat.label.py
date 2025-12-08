@@ -1319,6 +1319,7 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None):
         fontName=base_font,
         fontSize=16,
         leading=18,
+        alignment=1  # Centered
     )   
     story = []
 
@@ -1333,6 +1334,8 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None):
         if title_field:
             for field, value in label:
                 if field == title_field:
+                    title_value = value.replace('__BOLD_START__', '').replace('__BOLD_END__', '')
+                    title_value = title_value.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
                     p = Paragraph(f"<b>{value}</b>", title_normal_style)
                     pre_notes_content.append(p)
                     pre_notes_content.append(Spacer(1, 0.1*inch))
