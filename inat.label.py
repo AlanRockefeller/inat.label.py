@@ -1334,9 +1334,9 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None):
         if title_field:
             for field, value in label:
                 if field == title_field:
-                    title_value = value.replace('__BOLD_START__', '').replace('__BOLD_END__', '')
+                    title_value = value.replace('__BOLD_START__', '<b>').replace('__BOLD_END__', '</b>')
                     title_value = title_value.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
-                    p = Paragraph(f"<b>{value}</b>", title_normal_style)
+                    p = Paragraph(f"<b>{title_value}</b>", title_normal_style)
                     pre_notes_content.append(p)
                     pre_notes_content.append(Spacer(1, 0.1*inch))
                     break
@@ -1802,7 +1802,7 @@ def main():
     parser.add_argument("--no-qr", action="store_true", help="Omit QR code from PDF and RTF labels")
     parser.add_argument("--minilabel", action="store_true", help="Generate minilabels with only observation number and QR code")
     parser.add_argument("--omit-notes", action="store_true", help="Omit the Notes field from all labels")
-    parser.add_argument("--title", type=str, default=None, help="Field to use as title  (only for PDF output)")
+    parser.add_argument("--title", type=str, default=None, help="Field to use as title (only for PDF output)")
 
     args = parser.parse_args()
 
