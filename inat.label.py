@@ -1276,18 +1276,39 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None):
 
     Expects labels as an iterable of (label_fields, iconic_taxon_name). Adds a QR code when a URL is present.
     """
-    doc = BaseDocTemplate(filename, pagesize=letter, leftMargin=0.25*inch, rightMargin=0.25*inch, topMargin=0.25*inch, bottomMargin=0.25*inch)
+    doc = BaseDocTemplate(filename, 
+                          pagesize=letter, 
+                          leftMargin=0.25*inch, 
+                          rightMargin=0.25*inch, 
+                          topMargin=0.12*inch, 
+                          bottomMargin=0.12*inch)
 
     # Two columns
-    column_gap = 0.25 * inch
+    column_gap = 0.5 * inch # Must be twice the margin to cut labels that are the same size
     frame_width = (doc.width - column_gap) / 2
     frame_height = doc.height
 
     doc.addPageTemplates([
         PageTemplate(id='TwoCol',
                      frames=[
-                         Frame(doc.leftMargin, doc.bottomMargin, frame_width, frame_height, id='col1', topPadding=0, bottomPadding=0, leftPadding=0, rightPadding=0),
-                         Frame(doc.leftMargin + frame_width + column_gap, doc.bottomMargin, frame_width, frame_height, id='col2', topPadding=0, bottomPadding=0, leftPadding=0, rightPadding=0),
+                         Frame(doc.leftMargin, 
+                               doc.bottomMargin, 
+                               frame_width, 
+                               frame_height, 
+                               id='col1', 
+                               topPadding=0, 
+                               bottomPadding=0, 
+                               leftPadding=0, 
+                               rightPadding=0),
+                         Frame(doc.leftMargin + frame_width + column_gap, 
+                               doc.bottomMargin, 
+                               frame_width, 
+                               frame_height, 
+                               id='col2', 
+                               topPadding=0, 
+                               bottomPadding=0, 
+                               leftPadding=0, 
+                               rightPadding=0),
                      ])
     ])
 
