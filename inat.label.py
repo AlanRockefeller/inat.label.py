@@ -1955,6 +1955,16 @@ def main():
             elif status == 'err' and payload:
                 failed.append(payload)
 
+    # Sort labels by iNaturalist Observation Number by default, or by specified title field
+    sort_param = ("iNaturalist Observation Number", "Mushroom Observer Number")
+    if args.title:
+        sort_param = (args.title,)
+    sorted_labels = sorted(labels, 
+                           key=lambda x: next((int(y[1][len(y[1].rstrip('0123456789')):] 
+                                                   if y[1][len(y[1].rstrip('0123456789')):].isdigit() else 0) 
+                                               for y in x[0] if y[0] in sort_param), 0))
+    labels = sorted_labels
+
     if not args.find_ca:
         if labels:
             if args.minilabel:
