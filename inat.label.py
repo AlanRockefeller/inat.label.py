@@ -1959,10 +1959,6 @@ def main():
     sort_param = ("iNaturalist Observation Number", "Mushroom Observer Number")
     if args.title:
         sort_param = (args.title,)
-    #sorted_labels = sorted(labels, 
-    #                       key=lambda x: next((int(y[1].rsplit('-', 1)[-1] 
-    #                                               if y[1].rsplit('-', 1)[-1].isdigit() else 0) 
-    #                                          for y in x[0] if y[0] in sort_param), 0))
     sorted_labels = sorted(labels, 
                            key=lambda x: next((int(y[1][len(y[1].rstrip('0123456789')):] 
                                                    if y[1][len(y[1].rstrip('0123456789')):].isdigit() else 0) 
