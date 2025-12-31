@@ -1824,7 +1824,7 @@ def main():
     parser.add_argument("--minilabel", action="store_true", help="Generate minilabels with only observation number and QR code")
     parser.add_argument("--omit-notes", action="store_true", help="Omit the Notes field from all labels")
     parser.add_argument("--title", type=str, default=None, help="Field to use as title (only for PDF output)")
-    parser.add_argument("--stack_order", action="store_true", help="Print the labels in stack order")
+    parser.add_argument("--stack-order", action="store_true", help="Print the labels in stack order")
 
     args = parser.parse_args()
 
@@ -1970,12 +1970,17 @@ def main():
         stacked_labels = []
         m = len(labels) #number of labels
         n = m // 6 if m % 6 == 0 else (m // 6) + 1 #number of pages
-        #For this we will addume 2 columns of 3 labels each per page
-        #This will produce duplicate labels at the end if not multiple of 6, but that is needed to fill the pages
+        #For this we will assume 2 columns of 3 labels each per page
+        # Reorders so that cutting columns, stacking left-on-right, then cutting
+        # from bottom yields labels in original order.
         for i in range(n * 6):
+            # Map output position i to source index j:
+            # - (i % 6) % 3: row within page (0-2)
+            # - (i % 6) // 3: column within page (0-1)
+            # - i // 6: which page
             j = n * (2 * ((i % 6) % 3) + (i % 6) // 3) + i // 6
             if j >= m:
-                j = m - 1
+                j = m - 1 #re-use last label as spacer to fill pages
             stacked_labels.append(labels[j])
         labels = stacked_labels
 
