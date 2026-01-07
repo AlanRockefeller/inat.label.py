@@ -1021,7 +1021,7 @@ def format_scientific_name(observation_data):
     # Construct: italicize genus and epithet, not the rank label
     return f"__ITALIC_START__{genus}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
 
-def create_inaturalist_label(observation_data, iconic_taxon_name, show_common_names=False, omit_notes=False, debug=False):
+def create_inaturalist_label(observation_data, iconic_taxon_name, show_common_names=False, omit_notes=False, debug=False, custom_add=None, custom_remove=None):
     """Build a label record from observation data.
 
     Returns (label_fields, iconic_taxon_name) where label_fields is a list of (field, value) tuples
@@ -1254,6 +1254,15 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, show_common_na
         # Convert HTML in notes field to text
         notes_parsed = parse_html_notes(notes)
         label.append(("Notes", notes_parsed))
+
+    if custom_add:
+        for field_name in custom_add:
+            value = get_field_value(observation_data, field_name)
+            if value:
+                label.append((field_name, value))
+
+    if custom_remove:
+        label = [item for item in label if item[0] not in custom_remove]
 
     return label, iconic_taxon_name
 
@@ -1803,8 +1812,41 @@ def main():
     parser.add_argument("--minilabel", action="store_true", help="Generate minilabels with only observation number and QR code")
     parser.add_argument("--omit-notes", action="store_true", help="Omit the Notes field from all labels")
     parser.add_argument("--title", type=str, default=None, help="Field to use as title (only for PDF output)")
+    parser.add_argument(
+        '--custom',
+        nargs='+',
+        help='Add or remove fields from the default label format. Use "+" to add and "-" to remove. For example: --custom "+My Field" -Observer',
+    )
+    
 
     args = parser.parse_args()
+
+    fields_to_add = []
+    fields_to_remove = []
+    if args.custom:
+        i = 0
+        while i < len(args.custom):
+            arg = args.custom[i]
+            if arg.startswith('+') or arg.startswith('-'):
+                mod = arg[0]
+                field_parts = [arg[1:]]
+                i += 1
+                while i < len(args.custom) and not args.custom[i].startswith('+') and not args.custom[i].startswith('-'):
+                    field_parts.append(args.custom[i])
+                    i += 1
+                
+                field_name = ' '.join(part for part in field_parts if part)
+                if not field_name:
+                    continue
+
+                if mod == '+':
+                    fields_to_add.append(field_name)
+                elif mod == '-':
+                    fields_to_remove.append(field_name)
+            else:
+                print(f"Error: Invalid format for --custom. Field options must start with '+' or '-'. Found: '{arg}'")
+                i += 1
+
 
     # If no arguments are provided, show help and exit
     if len(sys.argv) == 1:
@@ -1903,7 +1945,7 @@ def main():
                 return ('skip', None)
             else:
                 label, updated_iconic_taxon = create_inaturalist_label(
-                    observation_data, iconic_taxon_name, show_common_names=args.common_names, omit_notes=args.omit_notes,debug=args.debug
+                    observation_data, iconic_taxon_name, show_common_names=args.common_names, omit_notes=args.omit_notes,debug=args.debug, custom_add=fields_to_add, custom_remove=fields_to_remove
                 )
                 if label is not None:
                     # Print as soon as the label is created

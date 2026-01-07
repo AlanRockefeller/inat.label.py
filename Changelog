@@ -1,5 +1,9 @@
 # Changelog
 
+# 3.9
+December 3, 2025
+- Per-label customization of which fields appear on the label via the `--custom` option (add/remove default or observation fields without editing the code).
+
 # 3.8
 November 28, 2025
 
