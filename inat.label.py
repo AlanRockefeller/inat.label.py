@@ -1262,7 +1262,8 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, show_common_na
                 label.append((field_name, value))
 
     if custom_remove:
-        label = [item for item in label if item[0] not in custom_remove]
+        remove_set = {n.lower() for n in custom_remove}
+        label = [item for item in label if item[0].lower() not in remove_set]
 
     return label, iconic_taxon_name
 
@@ -1814,8 +1815,7 @@ def main():
     parser.add_argument("--title", type=str, default=None, help="Field to use as title (only for PDF output)")
     parser.add_argument(
         '--custom',
-        nargs='+',
-        help='Add or remove fields from the default label format. Use "+" to add and "-" to remove. For example: --custom "+My Field" -Observer',
+        help='Add or remove fields from the default label format. Use "+" to add and "-" to remove. For example: --custom "+My Field, -Observer"',
     )
     
 
@@ -1824,18 +1824,13 @@ def main():
     fields_to_add = []
     fields_to_remove = []
     if args.custom:
-        i = 0
-        while i < len(args.custom):
-            arg = args.custom[i]
+        custom_items = [item.strip() for item in args.custom.split(',')]
+        for arg in custom_items:
+            if not arg:
+                continue
             if arg.startswith('+') or arg.startswith('-'):
                 mod = arg[0]
-                field_parts = [arg[1:]]
-                i += 1
-                while i < len(args.custom) and not args.custom[i].startswith('+') and not args.custom[i].startswith('-'):
-                    field_parts.append(args.custom[i])
-                    i += 1
-                
-                field_name = ' '.join(part for part in field_parts if part)
+                field_name = arg[1:].strip()
                 if not field_name:
                     continue
 
@@ -1844,8 +1839,8 @@ def main():
                 elif mod == '-':
                     fields_to_remove.append(field_name)
             else:
-                print(f"Error: Invalid format for --custom. Field options must start with '+' or '-'. Found: '{arg}'")
-                i += 1
+                print_error(f"Error: Invalid format for --custom. Field options must start with '+' or '-'. Found: '{arg}'")
+                sys.exit(2)
 
 
     # If no arguments are provided, show help and exit

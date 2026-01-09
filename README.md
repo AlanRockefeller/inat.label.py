@@ -2,7 +2,7 @@
 
 # iNaturalist Herbarium Label Generator version 3.9
 # By Alan Rockefeller
-# December 3, 2025
+# January 7, 2025
 
 
 ## Description
