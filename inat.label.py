@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: November 28, 2025
-Version: 3.8
+Date: January 10, 2026
+Version: 3.9
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -44,9 +44,16 @@ Examples:
 - Generate labels and save to an RTF file:
   ./inat_label.py 150291663 MO2345 --rtf two_labels.rtf
 
+- Generate fungus fair labels from a CSV file:
+  ./inat_label.py --fungusfair labels.csv --pdf out.pdf
+
+- Generate fungus fair labels from iNaturalist observations:
+  ./inat_label.py --fungusfair 150291663 105658809 --pdf out.pdf
+
 Notes:
 - The RTF output is formatted to closely match the style of traditional herbarium labels.
 - It is recommended to print herbarium labels on 100% cotton cardstock with an inkjet printer for maximum longevity.
+- In fungus fair mode (--fungusfair), CSV files provided as arguments will be parsed for batch label generation.
 
 Dependencies:
 - requests
@@ -68,10 +75,12 @@ import argparse
 import colorama
 from colorama import Fore, Style
 import datetime
+import html
 import os
 import re
 import sys
 import time
+import csv
 import unicodedata
 import random
 from io import BytesIO
@@ -1267,6 +1276,70 @@ def create_inaturalist_label(observation_data, iconic_taxon_name, show_common_na
 
     return label, iconic_taxon_name
 
+def create_fungus_fair_label(observation_data, iconic_taxon_name, show_common_names=False, debug=False):
+    """Build a minimal label record for fungus fair usage (Sci Name, Common Name, Habitat, Spore Print, Edibility)."""
+    if observation_data is None:
+        return None, None
+    
+    taxon = observation_data.get('taxon', {})
+    # Only use the preferred common name; do not fall back to scientific name
+    common_name = taxon.get('preferred_common_name') or ''
+    
+    # Use the name directly from observation data to avoid API calls in format_scientific_name
+    if not taxon:
+        scientific_name = 'Not available'
+        raw_scientific_name = 'Not available'
+    else:
+        raw_scientific_name = taxon.get('name', 'Not available')
+        scientific_name = f"__ITALIC_START__{raw_scientific_name}__ITALIC_END__"
+        # Simple formatting for common ranks without API lookups
+        for rank_marker in [' var. ', ' subsp. ', ' f. ', ' sect. ', ' subg. ']:
+            if rank_marker in scientific_name:
+                scientific_name = scientific_name.replace(rank_marker, f"__ITALIC_END__{rank_marker}__ITALIC_START__")
+
+    label = [
+        ("Scientific Name", scientific_name)
+    ]
+
+    scientific_name_plain = raw_scientific_name
+    scientific_name_parts = scientific_name_plain.lower().split()
+    common_name_normalized = normalize_string(common_name) if common_name else ''
+    
+    is_redundant = False
+    if common_name:
+        if common_name_normalized == normalize_string(scientific_name_plain):
+            is_redundant = True
+        else:
+            for part in scientific_name_parts:
+                if part.endswith('.') or part in {'complex'}:
+                    continue
+                if normalize_string(part) == common_name_normalized:
+                    is_redundant = True
+                    break
+    
+    if show_common_names and common_name and not is_redundant:
+        label.append(("Common Name", common_name))
+
+    # Add custom fields if they exist
+    habitat = get_field_value(observation_data, 'Habitat')
+    if habitat:
+        label.append(("Habitat", habitat))
+
+    spore_print = get_field_value(observation_data, 'Spore Print')
+    if not spore_print:
+        spore_print = get_field_value(observation_data, 'Spore Print Color')
+    if spore_print:
+        label.append(("Spore Print", spore_print))
+        
+    edibility = get_field_value(observation_data, 'Edibility')
+    norm = normalize_edibility(edibility) if edibility else None
+    if norm:
+        label.append(("Edibility", norm))
+    else:
+        label.append(("Edibility", "unknown"))
+
+    return label, iconic_taxon_name
+
 def find_non_ascii_chars(labels):
     """Find all non-ASCII characters in the label data, ignoring certain common symbols."""
     non_ascii_chars = set()
@@ -1281,11 +1354,18 @@ def find_non_ascii_chars(labels):
                         non_ascii_chars.add(char)
     return non_ascii_chars
 
-def create_pdf_content(labels, filename, no_qr=False, title_field=None):
+def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_fair_mode=False):
     """Render labels into a two-column PDF at the given filename.
 
     Expects labels as an iterable of (label_fields, iconic_taxon_name). Adds a QR code when a URL is present.
     """
+    if fungus_fair_mode:
+        try:
+            from PIL import Image as PILImage
+        except ImportError:
+            print_error("Error: PIL (Pillow) is required for fungus fair mode image handling.")
+            sys.exit(1)
+
     doc = BaseDocTemplate(filename, pagesize=letter, leftMargin=0.25*inch, rightMargin=0.25*inch, topMargin=0.25*inch, bottomMargin=0.25*inch)
 
     # Two columns
@@ -1334,109 +1414,214 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None):
     story = []
 
     for label, iconic_taxon_name in labels:
-        pre_notes_content = []
-        notes_value = ""
-        qr_url = next(
-            (value for field, value in label
-             if field in ("iNaturalist URL", "Mushroom Observer URL")),
-            None)
-        
-        if title_field:
+        label_content = []
+        notes_value = "" # Default if not found
+
+        if fungus_fair_mode:
+            sci_name = next((v for f, v in label if f == "Scientific Name"), "")
+            common_name = next((v for f, v in label if f == "Common Name"), "")
+            habitat = next((v for f, v in label if f == "Habitat"), "")
+            spore_print = next((v for f, v in label if f == "Spore Print"), "")
+            edibility = next((v for f, v in label if f == "Edibility"), "")
+
+            ff_center_style = ParagraphStyle(
+                'FFCenter',
+                parent=styles['Normal'],
+                fontName=base_font,
+                fontSize=18,
+                leading=22,
+                alignment=1 # Center
+            )
+
+            ff_sci_style = ParagraphStyle(
+                'FFSci',
+                parent=ff_center_style,
+                fontSize=22,
+                leading=26
+            )
+
+            # Scientific Name
+            # Escape first, then restore our internal markers
+            sci_name_safe = html.escape(sci_name)
+            sci_name_html = sci_name_safe.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
+            label_content.append(Paragraph(f"<b>{sci_name_html}</b>", ff_sci_style))
+
+            if common_name:
+                common_name_safe = html.escape(common_name)
+                label_content.append(Paragraph(f"<b>{common_name_safe}</b>", ff_center_style))
+            
+            # Removed Spacer to move everything up (part of "quarter inch higher" request)
+            # label_content.append(Spacer(1, 0.2*inch))
+
+            # Details
+            details_text = []
+            if habitat:
+                details_text.append(f"<b>Habitat:</b> {html.escape(habitat)}")
+            if spore_print:
+                details_text.append(f"<b>Spore Print:</b> {html.escape(spore_print)}")
+            if edibility:
+                details_text.append(f"<b>Edibility:</b> {html.escape(get_pretty_edibility(edibility))}")
+            
+            details_p = None
+            if details_text:
+                details_p = Paragraph("<br/>".join(details_text), custom_normal_style)
+
+            # Image
+            img_obj = None
+            if edibility:
+                script_dir = os.path.dirname(os.path.realpath(__file__))
+                img_name = os.path.join(script_dir, "images", f"{edibility.lower()}.jpg")
+                if os.path.exists(img_name):
+                    try:
+                        with PILImage.open(img_name) as pil_img:
+                            iw, ih = pil_img.size
+                            aspect = iw / ih
+                            h = 1.0 * inch
+                            w = h * aspect
+                            max_w = frame_width * 0.4
+                            if w > max_w:
+                                w = max_w
+                                h = w / aspect
+                            img_obj = ReportLabImage(img_name, width=w, height=h)
+                    except Exception as e:
+                        print_error(f"Error loading image {img_name}: {e}")
+                else:
+                    pass
+
+            if img_obj:
+                # Add 0.5 inch to width to accommodate the shift left
+                col2_width = img_obj.drawWidth + 0.6*inch 
+                col1_width = frame_width - col2_width
+                if col1_width < 1*inch:
+                    col1_width = frame_width / 2
+                    col2_width = frame_width / 2
+                
+                # If details_p is None, use an empty Paragraph
+                table_details = details_p if details_p else Paragraph("", custom_normal_style)
+                table = Table([[table_details, img_obj]], colWidths=[col1_width, col2_width])
+                table.setStyle(TableStyle([
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                    ('ALIGN', (1,0), (1,0), 'RIGHT'),
+                    ('LEFTPADDING', (0,0), (-1,-1), 0),
+                    ('RIGHTPADDING', (0,0), (0,0), 0), # No padding on text cell
+                    ('RIGHTPADDING', (1,0), (1,0), 0.5*inch), # 0.5 inch padding on image cell to move it left
+                    ('TOPPADDING', (0,0), (0,0), 0.25*inch), # Push text down 0.25 inch
+                    ('TOPPADDING', (1,0), (1,0), 0), # Keep image at top
+                    ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+                ]))
+                label_content.append(table)
+            elif details_p:
+                label_content.append(details_p)
+
+            label_content.append(Spacer(1, 0.75*inch))
+            
+            # Simple height estimate for fungus fair mode
+            # 3 lines of header (22pt+), 4 lines of details (14pt), Image (1 inch), Spacer (0.75 inch)
+            height_estimate = 3 * 26 + 4 * 14 + 1.0 * 72 + 0.75 * 72 
+            
+        else:
+            pre_notes_content = []
+            qr_url = next(
+                (value for field, value in label
+                 if field in ("iNaturalist URL", "Mushroom Observer URL")),
+                None)
+            
+            if title_field:
+                for field, value in label:
+                    if field == title_field:
+                        title_value = value.replace('__BOLD_START__', '<b>').replace('__BOLD_END__', '</b>')
+                        title_value = title_value.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
+                        p = Paragraph(f"<b>{title_value}</b>", title_normal_style)
+                        pre_notes_content.append(p)
+                        pre_notes_content.append(Spacer(1, 0.1*inch))
+                        break
+
             for field, value in label:
-                if field == title_field:
-                    title_value = value.replace('__BOLD_START__', '<b>').replace('__BOLD_END__', '</b>')
-                    title_value = title_value.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
-                    p = Paragraph(f"<b>{title_value}</b>", title_normal_style)
+                if field == "Notes":
+                    notes_value = value
+                    continue
+                if title_field and field == title_field:
+                    continue
+                elif field == "Scientific Name":
+                    sci_html = value.replace('__ITALIC_START__','<i>').replace('__ITALIC_END__','</i>')
+                    p = Paragraph(f"<b>{field}:</b> {sci_html}", custom_normal_style)
                     pre_notes_content.append(p)
-                    pre_notes_content.append(Spacer(1, 0.1*inch))
-                    break
+                elif field == "iNaturalist URL":
+                    p = Paragraph(f"{value}", custom_normal_style)
+                    pre_notes_content.append(p)
+                else:
+                    p = Paragraph(f"<b>{field}:</b> {value}", custom_normal_style)
+                    pre_notes_content.append(p)
 
-        for field, value in label:
-            if field == "Notes":
-                notes_value = value
-                continue
-            if title_field and field == title_field:
-                continue
-            elif field == "Scientific Name":
-                sci_html = value.replace('__ITALIC_START__','<i>').replace('__ITALIC_END__','</i>')
-                p = Paragraph(f"<b>{field}:</b> {sci_html}", custom_normal_style)
-                pre_notes_content.append(p)
-            elif field == "iNaturalist URL":
-                p = Paragraph(f"{value}", custom_normal_style)
-                pre_notes_content.append(p)
-            else:
-                p = Paragraph(f"<b>{field}:</b> {value}", custom_normal_style)
-                pre_notes_content.append(p)
+            notes_paragraph = None
+            if notes_value:
+                notes_text = notes_value.replace('__BOLD_START__', '<b>').replace('__BOLD_END__', '</b>')
+                notes_text = notes_text.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
+                # Remove the line about the MO to iNat import, as this isn't important on a label since we already include the MO URL
+                notes_text = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', notes_text)
+                # Remove line about the inat to MO import, as this isn't important on a label since we already include the MO URL (added by MO on import)
+                notes_text = re.sub(r'Imported by Mushroom Observer \d{4}-\d{2}-\d{2}', '', notes_text)
+                notes_text = notes_text.replace('\n', '<br/>')
+                notes_paragraph = Paragraph(f"<b>Notes:</b> {notes_text}", custom_normal_style)
 
-        notes_paragraph = None
-        if notes_value:
-            notes_text = notes_value.replace('__BOLD_START__', '<b>').replace('__BOLD_END__', '</b>')
-            notes_text = notes_text.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
-            # Remove the line about the MO to iNat import, as this isn't important on a label since we already include the MO URL
-            notes_text = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', notes_text)
-            # Remove line about the inat to MO import, as this isn't important on a label since we already include the MO URL (added by MO on import)
-            notes_text = re.sub(r'Imported by Mushroom Observer \d{4}-\d{2}-\d{2}', '', notes_text)
-            notes_text = notes_text.replace('\n', '<br/>')
-            notes_paragraph = Paragraph(f"<b>Notes:</b> {notes_text}", custom_normal_style)
+            qr_image = None
+            if qr_url and not no_qr:
+                qr_hex, _ = generate_qr_code(qr_url, minilabel_mode=False)
+                if qr_hex:
+                    qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
+                    qr_image = ReportLabImage(qr_img_data, width=0.75*inch, height=0.75*inch)
 
-        qr_image = None
-        if qr_url and not no_qr:
-            qr_hex, _ = generate_qr_code(qr_url, minilabel_mode=False)
-            if qr_hex:
-                qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
-                qr_image = ReportLabImage(qr_img_data, width=0.75*inch, height=0.75*inch)
+            label_content = pre_notes_content
 
-        label_content = pre_notes_content
-
-        # If notes are long, put QR code below, otherwise to the right
-        if len(notes_value) > 200 and notes_paragraph:
-            label_content.append(notes_paragraph)
-            if qr_image:
-                qr_image.hAlign = 'RIGHT'
-                label_content.append(qr_image)
-        elif notes_paragraph:
-            if qr_image:
+            # If notes are long, put QR code below, otherwise to the right
+            if len(notes_value) > 200 and notes_paragraph:
+                label_content.append(notes_paragraph)
+                if qr_image:
+                    qr_image.hAlign = 'RIGHT'
+                    label_content.append(qr_image)
+            elif notes_paragraph:
+                if qr_image:
+                    label_content.append(Spacer(1, 0.1*inch))
+                    # Set QR image alignment to RIGHT before adding to table
+                    qr_image.hAlign = 'RIGHT'
+                    table_data = [[notes_paragraph, qr_image]]
+                    # Using 1.05*inch instead of 0.85*inch moves QR code 0.2 inches to the left
+                    # This positions the QR code to align with the rightmost text on the label
+                    table = Table(table_data, colWidths=['*', 1.05*inch])
+                    table.setStyle(TableStyle([
+                                                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                                                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                                                ('TOPPADDING', (0, 0), (-1, -1), 0),
+                                                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                                            ]))
+                    label_content.append(table)
+                else:
+                    label_content.append(notes_paragraph)
+            elif qr_image:
                 label_content.append(Spacer(1, 0.1*inch))
-                # Set QR image alignment to RIGHT before adding to table
                 qr_image.hAlign = 'RIGHT'
-                table_data = [[notes_paragraph, qr_image]]
+                # Create a table with a single cell to position the QR code
+                empty_paragraph = Paragraph("", styles['Normal'])
+                table_data = [[empty_paragraph, qr_image]]
                 # Using 1.05*inch instead of 0.85*inch moves QR code 0.2 inches to the left
                 # This positions the QR code to align with the rightmost text on the label
                 table = Table(table_data, colWidths=['*', 1.05*inch])
                 table.setStyle(TableStyle([
-                                            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                                            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-                                            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                                            ('TOPPADDING', (0, 0), (-1, -1), 0),
-                                            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-                                        ]))
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                    ('TOPPADDING', (0, 0), (-1, -1), 0),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                ]))
                 label_content.append(table)
-            else:
-                label_content.append(notes_paragraph)
-        elif qr_image:
-            label_content.append(Spacer(1, 0.1*inch))
-            qr_image.hAlign = 'RIGHT'
-            # Create a table with a single cell to position the QR code
-            empty_paragraph = Paragraph("", styles['Normal'])
-            table_data = [[empty_paragraph, qr_image]]
-            # Using 1.05*inch instead of 0.85*inch moves QR code 0.2 inches to the left
-            # This positions the QR code to align with the rightmost text on the label
-            table = Table(table_data, colWidths=['*', 1.05*inch])
-            table.setStyle(TableStyle([
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 0),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                ('TOPPADDING', (0, 0), (-1, -1), 0),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-            ]))
-            label_content.append(table)
 
-        label_content.append(Spacer(1, 0.25*inch))
-        
-        # Estimate height to prevent layout errors with oversized labels
-        height_estimate = len(pre_notes_content) * 14
-        if notes_paragraph:
-            height_estimate += (notes_value.count('\n') + 1) * 14
+            label_content.append(Spacer(1, 0.25*inch))
+            
+            # Estimate height to prevent layout errors with oversized labels
+            height_estimate = len(pre_notes_content) * 14
+            if notes_paragraph:
+                height_estimate += (notes_value.count('\n') + 1) * 14
 
         if height_estimate > frame_height:
             story.append(KeepInFrame(frame_width, frame_height, label_content, mode='shrink'))
@@ -1559,13 +1744,20 @@ def create_minilabel_pdf_content(labels, filename):
     doc.build(story)
 
 
-def create_rtf_content(labels, no_qr=False):
+def create_rtf_content(labels, no_qr=False, fungus_fair_mode=False):
     """Generate RTF content for the given labels and return it as a string.
 
     - keeps QR code right-justified
     - avoids blank space at the top of the right column in LibreOffice
     - avoids a trailing blank paragraph after the last label
     """
+    if fungus_fair_mode:
+        try:
+            from PIL import Image as PILImage
+        except ImportError:
+            print_error("Error: PIL (Pillow) is required for fungus fair mode image handling.")
+            sys.exit(1)
+
     rtf_header = RTF_HEADER
     rtf_footer = r"}"
 
@@ -1586,100 +1778,205 @@ def create_rtf_content(labels, no_qr=False):
             # start one label, force zero space-after here
             rtf_content += r"{\keep\pard\ql\keepn\sa0 "
 
-            # find url and notes length first
-            qr_url = next(
-                (value for field, value in label
-                 if field in ("iNaturalist URL", "Mushroom Observer URL")),
-                None
-            )
-            notes_value = next((value for field, value in label if field == "Notes"), "")
-            notes_length = len(str(notes_value)) if notes_value else 0
+            if fungus_fair_mode:
+                sci_name = next((v for f, v in label if f == "Scientific Name"), "")
+                common_name = next((v for f, v in label if f == "Common Name"), "")
+                habitat = next((v for f, v in label if f == "Habitat"), "")
+                spore_print = next((v for f, v in label if f == "Spore Print"), "")
+                edibility = next((v for f, v in label if f == "Edibility"), "")
 
-            # body fields
-            for field, value in label:
-                if field == "iNaturalist URL":
-                    rtf_content += escape_rtf(str(value)) + r" \line "
-                elif field == "Mushroom Observer URL":
-                    rtf_content += escape_rtf(str(value)) + r"\line "
-                elif field.startswith("iNat") or field.startswith("iNaturalist") or field.startswith("Mushroom Observer"):
-                    if field.startswith("Mushroom Observer"):
-                        first_chars, rest = field[:2], field[2:]
-                        rtf_content += (
-                            r"{\ul\b " + first_chars + r"}{\scaps\ul\b " + rest + r":} "
-                            + escape_rtf(str(value)) + r"\line "
-                        )
-                    else:
-                        first_char, rest = field[0], field[1:]
-                        rtf_content += (
-                            r"{\ul\b " + first_char + r"}{\scaps\ul\b " + rest + r":} "
-                            + escape_rtf(str(value)) + r"\line "
-                        )
-                elif field == "Scientific Name":
-                    value_rtf = _format_rtf_text(str(value))
-                    rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} " + value_rtf + r"\line "
-                elif field == "Coordinates":
-                    value_rtf = escape_rtf(value)
-                    rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} " + value_rtf + r"\line "
-                elif field == "Notes":
-                    if value:
-                        # strip blank lines out of Notes
-                        lines = str(value).split('\n')
-                        non_blank_lines = [line for line in lines if line.strip()]
-                        value = '\n'.join(non_blank_lines)
+                # Scientific Name - Center, Size 44 (22pt)
+                sci_name_rtf = _format_rtf_text(sci_name)
+                rtf_content += r"\pard\keep\keepn\qc\sa120 {\fs44\b " + sci_name_rtf + r"}\par "
 
-                        rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} "
-                        value_rtf = _format_rtf_text(value)
-                        # MO import cleanup
-                        value_rtf = re.sub(
-                            r'\\line Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.',
-                            '',
-                            value_rtf
-                        )
-                        value_rtf = re.sub(
-                            r'((\\line)\s+\2+\s+\2 Imported|Imported) by Mushroom Observer \d{4}-\d{2}-\d{2}',
-                            '',
-                            value_rtf
-                        )
-                        rtf_content += value_rtf
+                # Common Name - Center, Size 36 (18pt)
+                if common_name:
+                    rtf_content += r"\pard\keep\keepn\qc\sa240 {\fs36\b " + escape_rtf(common_name) + r"}\par "
                 else:
-                    rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} " + escape_rtf(str(value)) + r"\line "
+                    rtf_content += r"\pard\keep\keepn\sa240 \par "
+                
+                # Reset alignment to left for details
+                rtf_content += r"\pard\keep\ql\sa0 "
 
-            # QR code (right aligned)
-            if not no_qr:
-                qr_hex, qr_size = generate_qr_code(qr_url, minilabel_mode=False) if qr_url else (None, None)
-                if qr_hex:
-                    # if we had no notes and we ended with "\line ", drop it so QR sits right under text
-                    if notes_length == 0 and rtf_content.endswith(r"\line "):
-                        rtf_content = rtf_content[:-6]
+                # Details text
+                details_rtf = ""
+                if habitat:
+                    details_rtf += r"{\b Habitat:} " + escape_rtf(habitat) + r"\line "
+                if spore_print:
+                    details_rtf += r"{\b Spore Print:} " + escape_rtf(spore_print) + r"\line "
+                if edibility:
+                    details_rtf += r"{\b Edibility:} " + escape_rtf(get_pretty_edibility(edibility))
+                
+                # Image handling
+                img_hex = None
+                img_dims = None
+                if edibility:
+                    script_dir = os.path.dirname(os.path.realpath(__file__))
+                    img_name = os.path.join(script_dir, "images", f"{edibility.lower()}.jpg")
+                    if os.path.exists(img_name):
+                        try:
+                            with PILImage.open(img_name) as pil_img:
+                                # Convert to RGB if necessary (e.g. for PNGs with transparency)
+                                if pil_img.mode in ('RGBA', 'P'):
+                                    pil_img = pil_img.convert('RGB')
+                                
+                                iw, ih = pil_img.size
+                                aspect = iw / ih
+                                
+                                # Convert to JPEG in memory
+                                buffer = BytesIO()
+                                pil_img.save(buffer, format="JPEG")
+                                img_bytes = buffer.getvalue()
+                                img_hex = binascii.hexlify(img_bytes).decode('utf-8')
+                                
+                                # Layout math (similar to PDF logic)
+                                # Target height 1 inch = 1440 twips
+                                # Max width 40% of col (~2160 twips)
+                                h_twips = 1440
+                                w_twips = int(h_twips * aspect)
+                                max_w_twips = 2160 # Approx 1.5 inch
+                                
+                                if w_twips > max_w_twips:
+                                    w_twips = max_w_twips
+                                    h_twips = int(w_twips / aspect)
+                                
+                                img_dims = (w_twips, h_twips)
 
-                    rtf_content += r"\par\pard\qr\ri360\sb57\sa0 "
-                    qr_width_twips = qr_size[0] * 15
-                    qr_height_twips = qr_size[1] * 15
+                        except Exception as e:
+                            print_error(f"Error processing image {img_name}: {e}")
+
+                # If image exists, use a table or absolute positioning?
+                # RTF tables are simpler. 2 columns: Text | Image
+                if img_hex and img_dims:
+                    # Table def
+                    rtf_content += r"\trowd\trkeep\trgaph108\trleft0" # 108 twips gap
+                    
+                    # Col 1 width (rest of space)
+                    # Col 2 width (image width + padding)
+                    # Assume col width ~5400 twips. 
+                    col2_w = img_dims[0] + 720 # image width + 0.5 inch padding
+                    col1_w = 5400 - col2_w
+                    
+                    rtf_content += r"\cellx" + str(col1_w)
+                    rtf_content += r"\cellx" + str(col1_w + col2_w)
+                    
+                    # Cell 1: Details
+                    rtf_content += r"\pard\intbl " + details_rtf + r"\cell "
+                    
+                    # Cell 2: Image (Right aligned)
+                    rtf_content += r"\pard\intbl\qr "
                     rtf_content += (
-                        r'{\pict\pngblip\picw' + str(qr_width_twips) +
-                        r'\pich' + str(qr_height_twips) +
-                        r'\picwgoal' + str(qr_width_twips) +
-                        r'\pichgoal' + str(qr_height_twips) + r' '
+                        r'{\pict\jpegblip\picw' + str(iw) +
+                        r'\pich' + str(ih) +
+                        r'\picwgoal' + str(img_dims[0]) +
+                        r'\pichgoal' + str(img_dims[1]) + r' '
                     )
-                    rtf_content += split_hex_string(qr_hex, 76)
-                    rtf_content += r'}'
-                    # always just one paragraph after QR so we don't create tall gaps
-                    rtf_content += r"\par"
+                    rtf_content += split_hex_string(img_hex, 76)
+                    rtf_content += r'}\cell '
+                    rtf_content += r"\row "
+                    
                 else:
-                    # no QR - just end paragraph cleanly
-                    rtf_content += r"\par"
+                    # No image, just dump text
+                    rtf_content += details_rtf + r"\par "
+
             else:
-                # no QR – just end paragraph cleanly
-                rtf_content += r"\par"
+                # Standard Label Logic
+                # find url and notes length first
+                qr_url = next(
+                    (value for field, value in label
+                     if field in ("iNaturalist URL", "Mushroom Observer URL")),
+                    None
+                )
+                notes_value = next((value for field, value in label if field == "Notes"), "")
+                notes_length = len(str(notes_value)) if notes_value else 0
+
+                # body fields
+                for field, value in label:
+                    if field == "iNaturalist URL":
+                        rtf_content += escape_rtf(str(value)) + r" \line "
+                    elif field == "Mushroom Observer URL":
+                        rtf_content += escape_rtf(str(value)) + r"\line "
+                    elif field.startswith("iNat") or field.startswith("iNaturalist") or field.startswith("Mushroom Observer"):
+                        if field.startswith("Mushroom Observer"):
+                            first_chars, rest = field[:2], field[2:]
+                            rtf_content += (
+                                r"{\ul\b " + first_chars + r"}{\scaps\ul\b " + rest + r":} "
+                                + escape_rtf(str(value)) + r"\line "
+                            )
+                        else:
+                            first_char, rest = field[0], field[1:]
+                            rtf_content += (
+                                r"{\ul\b " + first_char + r"}{\scaps\ul\b " + rest + r":} "
+                                + escape_rtf(str(value)) + r"\line "
+                            )
+                    elif field == "Scientific Name":
+                        value_rtf = _format_rtf_text(str(value))
+                        rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} " + value_rtf + r"\line "
+                    elif field == "Coordinates":
+                        value_rtf = escape_rtf(value)
+                        rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} " + value_rtf + r"\line "
+                    elif field == "Notes":
+                        if value:
+                            # strip blank lines out of Notes
+                            lines = str(value).split('\n')
+                            non_blank_lines = [line for line in lines if line.strip()]
+                            value = '\n'.join(non_blank_lines)
+
+                            rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} "
+                            value_rtf = _format_rtf_text(value)
+                            # MO import cleanup
+                            value_rtf = re.sub(
+                                r'\\line Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.',
+                                '',
+                                value_rtf
+                            )
+                            value_rtf = re.sub(
+                                r'((\\line)\s+\2+\s+\2 Imported|Imported) by Mushroom Observer \d{4}-\d{2}-\d{2}',
+                                '',
+                                value_rtf
+                            )
+                            rtf_content += value_rtf
+                    else:
+                        rtf_content += r"{\scaps\ul\b " + escape_rtf(field) + r":} " + escape_rtf(str(value)) + r"\line "
+
+                # QR code (right aligned)
+                if not no_qr:
+                    qr_hex, qr_size = generate_qr_code(qr_url, minilabel_mode=False) if qr_url else (None, None)
+                    if qr_hex:
+                        # if we had no notes and we ended with "\line ", drop it so QR sits right under text
+                        if notes_length == 0 and rtf_content.endswith(r"\line "):
+                            rtf_content = rtf_content[:-6]
+
+                        rtf_content += r"\par\pard\qr\ri360\sb57\sa0 "
+                        qr_width_twips = qr_size[0] * 15
+                        qr_height_twips = qr_size[1] * 15
+                        rtf_content += (
+                            r'{\pict\pngblip\picw' + str(qr_width_twips) +
+                            r'\pich' + str(qr_height_twips) +
+                            r'\picwgoal' + str(qr_width_twips) +
+                            r'\pichgoal' + str(qr_height_twips) + r' '
+                        )
+                        rtf_content += split_hex_string(qr_hex, 76)
+                        rtf_content += r'}'
+                        # always just one paragraph after QR so we don't create tall gaps
+                        rtf_content += r"\par"
+                    else:
+                        # no QR - just end paragraph cleanly
+                        rtf_content += r"\par"
+                else:
+                    # no QR – just end paragraph cleanly
+                    rtf_content += r"\par"
 
             # close label group
             rtf_content += r"}"
 
-            # add spacing ONLY between labels, and make it a zero-space paragraph so Writer
-            # doesn’t push a tall blank line to the top of the next column
+            # add spacing ONLY between labels
+            # Fungus fair: 0.75 inch spacing (~1080 twips)
             if idx < total - 1:
-                rtf_content += r"\par\par\pard\sa0\sl0\slmult1 "
-            # if this was the last label, do NOT add another \par — prevents blank after last
+                if fungus_fair_mode:
+                    rtf_content += r"\par\pard\sa540\sl0\slmult1 \par\pard\sa0 " 
+                else:
+                    rtf_content += r"\par\par\pard\sa0\sl0\slmult1 "
 
         rtf_content += rtf_footer
     except Exception as e:
@@ -1773,6 +2070,33 @@ def create_minilabel_rtf_content(labels):
     return rtf_content
 
 
+def normalize_edibility(s):
+    """Normalize edibility string to a canonical set of values."""
+    if not s:
+        return None
+    # Remove non-alpha characters and convert to lowercase
+    t = re.sub(r'[^a-z]', '', s.strip().lower())
+    return {
+        'edible': 'edible',
+        'nonedible': 'nonedible',
+        'inedible': 'nonedible',
+        'poisonous': 'poisonous',
+        'toxic': 'poisonous',
+        'unknown': 'unknown',
+    }.get(t)
+
+def get_pretty_edibility(edibility_value):
+    """Map normalized edibility values to human-friendly display strings."""
+    if not edibility_value:
+        return edibility_value
+    mapping = {
+        'edible': 'Edible',
+        'nonedible': 'Not edible',
+        'poisonous': 'Poisonous',
+        'unknown': 'Unknown'
+    }
+    return mapping.get(edibility_value.lower(), edibility_value)
+
 # Check to see if the observation is in California
 def is_within_california(latitude, longitude):
     """Return True if the point lies within an approximate California bounding box."""
@@ -1797,8 +2121,12 @@ def main():
     
     Updates module-global controls used by API calls (e.g., max wait time and quiet mode), enforces filename extensions for RTF/PDF outputs, and respects API rate/concurrency constraints while fetching data. Prints a final summary of requested, generated, and failed counts with elapsed time; prints per-failure messages to stderr. Exits with an error if no CLI arguments are supplied or if the provided input file cannot be read.
     """
-    parser = argparse.ArgumentParser(description="Create herbarium labels from iNaturalist observation numbers or URLs")
-    parser.add_argument("observation_ids", nargs="*", help="Observation number(s) or URL(s)")
+    parser = argparse.ArgumentParser(
+        description="Create herbarium labels or fungus fair signage from iNaturalist/Mushroom Observer data",
+        epilog="Examples:\n  inat.label.py --fungusfair labels.csv --pdf out.pdf\n  inat.label.py --fungusfair 12345 67890 --pdf out.pdf",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("observation_ids", nargs="*", help="Observation number(s), URL(s), or CSV file(s) (for fungus fair mode)")
     parser.add_argument("--file", metavar="filename", help="File containing observation numbers or URLs (separated by spaces, commas, or newlines)")
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument("--rtf", metavar="filename.rtf", help="Output to RTF file (filename must end with .rtf)")
@@ -1817,6 +2145,12 @@ def main():
         '--custom',
         help='Add or remove fields from the default label format. Use "+" to add and "-" to remove. For example: --custom "+My Field, -Observer"',
     )
+    parser.add_argument("--fungusfair", action="store_true", help="Generate labels for fungus fairs")
+    parser.add_argument("--edibility", choices=['edible', 'nonedible', 'poisonous', 'unknown'], help="Edibility status (fungus fair mode)")
+    parser.add_argument("--scientificname", type=str, help="Scientific name (fungus fair mode)")
+    parser.add_argument("--commonname", type=str, help="Common name (fungus fair mode)")
+    parser.add_argument("--habitat", type=str, help="Habitat (fungus fair mode)")
+    parser.add_argument("--sporeprint", type=str, help="Spore print color (fungus fair mode)")
     
 
     args = parser.parse_args()
@@ -1851,7 +2185,6 @@ def main():
     # User can not use 'Notes" as title field
     if args.title == "Notes":
         parser.error("argument --title: 'Notes' field can not be used as title")
-        sys.exit(1)
 
     # Define rtf_mode and pdf_mode based on whether --rtf or --pdf argument is provided
     rtf_mode = bool(args.rtf)
@@ -1871,6 +2204,10 @@ def main():
         parser.error("argument --pdf: filename must end with .pdf")
 
     observation_ids = args.observation_ids or []
+    
+    # Initialize labels list
+    labels = []
+    failed = []
 
     # Read observation IDs from file if --file is provided
     if args.file:
@@ -1884,12 +2221,98 @@ def main():
             print(f"Error reading file {args.file}: {e}")
             sys.exit(1)
 
+    # Process input for Fungus Fair mode (CSV files)
+    if args.fungusfair:
+        csv_files = [x for x in observation_ids if x.lower().endswith('.csv')]
+        observation_ids = [x for x in observation_ids if not x.lower().endswith('.csv')]
+        
+        for csv_file in csv_files:
+            if not os.path.exists(csv_file):
+                print_error(f"Error: CSV file '{csv_file}' not found.")
+                continue
+                
+            try:
+                with open(csv_file, 'r', encoding='utf-8-sig') as f:
+                    reader = csv.DictReader(f)
+                    header_map = {}
+                    if reader.fieldnames:
+                        for field in reader.fieldnames:
+                            clean_field = field.strip().lower().replace(' ', '').replace('_', '')
+                            header_map[clean_field] = field
+                    
+                    def get_val(row, keys):
+                        for key in keys:
+                            real_key = header_map.get(key)
+                            if real_key and row.get(real_key):
+                                return row[real_key].strip()
+                        return None
+
+                    for line_num, row in enumerate(reader, start=2):
+                        # Skip empty rows (where all values are whitespace or None)
+                        if not any(v.strip() for v in row.values() if v):
+                            continue
+
+                        manual_label = []
+                        sci_name = get_val(row, ['scientificname', 'scientific_name', 'name'])
+                        common_name = get_val(row, ['commonname', 'common_name'])
+                        habitat = get_val(row, ['habitat'])
+                        spore_print = get_val(row, ['sporeprint', 'spore_print'])
+                        edibility = get_val(row, ['edibility'])
+                        
+                        if sci_name:
+                             manual_label.append(("Scientific Name", f"__ITALIC_START__{sci_name}__ITALIC_END__"))
+                        else:
+                            print_error(f"Error on line {line_num}: Missing required value for 'Scientific Name'.")
+                            continue
+
+                        if common_name:
+                            manual_label.append(("Common Name", common_name))
+                        if habitat:
+                            manual_label.append(("Habitat", habitat))
+                        if spore_print:
+                            manual_label.append(("Spore Print", spore_print))
+                        
+                        normalized_edibility = normalize_edibility(edibility) if edibility else None
+                        if normalized_edibility:
+                            manual_label.append(("Edibility", normalized_edibility))
+                        else:
+                            if edibility:
+                                print_error(f"Warning on line {line_num}: Invalid edibility value '{edibility}'. Defaulting to 'unknown'")
+                            manual_label.append(("Edibility", "unknown"))
+                        
+                        labels.append((manual_label, "Fungus"))
+            except Exception as e:
+                print_error(f"Error reading CSV file {csv_file}: {e}")
+
+    # Logic for manual label (no IDs, but fungus fair args)
+    if not observation_ids and args.fungusfair and args.scientificname:
+        # Create a manual label
+        manual_label = []
+        # Mark scientific name for italics if it's manual
+        manual_label.append(("Scientific Name", f"__ITALIC_START__{args.scientificname}__ITALIC_END__"))
+        if args.commonname:
+            manual_label.append(("Common Name", args.commonname))
+        if args.habitat:
+            manual_label.append(("Habitat", args.habitat))
+        if args.sporeprint:
+            manual_label.append(("Spore Print", args.sporeprint))
+        
+        manual_label.append(("Edibility", args.edibility or "unknown"))
+        
+        # Add to labels list
+        labels.append((manual_label, "Fungus"))
+        
+    elif not observation_ids and not labels:
+        # Standard behavior: show help if no IDs, no manual label, and no CSV labels
+        parser.print_help()
+        sys.exit(1)
+
     # Remove empty entries
     observation_ids = [obs for obs in observation_ids if obs]
 
-    labels = []
-    failed = []
-    total_requested = len(observation_ids)
+    # labels list is already initialized above
+
+    total_requested = len(observation_ids) + len(labels) # Count pre-generated labels too
 
     if total_requested > 25:
         # The rate limiter smooths requests to one per second when busy.
@@ -1939,9 +2362,15 @@ def main():
                         print(f"https://www.inaturalist.org/observations/{observation_id}")
                 return ('skip', None)
             else:
-                label, updated_iconic_taxon = create_inaturalist_label(
-                    observation_data, iconic_taxon_name, show_common_names=args.common_names, omit_notes=args.omit_notes,debug=args.debug, custom_add=fields_to_add, custom_remove=fields_to_remove
-                )
+                if args.fungusfair:
+                    label, updated_iconic_taxon = create_fungus_fair_label(
+                        observation_data, iconic_taxon_name, show_common_names=args.common_names, debug=args.debug
+                    )
+                else:
+                    label, updated_iconic_taxon = create_inaturalist_label(
+                        observation_data, iconic_taxon_name, show_common_names=args.common_names, omit_notes=args.omit_notes,debug=args.debug, custom_add=fields_to_add, custom_remove=fields_to_remove
+                    )
+
                 if label is not None:
                     # Print as soon as the label is created
                     scientific_name = next((v for f, v in label if f == "Scientific Name"), "")
@@ -1972,6 +2401,36 @@ def main():
                 failed.append(payload)
 
     if not args.find_ca:
+        if args.fungusfair and observation_ids:
+            for i in range(len(labels)):
+                lbl, taxon = labels[i]
+                lbl_dict = dict(lbl)
+                
+                if args.scientificname:
+                    lbl_dict["Scientific Name"] = f"__ITALIC_START__{args.scientificname}__ITALIC_END__"
+                if args.commonname:
+                    lbl_dict["Common Name"] = args.commonname
+                if args.habitat:
+                    lbl_dict["Habitat"] = args.habitat
+                if args.sporeprint:
+                    lbl_dict["Spore Print"] = args.sporeprint
+                if args.edibility:
+                    lbl_dict["Edibility"] = args.edibility
+                
+                new_lbl = []
+                seen_keys = set()
+                for k, v in lbl:
+                    if k in lbl_dict:
+                        new_lbl.append((k, lbl_dict[k]))
+                        seen_keys.add(k)
+                    else:
+                        new_lbl.append((k, v))
+                        seen_keys.add(k)
+                for k, v in lbl_dict.items():
+                    if k not in seen_keys:
+                        new_lbl.append((k, v))
+                labels[i] = (new_lbl, taxon)
+
         if labels:
             if args.minilabel:
                 if not (rtf_mode or pdf_mode):
@@ -1986,7 +2445,7 @@ def main():
                     create_minilabel_pdf_content(labels, args.pdf)
                     print(f"PDF file created: {os.path.basename(args.pdf)}", flush=True)
             elif rtf_mode:
-                rtf_content = create_rtf_content(labels, no_qr=args.no_qr)
+                rtf_content = create_rtf_content(labels, no_qr=args.no_qr, fungus_fair_mode=args.fungusfair)
                 with open(args.rtf, 'w') as rtf_file:
                     rtf_file.write(rtf_content)
                 try:
@@ -2000,7 +2459,7 @@ def main():
                 else:
                     print(f"RTF file created: {basename}", flush=True)
             elif pdf_mode:
-                create_pdf_content(labels, args.pdf, no_qr=args.no_qr, title_field=args.title)
+                create_pdf_content(labels, args.pdf, no_qr=args.no_qr, title_field=args.title, fungus_fair_mode=args.fungusfair)
                 try:
                     size_bytes = os.path.getsize(args.pdf)
                     size_kb = (size_bytes + 1023) // 1024
@@ -2027,6 +2486,8 @@ def main():
                         else:
                             if field == "Scientific Name":
                                 value = value.replace('__ITALIC_START__','').replace('__ITALIC_END__','')
+                            if field == "Edibility":
+                                value = get_pretty_edibility(value)
                             print(f"{field}: {value}", flush=True)
                     print("\n", flush=True)  # Blank line between labels
         else:

@@ -2,7 +2,7 @@
 
 # iNaturalist Herbarium Label Generator version 3.9
 # By Alan Rockefeller
-# January 7, 2025
+# January 10, 2026
 
 
 ## Description
@@ -73,6 +73,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 - You can use the --no-qr command line argument to omit QR codes.
 - You can use the --minilabel command line argument to make tiny labels that have only the observation # and QR code.
 - Per-label customization of which fields appear on the label via the `--custom` option (add/remove default or observation fields without editing the code).
+- **Fungus Fair Mode:** Create display signage for fungus fairs using `--fungusfair`. Supports batch generation from CSV files passed as positional arguments.
 
 ## Installation
 
@@ -135,6 +136,16 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
 3. Generate labels and save to an RTF file:
    ```
    python3 inat.label.py 183905751 147249599 --rtf two_labels.rtf
+   ```
+
+4. Generate fungus fair signage from a CSV file:
+   ```
+   python3 inat.label.py --fungusfair labels.csv --pdf out.pdf
+   ```
+
+5. Generate fungus fair signage from iNaturalist observations:
+   ```
+   python3 inat.label.py --fungusfair 183905751 147249599 --pdf out.pdf
    ```
 
 ## Output
