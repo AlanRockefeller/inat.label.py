@@ -4,7 +4,7 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: January 10, 2026
+Date: January 14, 2026
 Version: 3.9
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
@@ -23,6 +23,7 @@ Features:
   Provisional Species Name, Mobile or Traditional Photography?, Microscopy Performed, Herbarium Catalog Number,
   Herbarium Name, Mycoportal ID, Voucher number(s)
 - Generates a QR code which links to the observation URL
+- Can create fungus fair labels from a CSV with --fungusfair
 
 Usage:
 1. Basic usage (output to console - mostly just for testing):
@@ -47,8 +48,8 @@ Examples:
 - Generate fungus fair labels from a CSV file:
   ./inat_label.py --fungusfair labels.csv --pdf out.pdf
 
-- Generate fungus fair labels from iNaturalist observations:
-  ./inat_label.py --fungusfair 150291663 105658809 --pdf out.pdf
+- Generate labels with custom fields - in this case without Coordinates but with Fungusworld number
+  ./inat.label.py 183905751 147249599 --custom "+Fungusworld, -Coordinates" --pdf out.pdf
 
 Notes:
 - The RTF output is formatted to closely match the style of traditional herbarium labels.
@@ -80,6 +81,7 @@ import os
 import re
 import sys
 import time
+import shutil
 import csv
 import unicodedata
 import random
@@ -105,9 +107,11 @@ from reportlab.pdfbase.ttfonts import TTFont, TTFError
 
 
 PDF_BASE_FONT = os.environ.get('PDF_BASE_FONT', 'Times-Roman')
+_fonts_registered = False
+_fonts_lock = threading.Lock()
 
 # Global session with connection pooling
-_session = None
+_thread_local = threading.local()
 
 # Simple thread-safe rate limiter: max 60 requests per 60 seconds (configurable via env)
 RATE_LIMIT_RPM = int(os.environ.get("INAT_RATE_LIMIT_RPM", "60"))
@@ -122,11 +126,8 @@ _next_allowed_time = 0.0
 # Begin smoothing only after this many recent requests in the window (burst allowance for small jobs)
 _SMOOTH_THRESHOLD = int(os.environ.get('INAT_SMOOTH_THRESHOLD', str(max(1, RATE_LIMIT_RPM // 4))))
 
-# Dynamic concurrency control (can be lowered on repeated 429s)
-_conc_lock = threading.Lock()
-_concurrency_target = int(os.environ.get('INAT_MAX_WORKERS', '5'))
-_active_requests = 0
-_recent_429 = deque()  # timestamps of recent 429s
+# Concurrency semaphore
+_request_semaphore = threading.BoundedSemaphore(int(os.environ.get('INAT_MAX_WORKERS', '5')))
 
 # Retry/quiet controls (tunable from CLI or env)
 _MAX_WAIT_SECONDS = float(os.environ.get('INAT_MAX_WAIT_SECONDS', '30'))
@@ -139,48 +140,64 @@ def _rate_limit_wait():
     - Applies even spacing once activity is high enough to approach the RPM limit
     - Always enforces the absolute window cap (RATE_LIMIT_RPM per 60 seconds)
     """
+    global _next_allowed_time
     if RATE_LIMIT_RPM <= 0:
         return
-    # Concurrency gate
-    while True:
-        with _conc_lock:
-            if _active_requests < _concurrency_target:
-                break
-        time.sleep(0.005)
-
+    
     window = 60.0
     min_interval = _MIN_INTERVAL
-    while True:
-        with _rate_lock:
-            now = time.time()
-            # Drop timestamps outside the window
-            while _request_times and now - _request_times[0] > window:
-                _request_times.popleft()
-
-            # If under window cap, decide whether to smooth or burst
-            if len(_request_times) < RATE_LIMIT_RPM:
-                if len(_request_times) < _SMOOTH_THRESHOLD or min_interval <= 0:
-                    # Burst allowance: execute immediately
-                    _request_times.append(now)
-                    return
-                # Smooth: ensure minimum interval between starts
-                wait = _next_allowed_time - now
-                if wait <= 0:
-                    reserve_time = max(_next_allowed_time, now)
-                    globals()['_next_allowed_time'] = reserve_time + min_interval
-                    _request_times.append(now)
-                    return
-                sleep_time = min(wait, 0.02)
-            else:
-                # Over the RPM cap; wait until oldest leaves window
-                sleep_time = max(0.01, window - (now - _request_times[0]))
-        time.sleep(sleep_time)
+    
+    with _rate_lock:
+        now = time.monotonic()
+        
+        # 1. Clean up old requests from the sliding window
+        while _request_times and now - _request_times[0] > window:
+            _request_times.popleft()
+            
+        # 2. Check Hard Cap
+        if len(_request_times) >= RATE_LIMIT_RPM:
+            # We hit the hard limit. Must wait until the oldest request expires.
+            wait_for_cap = (_request_times[0] + window) - now
+        else:
+            wait_for_cap = 0.0
+            
+        # 3. Check Smoothing / Burst
+        # Ensure schedule catches up to now if we were idle
+        if _next_allowed_time < now:
+            _next_allowed_time = now
+            
+        if len(_request_times) < _SMOOTH_THRESHOLD:
+            # Burst mode: minimal wait (just the hard cap wait, if any)
+            smoothing_target = now
+            # Do not increment _next_allowed_time to create debt; just keep it current.
+            # This allows the *next* request to also burst or start smoothing from now.
+        else:
+            # Smoothing mode: respect the schedule
+            smoothing_target = _next_allowed_time
+        
+        # 4. Calculate final wait
+        final_time = max(now + wait_for_cap, smoothing_target)
+        wait = final_time - now
+        
+        # 5. Update State
+        # If we are bursting, we don't space out the *next* allowed time (it stays at final_time).
+        # If we are smoothing, we push the *next* allowed time out by min_interval.
+        if len(_request_times) < _SMOOTH_THRESHOLD:
+             _next_allowed_time = final_time
+        else:
+             _next_allowed_time = final_time + min_interval
+        
+        # Record the execution time for the Hard Cap window
+        _request_times.append(final_time)
+        
+    # 6. Sleep if needed
+    if wait > 0:
+        time.sleep(wait)
 
 def get_session():
     """Get or create a requests session with connection pooling."""
-    global _session
-    if _session is None:
-        _session = requests.Session()
+    if not hasattr(_thread_local, "session"):
+        _thread_local.session = requests.Session()
         # Let our own code handle 429s with Retry-After; adapter will only retry on transient 5xx
         retry_strategy = Retry(
             total=2,
@@ -193,9 +210,9 @@ def get_session():
             pool_connections=10,
             pool_maxsize=20
         )
-        _session.mount("http://", adapter)
-        _session.mount("https://", adapter)
-    return _session
+        _thread_local.session.mount("http://", adapter)
+        _thread_local.session.mount("https://", adapter)
+    return _thread_local.session
 
 def print_error(message):
     """Print an error message in red (cross-platform) to stderr.
@@ -211,52 +228,57 @@ def print_error(message):
 
 def register_fonts():
     """Register both a preferred font and a system Unicode font to be used conditionally."""
-    global PDF_BASE_FONT
+    global PDF_BASE_FONT, _fonts_registered
 
-    # Set the default preferred font.
-    PDF_BASE_FONT = 'Liberation Serif'
+    with _fonts_lock:
+        if _fonts_registered:
+            return
 
-    # Attempt to register the preferred font family.
-    try:
-        pdfmetrics.registerFont(TTFont('Liberation Serif', 'LiberationSerif-Regular.ttf'))
-        pdfmetrics.registerFont(TTFont('Liberation Serif-Bold', 'LiberationSerif-Bold.ttf'))
-        pdfmetrics.registerFont(TTFont('Liberation Serif-Italic', 'LiberationSerif-Italic.ttf'))
-        pdfmetrics.registerFont(TTFont('Liberation Serif-BoldItalic', 'LiberationSerif-BoldItalic.ttf'))
-        pdfmetrics.registerFontFamily('Liberation Serif', normal='Liberation Serif', bold='Liberation Serif-Bold', italic='Liberation Serif-Italic', boldItalic='Liberation Serif-BoldItalic')
-    except (OSError, ValueError, TTFError) as e:
-        print_error(f"Warning: Preferred font 'Liberation Serif' not found or invalid: {e}. PDF output may use a fallback.")
-        PDF_BASE_FONT = 'Times-Roman' # A core PDF font
+        # Set the default preferred font.
+        PDF_BASE_FONT = 'Liberation Serif'
 
-    # Attempt to find and register a system Unicode font for special characters.
-    try:
-        styles = {
-            'normal': 'sans-serif:lang=vi', 'bold': 'sans-serif:lang=vi:weight=bold',
-            'italic': 'sans-serif:lang=vi:slant=italic', 'boldItalic': 'sans-serif:lang=vi:weight=bold:slant=italic'
-        }
-        font_paths = {}
-        all_found = True
-        for style, query in styles.items():
-            command = ['fc-match', query, '-f', '%{file}']
-            process = subprocess.run(command, capture_output=True, text=True, check=True)
-            path = process.stdout.strip()
-            if path:
-                font_paths[style] = path
-            else:
-                print_error(f"Warning: fc-match found no path for font style '{style}' with query '{query}'.")
-                all_found = False
-                break
+        # Attempt to register the preferred font family.
+        try:
+            pdfmetrics.registerFont(TTFont('Liberation Serif', 'LiberationSerif-Regular.ttf'))
+            pdfmetrics.registerFont(TTFont('Liberation Serif-Bold', 'LiberationSerif-Bold.ttf'))
+            pdfmetrics.registerFont(TTFont('Liberation Serif-Italic', 'LiberationSerif-Italic.ttf'))
+            pdfmetrics.registerFont(TTFont('Liberation Serif-BoldItalic', 'LiberationSerif-BoldItalic.ttf'))
+            pdfmetrics.registerFontFamily('Liberation Serif', normal='Liberation Serif', bold='Liberation Serif-Bold', italic='Liberation Serif-Italic', boldItalic='Liberation Serif-BoldItalic')
+        except (OSError, ValueError, TTFError) as e:
+            print_error(f"Warning: Preferred font 'Liberation Serif' not found or invalid: {e}. PDF output may use a fallback.")
+            PDF_BASE_FONT = 'Times-Roman' # A core PDF font
+
+        # Attempt to find and register a system Unicode font for special characters.
+        if shutil.which('fc-match'):
+            try:
+                styles = {
+                    'normal': 'sans-serif:lang=vi', 'bold': 'sans-serif:lang=vi:weight=bold',
+                    'italic': 'sans-serif:lang=vi:slant=italic', 'boldItalic': 'sans-serif:lang=vi:weight=bold:slant=italic'
+                }
+                font_paths = {}
+                all_found = True
+                for style, query in styles.items():
+                    command = ['fc-match', query, '-f', '%{file}']
+                    process = subprocess.run(command, capture_output=True, text=True, check=True)
+                    path = process.stdout.strip()
+                    if path:
+                        font_paths[style] = path
+                    else:
+                        print_error(f"Warning: fc-match found no path for font style '{style}' with query '{query}'.")
+                        all_found = False
+                        break
+                
+                if all_found:
+                    family_name = 'SystemUnicodeFont'
+                    pdfmetrics.registerFont(TTFont(family_name, font_paths['normal']))
+                    pdfmetrics.registerFont(TTFont(f"{family_name}-Bold", font_paths['bold']))
+                    pdfmetrics.registerFont(TTFont(f"{family_name}-Italic", font_paths['italic']))
+                    pdfmetrics.registerFont(TTFont(f"{family_name}-BoldItalic", font_paths['boldItalic']))
+                    pdfmetrics.registerFontFamily(family_name, normal=family_name, bold=f"{family_name}-Bold", italic=f"{family_name}-Italic", boldItalic=f"{family_name}-BoldItalic")
+            except (subprocess.CalledProcessError, OSError, ValueError) as e:
+                print_error(f"Warning: Could not find or register a system Unicode font: {e}. Special characters in PDF may not render correctly.")
         
-        if all_found:
-            family_name = 'SystemUnicodeFont'
-            pdfmetrics.registerFont(TTFont(family_name, font_paths['normal']))
-            pdfmetrics.registerFont(TTFont(f"{family_name}-Bold", font_paths['bold']))
-            pdfmetrics.registerFont(TTFont(f"{family_name}-Italic", font_paths['italic']))
-            pdfmetrics.registerFont(TTFont(f"{family_name}-BoldItalic", font_paths['boldItalic']))
-            pdfmetrics.registerFontFamily(family_name, normal=family_name, bold=f"{family_name}-Bold", italic=f"{family_name}-Italic", boldItalic=f"{family_name}-BoldItalic")
-    except (subprocess.CalledProcessError, OSError, ValueError) as e:
-        print_error(f"Warning: Could not find or register a system Unicode font: {e}. Special characters in PDF may not render correctly.")
-
-register_fonts()
+        _fonts_registered = True
 
 MINILABEL_RTF_HEADER = r"""{\rtf1\ansi\uc1\deff3\adeflang1025
 {\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\froman\fprq2\fcharset0 Arial;}{\f5\froman\fprq2\fcharset0 Tahoma;}{\f6\froman\fprq2\fcharset0 Times New Roman;}{\f7\froman\fprq2\fcharset0 Courier New;}{\f8\fnil\fprq2\fcharset0 Times New Roman;}{\f9\fnil\fprq2\fcharset0 Lohit Hindi;}{\f10\fnil\fprq2\fcharset0 DejaVu Sans;}}
@@ -362,6 +384,13 @@ def remove_formatting_tags(text):
     return '\n'.join(cleaned_lines)
 
 
+def rl_safe(text):
+    """Escape text for ReportLab Paragraphs and restore internal formatting markers."""
+    if not text:
+        return ""
+    return html.escape(str(text)).replace('__ITALIC_START__','<i>').replace('__ITALIC_END__','</i>').replace('__BOLD_START__','<b>').replace('__BOLD_END__','</b>')
+
+
 def parse_html_notes(notes):
     """Convert HTML notes into simplified text with inline formatting markers.
 
@@ -446,7 +475,6 @@ def fetch_api_data(url, retries=6):
     """Fetch data from a URL with robust retries and friendly errors.
     Uses Retry-After header for 429s and exponential backoff with jitter.
     """
-    global _concurrency_target
     def _parse_retry_after(resp):
         """Parse HTTP Retry-After header as seconds, supporting both delta and HTTP-date."""
         ra = resp.headers.get('Retry-After')
@@ -472,15 +500,10 @@ def fetch_api_data(url, retries=6):
         attempt += 1
         try:
             headers = {'Accept': 'application/json', 'User-Agent': 'inat.label.py (label generator)'}
+            
             _rate_limit_wait()
-            with _conc_lock:
-                global _active_requests
-                _active_requests += 1
-            try:
+            with _request_semaphore:
                 response = get_session().get(url, headers=headers, timeout=20)
-            finally:
-                with _conc_lock:
-                    _active_requests -= 1
 
             if response.status_code == 200:
                 if not response.text.strip():
@@ -502,17 +525,7 @@ def fetch_api_data(url, retries=6):
                 # Clamp to keep total wait under budget
                 remaining = max_total_wait - total_wait
                 wait = max(0.5, min(wait, remaining))
-                # record 429 and possibly reduce concurrency
-                now_ts = time.time()
-                with _conc_lock:
-                    _recent_429.append(now_ts)
-                    # Keep only last 10 seconds
-                    while _recent_429 and now_ts - _recent_429[0] > 10:
-                        _recent_429.popleft()
-                    if len(_recent_429) >= 3 and _concurrency_target > 1:
-                        old = _concurrency_target
-                        _concurrency_target = max(1, _concurrency_target - 1)
-                        print_error(f"Reducing concurrency due to repeated 429s: {old} -> {_concurrency_target}")
+                
                 # Inform the user (only phrase in red)
                 if not _QUIET:
                     msg = (
@@ -572,6 +585,7 @@ def fetch_api_data(url, retries=6):
 
 # Batched taxon-details cache and fetcher
 _taxon_cache = {}
+_taxon_cache_lock = threading.Lock()
 _taxon_pending = {}
 _taxon_pending_lock = threading.Lock()
 _taxon_batch_queue = deque()
@@ -627,12 +641,14 @@ def _start_taxon_batcher():
                         results_by_id[tid] = item
             # Fulfill waiters and populate cache
             with _taxon_pending_lock:
-                for tid in ids:
-                    _taxon_cache[tid] = results_by_id.get(tid)
-                    evt = _taxon_pending.get(tid)
-                    if evt:
-                        evt.set()
-                        _taxon_pending.pop(tid, None)
+                # Also lock the cache when updating
+                with _taxon_cache_lock:
+                    for tid in ids:
+                        _taxon_cache[tid] = results_by_id.get(tid)
+                        evt = _taxon_pending.get(tid)
+                        if evt:
+                            evt.set()
+                            _taxon_pending.pop(tid, None)
 
     _taxon_batcher_thread = threading.Thread(target=_loop, name="inat-taxa-batcher", daemon=True)
     _taxon_batcher_thread.start()
@@ -649,7 +665,8 @@ def get_taxon_details(taxon_id, retries=6):
         return None
 
     # Cache fast-path; ensure we have ancestors
-    cached = _taxon_cache.get(tid)
+    with _taxon_cache_lock:
+        cached = _taxon_cache.get(tid)
     if cached and cached.get('ancestors') is not None:
         return cached
 
@@ -662,7 +679,8 @@ def get_taxon_details(taxon_id, retries=6):
 
     if data and data.get('results'):
         item = data['results'][0]
-        _taxon_cache[tid] = item
+        with _taxon_cache_lock:
+            _taxon_cache[tid] = item
         return item
     return cached
 
@@ -1359,6 +1377,7 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
 
     Expects labels as an iterable of (label_fields, iconic_taxon_name). Adds a QR code when a URL is present.
     """
+    register_fonts()
     if fungus_fair_mode:
         try:
             from PIL import Image as PILImage
@@ -1386,13 +1405,16 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
     # Conditionally select the font based on label content
     base_font = PDF_BASE_FONT
     non_ascii_found = find_non_ascii_chars(labels)
+    font_size_multiplier = 1.0
     if non_ascii_found:
         try:
             # Verify that the system font was successfully registered before using it
             pdfmetrics.getFont('SystemUnicodeFont')
             base_font = 'SystemUnicodeFont'
+            # System fonts often have larger glyphs; reduce font size to compensate.
+            font_size_multiplier = 0.85
             char_report = ", ".join(f"'{c}'" for c in sorted(list(non_ascii_found)))
-            print_error(f"Info: Non-ASCII characters detected: {char_report}. Switching to system Unicode font for PDF.")
+            print_error(f"Info: Non-ASCII characters detected: {char_report}. Switching to system Unicode font for PDF and reducing text size.")
         except KeyError:
             print_error("Warning: Non-ASCII characters detected, but the system Unicode font is not available. Characters may not render correctly.")
 
@@ -1400,15 +1422,15 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
         'CustomNormal',
         parent=styles['Normal'],
         fontName=base_font,
-        fontSize=12,
-        leading=14
+        fontSize=12 * font_size_multiplier,
+        leading=14 * font_size_multiplier
     )
     title_normal_style = ParagraphStyle(
         'TitleNormal',
         parent=styles['Title'],
         fontName=base_font,
-        fontSize=16,
-        leading=18,
+        fontSize=16 * font_size_multiplier,
+        leading=18 * font_size_multiplier,
         alignment=1  # Centered
     )   
     story = []
@@ -1428,27 +1450,23 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
                 'FFCenter',
                 parent=styles['Normal'],
                 fontName=base_font,
-                fontSize=18,
-                leading=22,
+                fontSize=18 * font_size_multiplier,
+                leading=22 * font_size_multiplier,
                 alignment=1 # Center
             )
 
             ff_sci_style = ParagraphStyle(
                 'FFSci',
                 parent=ff_center_style,
-                fontSize=22,
-                leading=26
+                fontSize=22 * font_size_multiplier,
+                leading=26 * font_size_multiplier
             )
 
             # Scientific Name
-            # Escape first, then restore our internal markers
-            sci_name_safe = html.escape(sci_name)
-            sci_name_html = sci_name_safe.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
-            label_content.append(Paragraph(f"<b>{sci_name_html}</b>", ff_sci_style))
+            label_content.append(Paragraph(f"<b>{rl_safe(sci_name)}</b>", ff_sci_style))
 
             if common_name:
-                common_name_safe = html.escape(common_name)
-                label_content.append(Paragraph(f"<b>{common_name_safe}</b>", ff_center_style))
+                label_content.append(Paragraph(f"<b>{rl_safe(common_name)}</b>", ff_center_style))
             
             # Removed Spacer to move everything up (part of "quarter inch higher" request)
             # label_content.append(Spacer(1, 0.2*inch))
@@ -1456,11 +1474,11 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
             # Details
             details_text = []
             if habitat:
-                details_text.append(f"<b>Habitat:</b> {html.escape(habitat)}")
+                details_text.append(f"<b>Habitat:</b> {rl_safe(habitat)}")
             if spore_print:
-                details_text.append(f"<b>Spore Print:</b> {html.escape(spore_print)}")
+                details_text.append(f"<b>Spore Print:</b> {rl_safe(spore_print)}")
             if edibility:
-                details_text.append(f"<b>Edibility:</b> {html.escape(get_pretty_edibility(edibility))}")
+                details_text.append(f"<b>Edibility:</b> {rl_safe(get_pretty_edibility(edibility))}")
             
             details_p = None
             if details_text:
@@ -1517,7 +1535,7 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
             
             # Simple height estimate for fungus fair mode
             # 3 lines of header (22pt+), 4 lines of details (14pt), Image (1 inch), Spacer (0.75 inch)
-            height_estimate = 3 * 26 + 4 * 14 + 1.0 * 72 + 0.75 * 72 
+            height_estimate = (3 * 26 + 4 * 14) * font_size_multiplier + 1.0 * 72 + 0.75 * 72 
             
         else:
             pre_notes_content = []
@@ -1529,9 +1547,7 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
             if title_field:
                 for field, value in label:
                     if field == title_field:
-                        title_value = value.replace('__BOLD_START__', '<b>').replace('__BOLD_END__', '</b>')
-                        title_value = title_value.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
-                        p = Paragraph(f"<b>{title_value}</b>", title_normal_style)
+                        p = Paragraph(f"<b>{rl_safe(value)}</b>", title_normal_style)
                         pre_notes_content.append(p)
                         pre_notes_content.append(Spacer(1, 0.1*inch))
                         break
@@ -1543,26 +1559,24 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
                 if title_field and field == title_field:
                     continue
                 elif field == "Scientific Name":
-                    sci_html = value.replace('__ITALIC_START__','<i>').replace('__ITALIC_END__','</i>')
-                    p = Paragraph(f"<b>{field}:</b> {sci_html}", custom_normal_style)
+                    p = Paragraph(f"<b>{field}:</b> {rl_safe(value)}", custom_normal_style)
                     pre_notes_content.append(p)
                 elif field == "iNaturalist URL":
-                    p = Paragraph(f"{value}", custom_normal_style)
+                    p = Paragraph(rl_safe(value), custom_normal_style)
                     pre_notes_content.append(p)
                 else:
-                    p = Paragraph(f"<b>{field}:</b> {value}", custom_normal_style)
+                    p = Paragraph(f"<b>{field}:</b> {rl_safe(value)}", custom_normal_style)
                     pre_notes_content.append(p)
 
             notes_paragraph = None
             if notes_value:
-                notes_text = notes_value.replace('__BOLD_START__', '<b>').replace('__BOLD_END__', '</b>')
-                notes_text = notes_text.replace('__ITALIC_START__', '<i>').replace('__ITALIC_END__', '</i>')
+                notes_safe = rl_safe(notes_value)
                 # Remove the line about the MO to iNat import, as this isn't important on a label since we already include the MO URL
-                notes_text = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', notes_text)
+                notes_safe = re.sub(r'Originally posted to Mushroom Observer on [A-Za-z]+\. \d{1,2}, \d{4}\.', '', notes_safe)
                 # Remove line about the inat to MO import, as this isn't important on a label since we already include the MO URL (added by MO on import)
-                notes_text = re.sub(r'Imported by Mushroom Observer \d{4}-\d{2}-\d{2}', '', notes_text)
-                notes_text = notes_text.replace('\n', '<br/>')
-                notes_paragraph = Paragraph(f"<b>Notes:</b> {notes_text}", custom_normal_style)
+                notes_safe = re.sub(r'Imported by Mushroom Observer \d{4}-\d{2}-\d{2}', '', notes_safe)
+                notes_safe = notes_safe.replace('\n', '<br/>')
+                notes_paragraph = Paragraph(f"<b>Notes:</b> {notes_safe}", custom_normal_style)
 
             qr_image = None
             if qr_url and not no_qr:
@@ -1619,9 +1633,9 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
             label_content.append(Spacer(1, 0.25*inch))
             
             # Estimate height to prevent layout errors with oversized labels
-            height_estimate = len(pre_notes_content) * 14
+            height_estimate = len(pre_notes_content) * 14 * font_size_multiplier
             if notes_paragraph:
-                height_estimate += (notes_value.count('\n') + 1) * 14
+                height_estimate += (notes_value.count('\n') + 1) * 14 * font_size_multiplier
 
         if height_estimate > frame_height:
             story.append(KeepInFrame(frame_width, frame_height, label_content, mode='shrink'))
@@ -1633,6 +1647,7 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
 
 def create_minilabel_pdf_content(labels, filename):
     """Render minilabels into an 8-column PDF, with QR on left and 'iNat' + number top-aligned on the right."""
+    register_fonts()
     from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Image as ReportLabImage, Table, TableStyle
     from reportlab.lib.units import inch
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -1674,12 +1689,29 @@ def create_minilabel_pdf_content(labels, filename):
     doc.addPageTemplates([PageTemplate(id="MiniLabels", frames=frames)])
 
     styles = getSampleStyleSheet()
+
+    # Conditionally select the font based on label content
+    base_font = PDF_BASE_FONT
+    non_ascii_found = find_non_ascii_chars(labels)
+    font_size_multiplier = 1.0
+    if non_ascii_found:
+        try:
+            # Verify that the system font was successfully registered before using it
+            pdfmetrics.getFont('SystemUnicodeFont')
+            base_font = 'SystemUnicodeFont'
+            # System fonts often have larger glyphs; reduce font size to compensate.
+            font_size_multiplier = 0.85
+            char_report = ", ".join(f"'{c}'" for c in sorted(list(non_ascii_found)))
+            print_error(f"Info: Non-ASCII characters detected: {char_report}. Switching to system Unicode font for PDF and reducing text size.")
+        except KeyError:
+            print_error("Warning: Non-ASCII characters detected, but the system Unicode font is not available. Characters may not render correctly.")
+
     text_style = ParagraphStyle(
         "MiniLabelText",
         parent=styles["Normal"],
-        fontName=PDF_BASE_FONT,
-        fontSize=7.5,
-        leading=8.5,
+        fontName=base_font,
+        fontSize=7.5 * font_size_multiplier,
+        leading=8.5 * font_size_multiplier,
     )
 
     story = []
@@ -1705,7 +1737,7 @@ def create_minilabel_pdf_content(labels, filename):
 
         # right-hand stacked text
         p_title = Paragraph("iNaturalist", text_style)
-        p_id = Paragraph(str(obs_number), text_style)
+        p_id = Paragraph(rl_safe(obs_number), text_style)
 
         text_width = col_width - qr_size
         if text_width < 0.28 * inch:
@@ -1775,8 +1807,14 @@ def create_rtf_content(labels, no_qr=False, fungus_fair_mode=False):
     try:
         total = len(labels)
         for idx, (label, _iconic_taxon_name) in enumerate(labels):
+            # Calculate space before to handle spacing between labels without ghost space at top of columns
+            sb_twips = 0
+            if idx > 0:
+                sb_twips = 1080 if fungus_fair_mode else 560
+            space_before_cmd = f"\\sb{sb_twips} "
+
             # start one label, force zero space-after here
-            rtf_content += r"{\keep\pard\ql\keepn\sa0 "
+            rtf_content += r"{\keep\pard\ql\keepn\sa0 " + space_before_cmd
 
             if fungus_fair_mode:
                 sci_name = next((v for f, v in label if f == "Scientific Name"), "")
@@ -1787,7 +1825,8 @@ def create_rtf_content(labels, no_qr=False, fungus_fair_mode=False):
 
                 # Scientific Name - Center, Size 44 (22pt)
                 sci_name_rtf = _format_rtf_text(sci_name)
-                rtf_content += r"\pard\keep\keepn\qc\sa120 {\fs44\b " + sci_name_rtf + r"}\par "
+                # Re-apply space_before_cmd because \pard resets paragraph properties
+                rtf_content += r"\pard" + space_before_cmd + r"\keep\keepn\qc\sa120 {\fs44\b " + sci_name_rtf + r"}\par "
 
                 # Common Name - Center, Size 36 (18pt)
                 if common_name:
@@ -1969,14 +2008,6 @@ def create_rtf_content(labels, no_qr=False, fungus_fair_mode=False):
 
             # close label group
             rtf_content += r"}"
-
-            # add spacing ONLY between labels
-            # Fungus fair: 0.75 inch spacing (~1080 twips)
-            if idx < total - 1:
-                if fungus_fair_mode:
-                    rtf_content += r"\par\pard\sa540\sl0\slmult1 \par\pard\sa0 " 
-                else:
-                    rtf_content += r"\par\par\pard\sa0\sl0\slmult1 "
 
         rtf_content += rtf_footer
     except Exception as e:
@@ -2190,6 +2221,12 @@ def main():
     rtf_mode = bool(args.rtf)
     pdf_mode = bool(args.pdf)
 
+    # Reset rate limiter state to ensure monotonic time consistency
+    global _next_allowed_time
+    with _rate_lock:
+        _request_times.clear()
+        _next_allowed_time = 0.0
+
     # Apply global controls from CLI
     global _MAX_WAIT_SECONDS, _QUIET
     if args.max_wait_seconds is not None:
@@ -2203,11 +2240,32 @@ def main():
     if pdf_mode and not args.pdf.lower().endswith('.pdf'):
         parser.error("argument --pdf: filename must end with .pdf")
 
-    observation_ids = args.observation_ids or []
+    inputs = args.observation_ids or []
     
     # Initialize labels list
     labels = []
     failed = []
+
+    if args.fungusfair:
+        # Fungus fair mode: positional args must be CSV files only (or none for manual mode)
+        csv_files = [x for x in inputs if x.lower().endswith('.csv')]
+        non_csv = [x for x in inputs if not x.lower().endswith('.csv')]
+
+        if non_csv:
+            parser.error(
+                "--fungusfair expects CSV input only. "
+                f"Remove these non-CSV arguments: {', '.join(non_csv)}"
+            )
+
+        # Optional: disallow --file in fungusfair mode (since --file is for obs IDs)
+        if args.file:
+            parser.error("--file is not supported with --fungusfair. Pass CSV file(s) as positional args instead.")
+
+        # From here on, do NOT treat anything as observation IDs
+        observation_ids = []
+    else:
+        csv_files = []
+        observation_ids = inputs
 
     # Read observation IDs from file if --file is provided
     if args.file:
@@ -2223,9 +2281,6 @@ def main():
 
     # Process input for Fungus Fair mode (CSV files)
     if args.fungusfair:
-        csv_files = [x for x in observation_ids if x.lower().endswith('.csv')]
-        observation_ids = [x for x in observation_ids if not x.lower().endswith('.csv')]
-        
         for csv_file in csv_files:
             if not os.path.exists(csv_file):
                 print_error(f"Error: CSV file '{csv_file}' not found.")
@@ -2234,15 +2289,20 @@ def main():
             try:
                 with open(csv_file, 'r', encoding='utf-8-sig') as f:
                     reader = csv.DictReader(f)
+                    
+                    def norm_key(s):
+                        if not s:
+                            return ""
+                        return s.strip().lower().replace(' ', '').replace('_', '')
+
                     header_map = {}
                     if reader.fieldnames:
                         for field in reader.fieldnames:
-                            clean_field = field.strip().lower().replace(' ', '').replace('_', '')
-                            header_map[clean_field] = field
+                            header_map[norm_key(field)] = field
                     
                     def get_val(row, keys):
                         for key in keys:
-                            real_key = header_map.get(key)
+                            real_key = header_map.get(norm_key(key))
                             if real_key and row.get(real_key):
                                 return row[real_key].strip()
                         return None
@@ -2283,6 +2343,9 @@ def main():
                         labels.append((manual_label, "Fungus"))
             except Exception as e:
                 print_error(f"Error reading CSV file {csv_file}: {e}")
+                
+        if not csv_files and not args.scientificname:
+             parser.error("--fungusfair requires at least one CSV file or --scientificname for a manual label.")
 
     # Logic for manual label (no IDs, but fungus fair args)
     if not observation_ids and args.fungusfair and args.scientificname:
@@ -2388,9 +2451,11 @@ def main():
 
     # Respect API guidelines by limiting concurrency to a small number (<=5)
     max_workers = args.workers if args.workers else int(os.environ.get('INAT_MAX_WORKERS', '5'))
-    # Initialize dynamic concurrency target to selected workers
-    global _concurrency_target
-    _concurrency_target = max_workers
+    
+    # Update semaphore to match the selected worker count
+    global _request_semaphore
+    _request_semaphore = threading.BoundedSemaphore(max_workers)
+    
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(process_one, input_value) for input_value in observation_ids]
         for fut in futures:
@@ -2401,36 +2466,6 @@ def main():
                 failed.append(payload)
 
     if not args.find_ca:
-        if args.fungusfair and observation_ids:
-            for i in range(len(labels)):
-                lbl, taxon = labels[i]
-                lbl_dict = dict(lbl)
-                
-                if args.scientificname:
-                    lbl_dict["Scientific Name"] = f"__ITALIC_START__{args.scientificname}__ITALIC_END__"
-                if args.commonname:
-                    lbl_dict["Common Name"] = args.commonname
-                if args.habitat:
-                    lbl_dict["Habitat"] = args.habitat
-                if args.sporeprint:
-                    lbl_dict["Spore Print"] = args.sporeprint
-                if args.edibility:
-                    lbl_dict["Edibility"] = args.edibility
-                
-                new_lbl = []
-                seen_keys = set()
-                for k, v in lbl:
-                    if k in lbl_dict:
-                        new_lbl.append((k, lbl_dict[k]))
-                        seen_keys.add(k)
-                    else:
-                        new_lbl.append((k, v))
-                        seen_keys.add(k)
-                for k, v in lbl_dict.items():
-                    if k not in seen_keys:
-                        new_lbl.append((k, v))
-                labels[i] = (new_lbl, taxon)
-
         if labels:
             if args.minilabel:
                 if not (rtf_mode or pdf_mode):

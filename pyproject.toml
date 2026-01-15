@@ -1,0 +1,30 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes (real bugs)
+  "W",   # warnings
+  "I",   # import sorting
+  "B",   # bugbear footguns
+  "UP",  # pyupgrade (safe modernizations)
+]
+ignore = [
+  "E501", # formatter handles line length
+  "B008", # function calls in defaults (common in scripts/argparse patterns)
+  "B905", # strict zip() length checks; can be noisy in scripts
+]
+
+fixable = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "preserve"
+
+
+# Opt-in safe aggressive refactors
+# ruff check --fix --select SIM,C4,PERF,RUF .
+
+# Opt-in unsafe aggressive refactors
+# ruff check --fix --unsafe-fixes --select SIM,C4,PERF,RUF .
