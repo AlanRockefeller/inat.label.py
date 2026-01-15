@@ -3,6 +3,7 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
+fixable = ["ALL"]
 select = [
   "E",   # pycodestyle errors
   "F",   # pyflakes (real bugs)
@@ -16,8 +17,6 @@ ignore = [
   "B008", # function calls in defaults (common in scripts/argparse patterns)
   "B905", # strict zip() length checks; can be noisy in scripts
 ]
-
-fixable = ["ALL"]
 
 [tool.ruff.format]
 quote-style = "preserve"
