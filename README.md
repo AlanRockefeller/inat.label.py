@@ -2,7 +2,7 @@
 
 # iNaturalist Herbarium Label Generator version 3.9
 # By Alan Rockefeller
-# January 7, 2025
+# January 14, 2026
 
 
 ## Description
@@ -27,6 +27,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 - Fetches observation data using the iNaturalist / Mushroom Observer API.
 - Supports multiple iNat or MO observation IDs or URLs as input - or a file can be specified.
 - Uses parallel processing, intelligent rate limiting, and advanced caching for reliable and fast label generation.
+- Custom fields - you can include or exclude any label field with --custom
 - Generates labels with key information including:
   - Scientific Name (in italics)
   - Common Name (if different from scientific name - disabled by default)
@@ -73,26 +74,8 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 - You can use the --no-qr command line argument to omit QR codes.
 - You can use the --minilabel command line argument to make tiny labels that have only the observation # and QR code.
 - Per-label customization of which fields appear on the label via the `--custom` option (add/remove default or observation fields without editing the code).
+- **Fungus Fair Mode:** Create display signage for fungus fairs using `--fungusfair`. Uses a CSV file as input and puts edible/toxic images on the labels instead of a QR code.
 
-## Installation
-
-Instead of installing this software, consider using the online version: https://images.mushroomobserver.org/labels
-
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/AlanRockefeller/inat.label.py
-   ```
-
-2. Navigate to the project directory:
-   ```bash
-   cd inat.label.py
-   ```
-
-3. Install the required dependencies:
-   ```bash
-   pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab requests-toolbelt
-   ```
 
 ## Usage
 
@@ -137,6 +120,16 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
    python3 inat.label.py 183905751 147249599 --rtf two_labels.rtf
    ```
 
+4. Generate fungus fair signage from a CSV file:
+   ```
+   python3 inat.label.py --fungusfair fair.csv --pdf out.pdf
+   ```
+
+5. Generate labels with custom fields - in this case without Coordinates but with Fungusworld number
+   ```
+   python3 inat.label.py 183905751 147249599 --custom "+Fungusworld, -Coordinates" --pdf out.pdf
+   ```
+
 ## Output
 
 The script generates herbarium labels to the standard output by default, or labels are written to an RTF file if the --rtf command line argument is given.   RTF labels look much more professional when printed and include QR codes - the standard output is mostly for testing.
@@ -153,6 +146,26 @@ The script generates herbarium labels to the standard output by default, or labe
 - replace-accents
 - pillow
 - reportlab
+
+## Installation
+
+Instead of installing this software, consider using the online version: https://images.mushroomobserver.org/labels
+
+
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/AlanRockefeller/inat.label.py
+   ```
+
+2. Navigate to the project directory:
+   ```bash
+   cd inat.label.py
+   ```
+
+3. Install the required dependencies:
+   ```bash
+   pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab requests-toolbelt
+   ```
 
 ## Contributing
 

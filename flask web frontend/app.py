@@ -33,24 +33,62 @@ FINISHED_JOB_TTL = int(os.environ.get('FINISHED_JOB_TTL', '300')) # Time in seco
 ENABLE_MO_DEBUG = bool(int(os.environ.get('ENABLE_MO_DEBUG', '0')))
 ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS')  # comma-separated list of allowed origins
 
+# Observation fields that inat.label.py automatically includes on labels when present.
+# These should be checked by default in the Add Fields modal.
+# This list is derived from create_inaturalist_label() in inat.label.py.
+DEFAULT_LABEL_FIELDS = [
+    # DNA Barcode fields
+    'DNA Barcode ITS',
+    'DNA Barcode LSU',
+    'DNA Barcode RPB1',
+    'DNA Barcode RPB2',
+    'DNA Barcode TEF1',
+    # Other optional fields that get added if present
+    'GenBank Accession Number',
+    'GenBank Accession',
+    'Provisional Species Name',
+    'Species Name Override',
+    'Microscopy Performed',
+    'Fungal Microscopy',
+    'Mobile or Traditional Photography?',
+    "Collector's name",
+    'Herbarium Catalog Number',
+    'Fungarium Catalog Number',
+    'Herbarium Secondary Catalog Number',
+    'Habitat',
+    'Microhabitat',
+    'Collection Number',
+    'Associated Species',
+    'Herbarium Name',
+    'Mycoportal ID',
+    'Voucher Number',
+    'Voucher Number(s)',
+    'Accession Number',
+    'Mushroom Observer URL',
+]
+
 # In-memory job store for streaming print jobs
 _jobs = {}
 _jobs_lock = threading.Lock()
 
+def _reap_finished_jobs_locked():
+    now = time.time()
+    finished_to_reap = []
+    for job_id, job in _jobs.items():
+        if job.get('finished_time'):
+            if now > job['finished_time'] + FINISHED_JOB_TTL:
+                finished_to_reap.append(job_id)
+        elif job['proc'].poll() is not None:
+            # Process finished, but not yet marked. Mark it now.
+            job['finished_time'] = now
+
+    for job_id in finished_to_reap:
+        _jobs.pop(job_id, None)
+
+
 def _reap_finished_jobs():
     with _jobs_lock:
-        now = time.time()
-        finished_to_reap = []
-        for job_id, job in _jobs.items():
-            if job.get('finished_time'):
-                if now > job['finished_time'] + FINISHED_JOB_TTL:
-                    finished_to_reap.append(job_id)
-            elif job['proc'].poll() is not None:
-                # Process finished, but not yet marked. Mark it now.
-                job['finished_time'] = now
-
-        for job_id in finished_to_reap:
-            _jobs.pop(job_id, None)
+        _reap_finished_jobs_locked()
 
 
 def inat_api_get(url, **kwargs):
@@ -68,10 +106,10 @@ def inat_api_get(url, **kwargs):
             next_api_call_time = time.time() + 1.0
             response.raise_for_status()
             return response
-        except requests.exceptions.RequestException as e:
-            app.logger.exception(e)
+        except requests.exceptions.RequestException:
+            app.logger.exception("Error during iNaturalist API request.")
             next_api_call_time = time.time() + 1.0
-            raise e
+            raise
 
 
 app = Flask(__name__)
@@ -176,7 +214,7 @@ def get_inat_id(obs_input):
 @app.route('/labels')
 @app.route('/labels/')
 def labels():
-    return render_template('index.html')
+    return render_template('index.html', default_label_fields=DEFAULT_LABEL_FIELDS)
 
 @app.route('/favicon.ico')
 def favicon():
@@ -269,6 +307,7 @@ def lookup_batch_internal(obs_inputs):
                     'scientific_name': scientific_name,
                     'user_id': user_login,
                     'color': color,
+                    'ofvs': r.get('ofvs', [])
                 })
 
     # Fetch MO observations (API supports detail=high, ids= may support multiple; use per-ID for safety)
@@ -304,13 +343,51 @@ def lookup_batch_internal(obs_inputs):
             scientific_name = consensus.get('name') or result.get('name', 'Unknown')
             user_id = owner.get('login_name') or result.get('login_name', 'Unknown')
             
+            ofvs = []
+            mo_url = f"https://mushroomobserver.org/obs/{mo_num}"
+            ofvs.append({
+                'name': 'Mushroom Observer URL',
+                'value': mo_url
+            })
+            if 'herbarium_name' in result:
+                ofvs.append({
+                    'name': 'Herbarium Name',
+                    'value': result.get('herbarium_name', '')
+                })
+            if 'herbarium_id' in result:
+                ofvs.append({
+                    'name': 'Herbarium Catalog Number',
+                    'value': result.get('herbarium_id', '')
+                })
+            if 'sequences' in result and result['sequences']:
+                for sequence in result['sequences']:
+                    locus = sequence.get('locus', '').upper()
+                    bases = sequence.get('bases', '')
+                    if locus and bases:
+                        locus_mapping = {
+                            'ITS': 'DNA Barcode ITS',
+                            'LSU': 'DNA Barcode LSU',
+                            'TEF1': 'DNA Barcode TEF1',
+                            'EF1': 'DNA Barcode TEF1',
+                            'RPB1': 'DNA Barcode RPB1',
+                            'RPB2': 'DNA Barcode RPB2'
+                        }
+                        field_name = locus_mapping.get(locus)
+                        if field_name:
+                            cleaned_bases = ''.join(bases.split())
+                            bp_count = len(cleaned_bases)
+                            ofvs.append({
+                                'name': field_name,
+                                'value': f"{bp_count} bp"
+                            })
             for idx in mo_map_indices.get(mo_num, []):
                 results[idx].update({
                     'original_input': obs_inputs[idx],
                     'inat_id': f'MO{mo_num}',
                     'scientific_name': scientific_name,
                     'user_id': user_id,
-                    'color': 'magenta'
+                    'color': 'magenta',
+                    'ofvs': ofvs
                 })
         except Exception as e:
             app.logger.exception(e)
@@ -333,7 +410,8 @@ def lookup_batch_internal(obs_inputs):
                 'inat_id': base.get('inat_id', ''),
                 'scientific_name': base.get('scientific_name', 'Unknown'),
                 'user_id': base.get('user_id', 'Unknown'),
-                'color': base.get('color', 'black')
+                'color': base.get('color', 'black'),
+                'ofvs': base.get('ofvs', [])
             })
     return {'items': items}
 
@@ -469,8 +547,16 @@ def print_start():
         app.logger.warning(f"print_start: Too many observations requested: {len(raw_observations)}, max is {MAX_OBS_PER_REQUEST}")
         return jsonify({'error': f'Too many observations in one request (max {MAX_OBS_PER_REQUEST})'}), 400
     with _jobs_lock:
-        if len(_jobs) >= MAX_CONCURRENT_JOBS:
-            error_message = f'Too many concurrent jobs ({len(_jobs)}), max is {MAX_CONCURRENT_JOBS}. Please try again shortly.'
+        _reap_finished_jobs_locked()  # clean finished/expired entries immediately
+
+        active = 0
+        for job in _jobs.values():
+            proc = job.get('proc')
+            if proc and proc.poll() is None:
+                active += 1
+
+        if active >= MAX_CONCURRENT_JOBS:
+            error_message = f'Too many concurrent jobs ({active}), max is {MAX_CONCURRENT_JOBS}. Please try again shortly.'
             app.logger.warning(f"print_start: {error_message}")
             return jsonify({'error': error_message}), 429
 
@@ -515,6 +601,12 @@ def print_start():
         command.append('--common-names')
     if request.form.get('omit_notes'):
         command.append('--omit-notes')
+    if request.form.get('use_custom'):
+        custom_args = request.form.getlist('custom_args[]')
+        if custom_args:
+            command.append('--custom')
+            # Join all custom fields with commas as inat.label.py expects a comma-separated list
+            command.append(', '.join(custom_args))
     cmd_logger.info(' '.join(command))
     app.logger.debug(f"Starting streaming command: {' '.join(command)}")
 
@@ -769,7 +861,7 @@ def todo():
 # Start a background thread to reap finished jobs
 def _reaper_thread():
     while True:
-        time.sleep(60)
+        time.sleep(10)
         _reap_finished_jobs()
 
 reaper = threading.Thread(target=_reaper_thread, daemon=True)
