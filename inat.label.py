@@ -1377,6 +1377,7 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
 
     Expects labels as an iterable of (label_fields, iconic_taxon_name). Adds a QR code when a URL is present.
     """
+   
     register_fonts()
     if fungus_fair_mode:
         try:
@@ -1385,18 +1386,36 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
             print_error("Error: PIL (Pillow) is required for fungus fair mode image handling.")
             sys.exit(1)
 
-    doc = BaseDocTemplate(filename, pagesize=letter, leftMargin=0.25*inch, rightMargin=0.25*inch, topMargin=0.25*inch, bottomMargin=0.25*inch)
+    doc = BaseDocTemplate(filename, pagesize=letter, 
+                          leftMargin=0.25*inch, rightMargin=0.25*inch, 
+                          topMargin=0.12*inch, bottomMargin=0.12*inch)
 
     # Two columns
-    column_gap = 0.25 * inch
+    column_gap = 0.5 * inch # Must be twice the margin to cut labels that are the same size
     frame_width = (doc.width - column_gap) / 2
     frame_height = doc.height
 
     doc.addPageTemplates([
         PageTemplate(id='TwoCol',
                      frames=[
-                         Frame(doc.leftMargin, doc.bottomMargin, frame_width, frame_height, id='col1', topPadding=0, bottomPadding=0, leftPadding=0, rightPadding=0),
-                         Frame(doc.leftMargin + frame_width + column_gap, doc.bottomMargin, frame_width, frame_height, id='col2', topPadding=0, bottomPadding=0, leftPadding=0, rightPadding=0),
+                         Frame(doc.leftMargin, 
+                               doc.bottomMargin, 
+                               frame_width, 
+                               frame_height, 
+                               id='col1', 
+                               topPadding=0, 
+                               bottomPadding=0, 
+                               leftPadding=0, 
+                               rightPadding=0),
+                         Frame(doc.leftMargin + frame_width + column_gap, 
+                               doc.bottomMargin, 
+                               frame_width, 
+                               frame_height, 
+                               id='col2', 
+                               topPadding=0, 
+                               bottomPadding=0, 
+                               leftPadding=0, 
+                               rightPadding=0),
                      ])
     ])
 
@@ -2172,6 +2191,7 @@ def main():
     parser.add_argument("--minilabel", action="store_true", help="Generate minilabels with only observation number and QR code")
     parser.add_argument("--omit-notes", action="store_true", help="Omit the Notes field from all labels")
     parser.add_argument("--title", type=str, default=None, help="Field to use as title (only for PDF output)")
+    parser.add_argument("--stack-order", action="store_true", help="Print the labels in stack order")
     parser.add_argument(
         '--custom',
         help='Add or remove fields from the default label format. Use "+" to add and "-" to remove. For example: --custom "+My Field, -Observer"',
@@ -2216,6 +2236,10 @@ def main():
     # User can not use 'Notes" as title field
     if args.title == "Notes":
         parser.error("argument --title: 'Notes' field can not be used as title")
+
+    # If it is minilabel mode, stack order can not be used, yet. -- let me know if this is needed.
+    if args.minilabel and args.stack_order:
+        parser.error("argument --stack-order: can not be used with --minilabel")
 
     # Define rtf_mode and pdf_mode based on whether --rtf or --pdf argument is provided
     rtf_mode = bool(args.rtf)
@@ -2464,6 +2488,34 @@ def main():
                 labels.append(payload)
             elif status == 'err' and payload:
                 failed.append(payload)
+
+    # Sort labels by iNaturalist Observation Number by default, or by specified title field
+    sort_param = ("iNaturalist Observation Number", "Mushroom Observer Number")
+    if args.title:
+        sort_param = (args.title,)
+    sorted_labels = sorted(labels, 
+                           key=lambda x: next((int(y[1][len(y[1].rstrip('0123456789')):] 
+                                                   if y[1][len(y[1].rstrip('0123456789')):].isdigit() else 0) 
+                                               for y in x[0] if y[0] in sort_param), 0))
+    labels = sorted_labels
+
+    if args.stack_order:
+        stacked_labels = []
+        m = len(labels) #number of labels
+        n = m // 6 if m % 6 == 0 else (m // 6) + 1 #number of pages
+        #For this we will assume 2 columns of 3 labels each per page
+        # Reorders so that cutting columns, stacking left-on-right, then cutting
+        # from bottom yields labels in original order.
+        for i in range(n * 6):
+            # Map output position i to source index j:
+            # - (i % 6) % 3: row within page (0-2)
+            # - (i % 6) // 3: column within page (0-1)
+            # - i // 6: which page
+            j = n * (2 * ((i % 6) % 3) + (i % 6) // 3) + i // 6
+            if j >= m:
+                j = m - 1 #re-use last label as spacer to fill pages
+            stacked_labels.append(labels[j])
+        labels = stacked_labels
 
     if not args.find_ca:
         if labels:
