@@ -3,6 +3,7 @@
 # 3.9
 December 3, 2025
 - Per-label customization of which fields appear on the label via the `--custom` option (add/remove default or observation fields without editing the code).
+- Enables --title "Some Field Name" to choose which label field becomes the big title at the top of the PDF label.    Thanks to Douglas Smith for submitting the PR!
 
 # 3.8
 November 28, 2025
