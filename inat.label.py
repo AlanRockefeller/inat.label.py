@@ -1377,12 +1377,7 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
 
     Expects labels as an iterable of (label_fields, iconic_taxon_name). Adds a QR code when a URL is present.
     """
-    doc = BaseDocTemplate(filename, 
-                          pagesize=letter, 
-                          leftMargin=0.25*inch, 
-                          rightMargin=0.25*inch, 
-                          topMargin=0.12*inch, 
-                          bottomMargin=0.12*inch)
+   
     register_fonts()
     if fungus_fair_mode:
         try:
@@ -1391,7 +1386,9 @@ def create_pdf_content(labels, filename, no_qr=False, title_field=None, fungus_f
             print_error("Error: PIL (Pillow) is required for fungus fair mode image handling.")
             sys.exit(1)
 
-    doc = BaseDocTemplate(filename, pagesize=letter, leftMargin=0.25*inch, rightMargin=0.25*inch, topMargin=0.25*inch, bottomMargin=0.25*inch)
+    doc = BaseDocTemplate(filename, pagesize=letter, 
+                          leftMargin=0.25*inch, rightMargin=0.25*inch, 
+                          topMargin=0.12*inch, bottomMargin=0.12*inch)
 
     # Two columns
     column_gap = 0.5 * inch # Must be twice the margin to cut labels that are the same size
