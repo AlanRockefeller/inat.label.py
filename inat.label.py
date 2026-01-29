@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: January 14, 2026
-Version: 3.9
+Date: January 29, 2026
+Version: 3.9.1
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -2240,7 +2240,6 @@ def main():
     # If it is minilabel mode, stack order can not be used, yet. -- let me know if this is needed.
     if args.minilabel and args.stack_order:
         parser.error("argument --stack-order: can not be used with --minilabel")
-        sys.exit(1) 
 
     # Define rtf_mode and pdf_mode based on whether --rtf or --pdf argument is provided
     rtf_mode = bool(args.rtf)
