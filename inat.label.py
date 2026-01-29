@@ -181,14 +181,11 @@ def _rate_limit_wait():
         if _next_allowed_time < now:
             _next_allowed_time = now
 
-        if len(_request_times) < _SMOOTH_THRESHOLD:
-            # Burst mode: minimal wait (just the hard cap wait, if any)
-            smoothing_target = now
-            # Do not increment _next_allowed_time to create debt; just keep it current.
-            # This allows the *next* request to also burst or start smoothing from now.
-        else:
-            # Smoothing mode: respect the schedule
-            smoothing_target = _next_allowed_time
+        # Burst mode: minimal wait (just the hard cap wait, if any).
+        # Do not increment _next_allowed_time to create debt; just keep it current.
+        # This allows the *next* request to also burst or start smoothing from now.
+        # Smoothing mode: respect the schedule.
+        smoothing_target = now if len(_request_times) < _SMOOTH_THRESHOLD else _next_allowed_time
 
         # 4. Calculate final wait
         final_time = max(now + wait_for_cap, smoothing_target)
@@ -586,7 +583,7 @@ def fetch_api_data(url, retries=6):
                 try:
                     return response.json(), None
                 except ValueError as e:
-                    return None, f"Error parsing JSON: {str(e)}"
+                    return None, f"Error parsing JSON: {e!s}"
 
             if response.status_code == 404:
                 return None, "Not found (404)"
@@ -688,7 +685,7 @@ def fetch_api_data(url, retries=6):
             total_wait += wait
             continue
         except Exception as e:
-            return None, f"Unexpected error: {str(e)}"
+            return None, f"Unexpected error: {e!s}"
 
     return None, "Exceeded maximum retries due to rate limiting or network errors"
 
@@ -752,10 +749,8 @@ def _start_taxon_batcher():
                     if tid is not None:
                         results_by_id[tid] = item
             # Fulfill waiters and populate cache
-            with _taxon_pending_lock:
-                # Also lock the cache when updating
-                with _taxon_cache_lock:
-                    for tid in ids:
+            with _taxon_pending_lock, _taxon_cache_lock:
+                for tid in ids:
                         _taxon_cache[tid] = results_by_id.get(tid)
                         evt = _taxon_pending.get(tid)
                         if evt:
@@ -903,7 +898,7 @@ def get_mushroom_observer_data(mo_id, retries=6):
                 }
             )
 
-        if "sequences" in mo_observation and mo_observation["sequences"]:
+        if mo_observation.get("sequences"):
             for sequence in mo_observation["sequences"]:
                 locus = sequence.get("locus", "").upper()
                 bases = sequence.get("bases", "")
@@ -1013,7 +1008,7 @@ def get_coordinates(observation_data):
     - For obscured observations, defaults accuracy to 20000m.
     - Returns ("Not available", None) when no coordinates are present.
     """
-    if "geojson" in observation_data and observation_data["geojson"]:
+    if observation_data.get("geojson"):
         coordinates = observation_data["geojson"]["coordinates"]
         latitude = f"{coordinates[1]:.5f}"
         longitude = f"{coordinates[0]:.5f}"
@@ -1657,7 +1652,7 @@ def create_pdf_content(
             base_font = "SystemUnicodeFont"
             # System fonts often have larger glyphs; reduce font size to compensate.
             font_size_multiplier = 0.85
-            char_report = ", ".join(f"'{c}'" for c in sorted(list(non_ascii_found)))
+            char_report = ", ".join(f"'{c}'" for c in sorted(non_ascii_found))
             print_error(
                 f"Info: Non-ASCII characters detected: {char_report}. Switching to system Unicode font for PDF and reducing text size."
             )
@@ -2019,7 +2014,7 @@ def create_minilabel_pdf_content(labels, filename):
             base_font = "SystemUnicodeFont"
             # System fonts often have larger glyphs; reduce font size to compensate.
             font_size_multiplier = 0.85
-            char_report = ", ".join(f"'{c}'" for c in sorted(list(non_ascii_found)))
+            char_report = ", ".join(f"'{c}'" for c in sorted(non_ascii_found))
             print_error(
                 f"Info: Non-ASCII characters detected: {char_report}. Switching to system Unicode font for PDF and reducing text size."
             )
@@ -2401,7 +2396,7 @@ def create_rtf_content(labels, no_qr=False, fungus_fair_mode=False):
                         # no QR - just end paragraph cleanly
                         rtf_content += r"\par"
                 else:
-                    # no QR – just end paragraph cleanly
+                    # no QR - just end paragraph cleanly
                     rtf_content += r"\par"
 
             # close label group
@@ -2983,7 +2978,7 @@ def main():
                     return ("ok", (label, updated_iconic_taxon))
                 return ("err", f"Could not create label for {observation_id}")
         except Exception as e:
-            return ("err", f"Unexpected error for {input_value}: {str(e)}")
+            return ("err", f"Unexpected error for {input_value}: {e!s}")
 
     # Respect API guidelines by limiting concurrency to a small number (<=5)
     max_workers = (
@@ -3111,9 +3106,7 @@ def main():
                                 value,
                             )
                             print(f"{field}: {value}", flush=True)
-                        elif field == "iNaturalist URL":
-                            print(value, flush=True)
-                        elif field == "Mushroom Observer URL":
+                        elif field in {"iNaturalist URL", "Mushroom Observer URL"}:
                             print(value, flush=True)
                         else:
                             if field == "Scientific Name":
