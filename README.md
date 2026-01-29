@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.9
+# iNaturalist Herbarium Label Generator version 3.9.1
 # By Alan Rockefeller
-# January 14, 2026
+# January 29, 2026
 
 
 ## Description
@@ -64,6 +64,9 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
     DNA Barcode RPB1
     DNA Barcode RPB2
     DNA Barcode TEF1
+- Automatically sorts labels by observation number (or title field) for consistent ordering.
+- Support for "stack order" printing with `--stack-order`, which reorders labels so they remain in order when the printed pages are cut and stacked (assumes 2 columns of 3 labels per page).
+- Optimized PDF layout with narrow top/bottom margins and a wider center gap to simplify cutting and ensure uniform label sizes.
 - By default outputs labels to console for quick viewing / testing
 - Optionally creates RTF files for high-quality printing + QR code (RTF or PDF output is strongly recommended)
 - Optionally creates PDF files for more compatibility
@@ -128,6 +131,11 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
 5. Generate labels with custom fields - in this case without Coordinates but with Fungusworld number
    ```
    python3 inat.label.py 183905751 147249599 --custom "+Fungusworld, -Coordinates" --pdf out.pdf
+   ```
+
+6. Generate labels in stack order (reordered for efficient cutting and stacking):
+   ```
+   python3 inat.label.py 183905751 147249599 147249600 147249601 147249602 147249603 --pdf labels.pdf --stack-order
    ```
 
 ## Output
