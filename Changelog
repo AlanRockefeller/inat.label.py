@@ -1,5 +1,22 @@
 # Changelog
 
+
+# 3.9.1 - PR submitted by Douglas Smith
+January 29, 2026
+
+## Changed
+- Tweaked PDF layout margins for two-column label output: reduced top/bottom margins (0.25" → 0.12") and increased the column gap (0.25" → 0.5") for more reliable cutting of same-sized labels.
+
+### Added
+- New CLI flag `--stack-order` to print PDF labels in a cut-and-stack-friendly order.
+
+### Behavior
+- Labels are now explicitly sorted before output:
+  - Default sort key: iNaturalist Observation Number (and Mushroom Observer Number as applicable).
+  - If `--title` is provided, sorting uses that title field instead.
+- When `--stack-order` is enabled, labels are reordered across pages/columns/rows to preserve “original order” after cutting and stacking; any empty slots on the last page are filled by repeating the final label as a spacer.
+- `--stack-order` is not compatible with `--minilabel` 
+
 # 3.9
 December 3, 2025
 - Per-label customization of which fields appear on the label via the `--custom` option (add/remove default or observation fields without editing the code).
