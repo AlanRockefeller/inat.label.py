@@ -115,6 +115,7 @@ from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont, TTFError
 
+
 PDF_BASE_FONT = os.environ.get("PDF_BASE_FONT", "Times-Roman")
 _fonts_registered = False
 _fonts_lock = threading.Lock()
