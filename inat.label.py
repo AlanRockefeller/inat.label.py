@@ -5,7 +5,7 @@ iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: January 29, 2026
-Version: 3.9.1
+Version: 3.9.2
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -75,6 +75,7 @@ Python version 3.6 or higher is recommended.
 import argparse
 import colorama
 from colorama import Fore, Style
+import math
 import datetime
 import html
 import os
@@ -1004,41 +1005,84 @@ def format_mushroom_observer_url(url):
 def get_coordinates(observation_data):
     """Return ("lat, lon", accuracy_str) from observation geojson, if present.
 
-    - Formats lat/lon to 5 decimals. Accuracy is "Xm" or "Ykm" when available.
-    - For obscured observations, defaults accuracy to 20000m.
+    - Formats lat/lon with variable precision based on accuracy.
+    - For private observations, returns ("private", None).
+    - For obscured observations, uses the larger of iNat positional_accuracy or the
+      computed diagonal of the 0.2°×0.2° obscuration cell at the observation latitude.
     - Returns ("Not available", None) when no coordinates are present.
     """
-    if observation_data.get("geojson"):
-        coordinates = observation_data["geojson"]["coordinates"]
-        latitude = f"{coordinates[1]:.5f}"
-        longitude = f"{coordinates[0]:.5f}"
+    geoprivacy = observation_data.get("geoprivacy")
+    if geoprivacy == "private":
+        return "private", None
 
-        # Try to get geoprivacy information
-        geoprivacy = observation_data.get("geoprivacy")
+    def _obscured_cell_diagonal_m(lat_deg: float) -> float:
+        phi = math.radians(lat_deg)
+        m_per_deg_lat = (
+            111132.92
+            - 559.82 * math.cos(2 * phi)
+            + 1.175 * math.cos(4 * phi)
+            - 0.0023 * math.cos(6 * phi)
+        )
+        m_per_deg_lon = (
+            111412.84 * math.cos(phi)
+            - 93.5 * math.cos(3 * phi)
+            + 0.118 * math.cos(5 * phi)
+        )
+        return math.hypot(0.2 * m_per_deg_lat, 0.2 * m_per_deg_lon)
 
-        # Check if the observation is obscured
-        is_obscured = observation_data.get("obscured", False)
+    def _coord_decimals_for_accuracy(acc_m) -> int:
+        if acc_m is None:
+            return 5
+        if acc_m >= 20000:
+            return 2
+        if acc_m >= 2000:
+            return 3
+        if acc_m >= 200:
+            return 4
+        return 5
 
-        if is_obscured or geoprivacy == "obscured":
-            accuracy = 20000  # Set accuracy to 20,000 meters
-        else:
-            accuracy = observation_data.get("positional_accuracy")
+    geo = observation_data.get("geojson")
+    if not geo:
+        return "Not available", None
 
-        if accuracy:
-            # Format accuracy in kilometers if > 1000 meters
-            if accuracy > 1000:
-                accuracy_km = accuracy / 1000
-                accuracy_str = (
-                    f"{accuracy_km:.1f}km"
-                    if accuracy_km != int(accuracy_km)
-                    else f"{int(accuracy_km)}km"
-                )
+    coordinates = geo.get("coordinates")
+    if not coordinates or len(coordinates) < 2:
+        return "Not available", None
+
+    lat_val = float(coordinates[1])
+    lon_val = float(coordinates[0])
+
+    is_obscured = bool(observation_data.get("obscured", False))
+    accuracy = observation_data.get("positional_accuracy")
+    try:
+        accuracy = float(accuracy) if accuracy is not None else None
+    except (TypeError, ValueError):
+        accuracy = None
+    if accuracy == 0:
+        accuracy = None
+
+    obscured = is_obscured or geoprivacy == "obscured"
+    if obscured:
+        accuracy = max(accuracy or 0.0, _obscured_cell_diagonal_m(lat_val))
+        decimals = 2
+    else:
+        decimals = _coord_decimals_for_accuracy(accuracy)
+
+    latitude = format(lat_val, f".{decimals}f")
+    longitude = format(lon_val, f".{decimals}f")
+
+    accuracy_str = None
+    if accuracy is not None and accuracy > 0:
+        if accuracy > 1000:
+            km = accuracy / 1000.0
+            if obscured or km >= 10:
+                accuracy_str = f"{int(round(km))}km"
             else:
-                accuracy_str = f"{int(accuracy)}m"
-            return f"{latitude}, {longitude}", accuracy_str
+                accuracy_str = f"{km:.1f}km"
         else:
-            return f"{latitude}, {longitude}", None
-    return "Not available", None
+            accuracy_str = f"{int(round(accuracy))}m"
+
+    return f"{latitude}, {longitude}", accuracy_str
 
 
 def parse_date(date_string):
@@ -1311,31 +1355,38 @@ def create_inaturalist_label(
         label.append(("Common Name", common_name))
 
     # Add these fields to all labels
+    geoprivacy = observation_data.get("geoprivacy")
+    is_private = (geoprivacy == "private")
+
     if isinstance(obs_number, str) and obs_number.startswith("MO"):
         # For Mushroom Observer data
         mo_number = obs_number.replace("MO", "")
-        label.extend(
-            [
-                ("Mushroom Observer Number", mo_number),
-                ("Mushroom Observer URL", url),
-                ("Location", location),
-                ("Coordinates", gps_coords),
-                ("Date Observed", date_observed_str),
-                ("Observer", observer),
-            ]
-        )
+        fields_to_add = [
+            ("Mushroom Observer Number", mo_number),
+            ("Mushroom Observer URL", url),
+        ]
+        if not is_private:
+            fields_to_add.append(("Location", location))
+        fields_to_add.extend([
+            ("Coordinates", gps_coords),
+            ("Date Observed", date_observed_str),
+            ("Observer", observer),
+        ])
+        label.extend(fields_to_add)
     else:
         # For iNaturalist data
-        label.extend(
-            [
-                ("iNaturalist Observation Number", str(obs_number)),
-                ("iNaturalist URL", url),
-                ("Location", location),
-                ("Coordinates", gps_coords),
-                ("Date Observed", date_observed_str),
-                ("Observer", observer),
-            ]
-        )
+        fields_to_add = [
+            ("iNaturalist Observation Number", str(obs_number)),
+            ("iNaturalist URL", url),
+        ]
+        if not is_private:
+            fields_to_add.append(("Location", location))
+        fields_to_add.extend([
+            ("Coordinates", gps_coords),
+            ("Date Observed", date_observed_str),
+            ("Observer", observer),
+        ])
+        label.extend(fields_to_add)
 
     # Handle DNA Barcode fields consistently for both platforms
     dna_fields = [

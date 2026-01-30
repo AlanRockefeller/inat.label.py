@@ -1,6 +1,16 @@
 # Changelog
 
 
+# 3.9.2
+January 29, 2026
+
+- **Coordinate Accuracy & Privacy Improvements**:
+  - Implemented variable coordinate precision based on accuracy (e.g., fewer decimals for obscured or low-accuracy points) to avoid false precision.
+  - Added support for "private" geoprivacy: when an observation is private, the Coordinates field displays "private" and the Location field is omitted.
+  - Improved accuracy calculation for obscured observations by computing the diagonal of the 0.2° × 0.2° obscuration cell at the observation's latitude.
+  - Enhanced accuracy string formatting with better rounding and standardizing on "km" for values over 1km.
+- **Robustness**: Added safety checks for geojson parsing and ensured Python 3.6 compatibility for dynamic string formatting.
+
 # 3.9.1 - PR submitted by Douglas Smith
 January 29, 2026
 
