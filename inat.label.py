@@ -2737,6 +2737,12 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    #If using number per page, this must we greate than 0
+    if args.num_per_page <= 0:
+        parser.error("argument --num-per-page: must be an integer greater than 0") 
+        parser.print_help()
+        sys.exit(1)    
+
     # User can not use 'Notes" as title field
     if args.title == "Notes":
         parser.error("argument --title: 'Notes' field can not be used as title")
