@@ -1422,7 +1422,7 @@ def create_inaturalist_label(
     genbank_accession = get_field_value(observation_data, "GenBank Accession Number")
     if not genbank_accession:
         genbank_accession = get_field_value(observation_data, "GenBank Accession")
-    if genbank_accession:
+    if genbank_accession and genbank_accession.lower() != "none":
         label.append(("GenBank Accession Number", genbank_accession))
 
     provisional_name = get_field_value(observation_data, "Provisional Species Name")
@@ -2681,6 +2681,12 @@ def main():
         "--stack-order", action="store_true", help="Print the labels in stack order"
     )
     parser.add_argument(
+        "--num-per-page",
+        type=int,
+        default=6,
+        help="Number of labels per page (default 6; for stack ordering)",
+    )
+    parser.add_argument(
         "--custom",
         help='Add or remove fields from the default label format. Use "+" to add and "-" to remove. For example: --custom "+My Field, -Observer"',
     )
@@ -3075,16 +3081,18 @@ def main():
     if args.stack_order:
         stacked_labels = []
         m = len(labels)  # number of labels
-        n = m // 6 if m % 6 == 0 else (m // 6) + 1  # number of pages
+        np = args.num_per_page  # number of labels per page
+        nr = np // 2  # number of rows per page (assuming 2 columns)
+        n = m // np if m % np == 0 else (m // np) + 1  # number of pages
         # For this we will assume 2 columns of 3 labels each per page
         # Reorders so that cutting columns, stacking left-on-right, then cutting
         # from bottom yields labels in original order.
-        for i in range(n * 6):
+        for i in range(n * np):
             # Map output position i to source index j:
-            # - (i % 6) % 3: row within page (0-2)
-            # - (i % 6) // 3: column within page (0-1)
-            # - i // 6: which page
-            j = n * (2 * ((i % 6) % 3) + (i % 6) // 3) + i // 6
+            # - (i % np) % nr: row within page (0-nr-1)
+            # - (i % np) // nr: column within page (0-1)
+            # - i // np: which page
+            j = n * (2 * ((i % np) % nr) + (i % np) // nr) + i // np
             if j >= m:
                 j = m - 1  # re-use last label as spacer to fill pages
             stacked_labels.append(labels[j])
