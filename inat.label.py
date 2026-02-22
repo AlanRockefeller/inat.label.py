@@ -3124,7 +3124,7 @@ def main():
                                 )
                             manual_label.append(("Edibility", "unknown"))
 
-                        labels.append((manual_label, "Fungus"))
+                        labels.append((len(labels), (manual_label, "Fungus")))
             except Exception as e:
                 print_error(f"Error reading CSV file {csv_file}: {e}")
 
@@ -3151,7 +3151,7 @@ def main():
         manual_label.append(("Edibility", args.edibility or "unknown"))
 
         # Add to labels list
-        labels.append((manual_label, "Fungus"))
+        labels.append((len(labels), (manual_label, "Fungus")))
 
     elif not observation_ids and not labels:
         # Standard behavior: show help if no IDs, no manual label, and no CSV labels

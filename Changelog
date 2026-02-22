@@ -4,6 +4,7 @@
 February 22, 2026
 
 - Add the ability to select the size of minilabels
+- Add label sorting capabilities (--sort none|date|voucher|custom, --sort-field FIELD)
 
 # 3.9.2
 January 29, 2026
