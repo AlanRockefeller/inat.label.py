@@ -98,6 +98,7 @@ import binascii
 from bs4 import BeautifulSoup
 from dateutil import parser as dateutil_parser
 import qrcode
+from functools import cmp_to_key
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import (
     BaseDocTemplate,
@@ -148,6 +149,21 @@ _request_semaphore = threading.BoundedSemaphore(
 _MAX_WAIT_SECONDS = float(os.environ.get("INAT_MAX_WAIT_SECONDS", "30"))
 _QUIET = bool(int(os.environ.get("INAT_QUIET", "0")))
 
+# Minilabel size presets (1 = smallest/current, 10 = largest)
+# Each entry: (num_columns, qr_box_size, pdf_qr_inches, pdf_font_pt, rtf_qr_twips, rtf_font_half_pts)
+MINILABEL_SIZES = {
+    1: (8, 1, 0.33, 7.5, 500, 16),
+    2: (7, 1, 0.40, 8.0, 570, 17),
+    3: (6, 2, 0.48, 8.5, 660, 18),
+    4: (6, 2, 0.55, 9.0, 750, 19),
+    5: (5, 2, 0.62, 9.5, 850, 20),
+    6: (5, 2, 0.70, 10.0, 950, 22),
+    7: (4, 3, 0.80, 10.5, 1100, 24),
+    8: (4, 3, 0.90, 11.0, 1250, 26),
+    9: (3, 3, 1.00, 11.5, 1400, 28),
+    10: (3, 4, 1.10, 12.0, 1550, 30),
+}
+
 
 def _rate_limit_wait():
     """Respect RPM window with smoothing only after a small burst threshold.
@@ -186,7 +202,9 @@ def _rate_limit_wait():
         # Do not increment _next_allowed_time to create debt; just keep it current.
         # This allows the *next* request to also burst or start smoothing from now.
         # Smoothing mode: respect the schedule.
-        smoothing_target = now if len(_request_times) < _SMOOTH_THRESHOLD else _next_allowed_time
+        smoothing_target = (
+            now if len(_request_times) < _SMOOTH_THRESHOLD else _next_allowed_time
+        )
 
         # 4. Calculate final wait
         final_time = max(now + wait_for_cap, smoothing_target)
@@ -369,13 +387,16 @@ RTF_HEADER = r"""{\rtf1\ansi\uc1\deff3\adeflang1025
 """
 
 
-def generate_qr_code(url, minilabel_mode=False):
+def generate_qr_code(url, minilabel_mode=False, qr_box_size=None):
     """Generate a small PNG QR code for the given URL and return (hex_string, size_tuple)."""
     try:
-        if minilabel_mode:
-            qr = qrcode.QRCode(version=1, box_size=1, border=1)
+        if qr_box_size is not None:
+            box = qr_box_size
+        elif minilabel_mode:
+            box = 1
         else:
-            qr = qrcode.QRCode(version=1, box_size=2, border=1)
+            box = 2
+        qr = qrcode.QRCode(version=1, box_size=box, border=1)
         qr.add_data(url)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
@@ -752,11 +773,11 @@ def _start_taxon_batcher():
             # Fulfill waiters and populate cache
             with _taxon_pending_lock, _taxon_cache_lock:
                 for tid in ids:
-                        _taxon_cache[tid] = results_by_id.get(tid)
-                        evt = _taxon_pending.get(tid)
-                        if evt:
-                            evt.set()
-                            _taxon_pending.pop(tid, None)
+                    _taxon_cache[tid] = results_by_id.get(tid)
+                    evt = _taxon_pending.get(tid)
+                    if evt:
+                        evt.set()
+                        _taxon_pending.pop(tid, None)
 
     _taxon_batcher_thread = threading.Thread(
         target=_loop, name="inat-taxa-batcher", daemon=True
@@ -1356,7 +1377,7 @@ def create_inaturalist_label(
 
     # Add these fields to all labels
     geoprivacy = observation_data.get("geoprivacy")
-    is_private = (geoprivacy == "private")
+    is_private = geoprivacy == "private"
 
     if isinstance(obs_number, str) and obs_number.startswith("MO"):
         # For Mushroom Observer data
@@ -1367,11 +1388,13 @@ def create_inaturalist_label(
         ]
         if not is_private:
             fields_to_add.append(("Location", location))
-        fields_to_add.extend([
-            ("Coordinates", gps_coords),
-            ("Date Observed", date_observed_str),
-            ("Observer", observer),
-        ])
+        fields_to_add.extend(
+            [
+                ("Coordinates", gps_coords),
+                ("Date Observed", date_observed_str),
+                ("Observer", observer),
+            ]
+        )
         label.extend(fields_to_add)
     else:
         # For iNaturalist data
@@ -1381,11 +1404,13 @@ def create_inaturalist_label(
         ]
         if not is_private:
             fields_to_add.append(("Location", location))
-        fields_to_add.extend([
-            ("Coordinates", gps_coords),
-            ("Date Observed", date_observed_str),
-            ("Observer", observer),
-        ])
+        fields_to_add.extend(
+            [
+                ("Coordinates", gps_coords),
+                ("Date Observed", date_observed_str),
+                ("Observer", observer),
+            ]
+        )
         label.extend(fields_to_add)
 
     # Handle DNA Barcode fields consistently for both platforms
@@ -2000,8 +2025,8 @@ def create_pdf_content(
     doc.build(story)
 
 
-def create_minilabel_pdf_content(labels, filename):
-    """Render minilabels into an 8-column PDF, with QR on left and 'iNat' + number top-aligned on the right."""
+def create_minilabel_pdf_content(labels, filename, minilabel_size=1):
+    """Render minilabels into a multi-column PDF, with QR on left and 'iNat' + number top-aligned on the right."""
     register_fonts()
     from reportlab.platypus import (
         BaseDocTemplate,
@@ -2028,7 +2053,11 @@ def create_minilabel_pdf_content(labels, filename):
         bottomMargin=0.5 * inch,
     )
 
-    num_columns = 8
+    size_cfg = MINILABEL_SIZES.get(minilabel_size, MINILABEL_SIZES[1])
+    num_columns = size_cfg[0]
+    pdf_qr_inches = size_cfg[2]
+    pdf_font_pt = size_cfg[3]
+    qr_box_size = size_cfg[1]
     usable_width = doc.width  # inside margins
     col_width = usable_width / num_columns
 
@@ -2078,8 +2107,8 @@ def create_minilabel_pdf_content(labels, filename):
         "MiniLabelText",
         parent=styles["Normal"],
         fontName=base_font,
-        fontSize=7.5 * font_size_multiplier,
-        leading=8.5 * font_size_multiplier,
+        fontSize=pdf_font_pt * font_size_multiplier,
+        leading=(pdf_font_pt + 1) * font_size_multiplier,
     )
 
     story = []
@@ -2094,13 +2123,15 @@ def create_minilabel_pdf_content(labels, filename):
             continue
 
         # make small QR
-        qr_hex, _ = generate_qr_code(qr_url, minilabel_mode=True)
+        qr_hex, _ = generate_qr_code(
+            qr_url, minilabel_mode=True, qr_box_size=qr_box_size
+        )
         if not qr_hex:
             story.append(Spacer(1, 0.04 * inch))
             continue
 
         qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
-        qr_size = 0.33 * inch  # small but scannable
+        qr_size = pdf_qr_inches * inch  # scaled by minilabel size
         qr_image = ReportLabImage(qr_img_data, width=qr_size, height=qr_size)
 
         # right-hand stacked text
@@ -2462,13 +2493,17 @@ def create_rtf_content(labels, no_qr=False, fungus_fair_mode=False):
     return rtf_content
 
 
-def create_minilabel_rtf_content(labels):
+def create_minilabel_rtf_content(labels, minilabel_size=1):
     """Generate RTF content for minilabels and return it as a string."""
     rtf_header = MINILABEL_RTF_HEADER
     rtf_footer = r"}"
     rtf_content = rtf_header
 
-    num_columns = 8
+    size_cfg = MINILABEL_SIZES.get(minilabel_size, MINILABEL_SIZES[1])
+    num_columns = size_cfg[0]
+    qr_box_size = size_cfg[1]
+    desired_twips = size_cfg[4]
+    rtf_font_half_pts = size_cfg[5]
     page_width_twips = 12240
     margins = 720  # 0.5 inch
     usable_width = page_width_twips - (2 * margins)
@@ -2489,14 +2524,16 @@ def create_minilabel_rtf_content(labels):
                 row.append("")
                 continue
 
-            qr_hex, qr_size = generate_qr_code(qr_url, minilabel_mode=True)
+            qr_hex, qr_size = generate_qr_code(
+                qr_url, minilabel_mode=True, qr_box_size=qr_box_size
+            )
             if not qr_hex:
                 row.append("")
                 continue
 
             qr_pixel_width = qr_size[0]
             qr_pixel_height = qr_size[1]
-            desired_twips = 500  # QR display size (500 twips ≈ 0.35 inch)
+            # desired_twips is set from size_cfg above
 
             # Build cell content
             cell_content = "{"
@@ -2515,7 +2552,7 @@ def create_minilabel_rtf_content(labels):
                 + r"}"
             )
             # Observation number, slightly spaced but no redundant paragraph breaks
-            cell_content += r"\pard\fs16 " + str(obs_number)
+            cell_content += r"\pard\fs" + str(rtf_font_half_pts) + " " + str(obs_number)
             cell_content += "}"
             row.append(cell_content)
 
@@ -2595,6 +2632,185 @@ def is_within_california(latitude, longitude):
     return (CA_SOUTH <= latitude <= CA_NORTH) and (CA_WEST <= longitude <= CA_EAST)
 
 
+def label_get(label_fields, field_name):
+    """Case-insensitive lookup for a field in a label list of (field, value)."""
+    if not label_fields:
+        return None
+    field_name_lower = field_name.lower()
+    for item in label_fields:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        f, v = item
+        if isinstance(f, str) and f.lower() == field_name_lower:
+            return v
+    return None
+
+
+def get_voucher_value(label_fields):
+    """Return the value of the first found voucher field."""
+    val = label_get(label_fields, "Voucher Number")
+    if val:
+        return val
+    # Fallback to alternative name
+    return label_get(label_fields, "Voucher Number(s)")
+
+
+def parse_key_default(value):
+    """
+    Parse sort key for default behavior (strict numeric extraction for backward compatibility).
+    Returns (numeric_val_or_0).
+    """
+    if value is None:
+        return 0
+    val_str = str(value).strip()
+
+    # Strict trailing integer extraction: matches strict original behavior
+    # "Plot 12" -> 12
+    # "Plot 12a" -> 0 (because 'a' is trailing)
+    m = re.search(r"(\d+)\s*$", val_str)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    return 0
+
+
+def normalize(value):
+    """Return (is_missing, s_lower) for value, with whitespace collapsed."""
+    if value is None:
+        return (1, "")
+    s = str(value).strip()
+    if not s:
+        return (1, "")
+    # Collapse internal whitespace for consistent prefix matching
+    # "Plot  2" and "Plot 2" -> "plot 2"
+    s_clean = " ".join(s.split()).lower()
+    return (0, s_clean)
+
+
+def split_trailing_number(s):
+    """Return (prefix, num) if trailing number exists, else (None, None)."""
+    match = re.search(r"^(.*?)(\d+)$", s)
+    if match:
+        try:
+            return (match.group(1), int(match.group(2)))
+        except ValueError:
+            pass
+    return (None, None)
+
+
+def cmp_alpha_then_trailing_num(val_a, val_b):
+    """
+    Comparator for voucher/custom sorts.
+    Rules:
+    1. Missing values sort last.
+    2. Primary sort: Alphabetical.
+    3. Tie-break: Trailing number value, ONLY if prefixes match.
+    """
+    (miss_a, s_a) = normalize(val_a)
+    (miss_b, s_b) = normalize(val_b)
+
+    if miss_a != miss_b:
+        return miss_a - miss_b
+
+    # Both present.
+    # Check for trailing number match.
+    (pref_a, num_a) = split_trailing_number(s_a)
+    (pref_b, num_b) = split_trailing_number(s_b)
+
+    if pref_a is not None and pref_b is not None and pref_a == pref_b:
+        # Both have trailing numbers and prefixes match. Compare numbers.
+        if num_a != num_b:
+            return (num_a > num_b) - (num_a < num_b)
+
+    # Fallback to alpha sort
+    if s_a != s_b:
+        return (s_a > s_b) - (s_a < s_b)
+
+    return 0
+
+
+def sort_labels(items, sort_mode, title_field=None, sort_field_name=None):
+    """
+    Sort a list of tagged items.
+
+    Args:
+        items: List of tuples (original_index, (label_fields, taxon_name))
+        sort_mode: One of 'none', 'date', 'voucher', 'custom' (or None for default)
+        title_field: Optional title field name override for default sort
+        sort_field_name: Custom field name for 'custom' sort
+
+    Returns:
+        List of (label_fields, taxon_name) tuples, sorted.
+    """
+    # If sort_mode is 'none', strictly preserve input order using the index
+    if sort_mode == "none":
+        # Sort by index
+        sorted_items = sorted(items, key=lambda x: x[0])
+        return [x[1] for x in sorted_items]
+
+    def get_raw_value(item):
+        _, (label, _) = item
+        if sort_mode == "voucher":
+            return get_voucher_value(label)
+        elif sort_mode == "custom":
+            if sort_field_name:
+                return label_get(label, sort_field_name)
+        return None
+
+    if sort_mode in ("voucher", "custom"):
+
+        def cmp_items(item_a, item_b):
+            val_a = get_raw_value(item_a)
+            val_b = get_raw_value(item_b)
+
+            res = cmp_alpha_then_trailing_num(val_a, val_b)
+            if res != 0:
+                return res
+
+            # Stable sort using index
+            return item_a[0] - item_b[0]
+
+        sorted_items = sorted(items, key=cmp_to_key(cmp_items))
+        return [x[1] for x in sorted_items]
+
+    # Legacy key-based sorting for default and date (unchanged logic)
+    def get_sort_key_legacy(item):
+        index, (label, _) = item
+
+        if sort_mode == "date":
+            # Special case for date: parse to comparable or None
+            date_str = label_get(label, "Date Observed")
+            if date_str:
+                try:
+                    # Parse to datetime, then normalize to date object to avoid naive/aware mismatch
+                    d = dateutil_parser.parse(date_str).date()
+                except (ValueError, TypeError):
+                    print_error(f"Warning: Could not parse date '{date_str}', sorting last")
+                else:
+                    return (0, d, index)
+            # Missing or unparseable: sort last using datetime.date.max
+            return (1, datetime.date.max, index)
+
+        else:  # Default behavior (Observation Number or Title)
+            target_field = (
+                title_field if title_field else "iNaturalist Observation Number"
+            )
+
+            raw_val = label_get(label, target_field)
+            if not raw_val and not title_field:
+                # Fallback for default sort if iNat num missing
+                raw_val = label_get(label, "Mushroom Observer Number")
+
+            # Default key uses strictly numeric logic (backward compatibility)
+            numeric_sort_val = parse_key_default(raw_val)
+            return (numeric_sort_val, index)
+
+    sorted_items = sorted(items, key=get_sort_key_legacy)
+    return [x[1] for x in sorted_items]
+
+
 def main():
     """
     Command-line entry point that builds herbarium labels from iNaturalist or Mushroom Observer observation identifiers and writes them to stdout, an RTF file, or a PDF file.
@@ -2669,6 +2885,14 @@ def main():
         help="Generate minilabels with only observation number and QR code",
     )
     parser.add_argument(
+        "--minilabel-size",
+        type=int,
+        choices=range(1, 11),
+        default=None,
+        metavar="N",
+        help="Minilabel size from 1 (smallest) to 10 (largest). Default: 1",
+    )
+    parser.add_argument(
         "--omit-notes", action="store_true", help="Omit the Notes field from all labels"
     )
     parser.add_argument(
@@ -2698,10 +2922,26 @@ def main():
     parser.add_argument("--commonname", type=str, help="Common name (fungus fair mode)")
     parser.add_argument("--habitat", type=str, help="Habitat (fungus fair mode)")
     parser.add_argument(
+        "--sort",
+        choices=["none", "date", "voucher", "custom"],
+        help="Sort order for labels (default: observation number)",
+    )
+    parser.add_argument(
+        "--sort-field",
+        metavar="FIELD",
+        help="Field name to sort by (required if --sort=custom)",
+    )
+    parser.add_argument(
         "--sporeprint", type=str, help="Spore print color (fungus fair mode)"
     )
 
     args = parser.parse_args()
+
+    # Validation for --sort and --sort-field
+    if args.sort == "custom" and not args.sort_field:
+        parser.error("--sort=custom requires --sort-field to be specified.")
+    if args.sort != "custom" and args.sort_field:
+        parser.error("--sort-field can only be used with --sort=custom.")
 
     fields_to_add = []
     fields_to_remove = []
@@ -2734,6 +2974,14 @@ def main():
     # User can not use 'Notes" as title field
     if args.title == "Notes":
         parser.error("argument --title: 'Notes' field can not be used as title")
+
+    # Auto-enable minilabel mode if --minilabel-size is given
+    if args.minilabel_size is not None:
+        args.minilabel = True
+
+    # Default minilabel size to 1 if minilabels enabled but no size specified
+    if args.minilabel and args.minilabel_size is None:
+        args.minilabel_size = 1
 
     # If it is minilabel mode, stack order can not be used, yet. -- let me know if this is needed.
     if args.minilabel and args.stack_order:
@@ -2877,7 +3125,7 @@ def main():
                                 )
                             manual_label.append(("Edibility", "unknown"))
 
-                        labels.append((manual_label, "Fungus"))
+                        labels.append((len(labels), (manual_label, "Fungus")))
             except Exception as e:
                 print_error(f"Error reading CSV file {csv_file}: {e}")
 
@@ -2904,7 +3152,7 @@ def main():
         manual_label.append(("Edibility", args.edibility or "unknown"))
 
         # Add to labels list
-        labels.append((manual_label, "Fungus"))
+        labels.append((len(labels), (manual_label, "Fungus")))
 
     elif not observation_ids and not labels:
         # Standard behavior: show help if no IDs, no manual label, and no CSV labels
@@ -2958,15 +3206,15 @@ def main():
 
     start_time = time.time()
 
-    def process_one(input_value):
+    def process_one(index, input_value):
         """Process one input: normalize ID, fetch data, optionally find-CA, and build label."""
         try:
             observation_id = extract_observation_id(input_value, debug=args.debug)
             if observation_id is None:
-                return ("err", f"Invalid input '{input_value}'")
+                return ("err", (index, f"Invalid input '{input_value}'"))
             result = get_observation_data(observation_id)
             if result is None:
-                return ("err", f"Failed to fetch observation {observation_id}")
+                return ("err", (index, f"Failed to fetch observation {observation_id}"))
             observation_data, iconic_taxon_name = result
             if args.find_ca:
                 geo = observation_data.get("geojson")
@@ -3026,10 +3274,10 @@ def main():
                             f"Added label for {updated_iconic_taxon} {scientific_name_plain}",
                             flush=True,
                         )
-                    return ("ok", (label, updated_iconic_taxon))
-                return ("err", f"Could not create label for {observation_id}")
+                    return ("ok", (index, label, updated_iconic_taxon))
+                return ("err", (index, f"Could not create label for {observation_id}"))
         except Exception as e:
-            return ("err", f"Unexpected error for {input_value}: {e!s}")
+            return ("err", (index, f"Unexpected error for {input_value}: {e!s}"))
 
     # Respect API guidelines by limiting concurrency to a small number (<=5)
     max_workers = (
@@ -3042,34 +3290,23 @@ def main():
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
-            executor.submit(process_one, input_value) for input_value in observation_ids
+            executor.submit(process_one, i, input_value)
+            for i, input_value in enumerate(observation_ids)
         ]
         for fut in futures:
             status, payload = fut.result()
             if status == "ok" and payload:
-                labels.append(payload)
+                # payload is (index, label, taxon)
+                index, label, taxon = payload
+                labels.append((index, (label, taxon)))
             elif status == "err" and payload:
-                failed.append(payload)
+                # Payload is (index, msg)
+                index, msg = payload
+                failed.append(f"[{index}] {msg}")
 
-    # Sort labels by iNaturalist Observation Number by default, or by specified title field
-    sort_param = ("iNaturalist Observation Number", "Mushroom Observer Number")
-    if args.title:
-        sort_param = (args.title,)
-    sorted_labels = sorted(
-        labels,
-        key=lambda x: next(
-            (
-                int(
-                    y[1][len(y[1].rstrip("0123456789")) :]
-                    if y[1][len(y[1].rstrip("0123456789")) :].isdigit()
-                    else 0
-                )
-                for y in x[0]
-                if y[0] in sort_param
-            ),
-            0,
-        ),
-    )
+    # Sort labels using the centralized helper
+    # labels contains tuples of (index, (label, taxon))
+    sorted_labels = sort_labels(labels, args.sort, args.title, args.sort_field)
     labels = sorted_labels
 
     if args.stack_order:
@@ -3099,12 +3336,16 @@ def main():
                     )
                     sys.exit(1)
                 if rtf_mode:
-                    rtf_content = create_minilabel_rtf_content(labels)
+                    rtf_content = create_minilabel_rtf_content(
+                        labels, minilabel_size=args.minilabel_size
+                    )
                     with open(args.rtf, "w") as rtf_file:
                         rtf_file.write(rtf_content)
                     print(f"RTF file created: {os.path.basename(args.rtf)}", flush=True)
                 elif pdf_mode:
-                    create_minilabel_pdf_content(labels, args.pdf)
+                    create_minilabel_pdf_content(
+                        labels, args.pdf, minilabel_size=args.minilabel_size
+                    )
                     print(f"PDF file created: {os.path.basename(args.pdf)}", flush=True)
             elif rtf_mode:
                 rtf_content = create_rtf_content(

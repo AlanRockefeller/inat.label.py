@@ -1,15 +1,15 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>iNaturalist Label Generator</title>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap"
-        rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+        rel="stylesheet" />
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" />
     <style>
         :root {
             --primary: #2d8a5f;
@@ -40,7 +40,13 @@
         }
 
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family:
+                "Inter",
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                Roboto,
+                sans-serif;
             line-height: 1.6;
             color: var(--grey-800);
             background-color: var(--grey-100);
@@ -65,13 +71,15 @@
 
         header .container {
             display: grid;
-            grid-template-columns: 50px 1fr 50px;
+            grid-template-columns: auto 1fr auto;
             align-items: center;
+            gap: 1rem;
         }
 
         .header-left {
-            width: 50px;
             justify-self: start;
+            display: flex;
+            align-items: center;
         }
 
         .logo-img {
@@ -91,6 +99,8 @@
 
         .header-right {
             justify-self: end;
+            display: flex;
+            align-items: center;
         }
 
         main {
@@ -337,7 +347,9 @@
 
         #toast.show {
             visibility: visible;
-            animation: fadein 0.5s, fadeout 0.5s 2.5s;
+            animation:
+                fadein 0.5s,
+                fadeout 0.5s 2.5s;
         }
 
         @keyframes fadein {
@@ -366,28 +378,94 @@
 
         /* Responsive styles */
         @media screen and (max-width: 768px) {
+            .container {
+                padding: 0 14px;
+            }
+
+            /* ---- Header: stop fighting the grid on mobile ---- */
+            header {
+                padding: 0.9rem 0;
+                margin-bottom: 1.25rem;
+            }
+
+            header .container {
+                grid-template-columns: auto 1fr auto;
+                gap: 0.75rem;
+            }
+
+            .header-left {
+                width: auto;
+            }
+
+            .logo-img {
+                height: 26px;
+            }
+
+            .header-title {
+                font-size: 1.55rem;
+                line-height: 1.15;
+                text-align: center;
+                margin: 0;
+            }
+
+            .header-right .btn {
+                padding: 0.55rem 0.85rem;
+                font-size: 0.95rem;
+                white-space: nowrap;
+            }
+
+            /* On very small phones, stack header rows cleanly */
+            @media screen and (max-width: 420px) {
+                header .container {
+                    grid-template-columns: 1fr;
+                    justify-items: center;
+                    text-align: center;
+                }
+
+                .header-left,
+                .header-center,
+                .header-right {
+                    justify-self: center;
+                }
+            }
+
             .observation-input {
-                flex-wrap: wrap;
+                /* Switch from flex-wrap to a cleaner 2-row grid on mobile */
+                display: grid;
+                grid-template-columns: 34px 1fr 44px;
+                grid-template-rows: auto auto;
+                column-gap: 0.5rem;
+                row-gap: 0.5rem;
+                align-items: center;
+                padding: 0.6rem;
             }
 
             .obs-input {
                 width: 100%;
-                order: 1;
+                grid-column: 2;
+                grid-row: 1;
+                padding: 0.65rem;
             }
 
             .result {
                 width: 100%;
-                order: 3;
-                margin-top: 0.5rem;
-                margin-left: 40px;
+                grid-column: 1 / -1;
+                grid-row: 2;
+                margin: 0;
+                min-width: 0;
             }
 
             .actions {
-                order: 2;
+                grid-column: 3;
+                grid-row: 1;
+                justify-content: flex-end;
             }
 
             .observation-number {
-                order: 0;
+                grid-column: 1;
+                grid-row: 1;
+                width: auto;
+                text-align: center;
             }
 
             .form-actions {
@@ -400,8 +478,61 @@
             }
 
             /* keep icon buttons compact everywhere (modals included) */
+
+
+            /* Make icon buttons finger-friendly but not huge */
             .btn.btn-icon {
-                width: auto;
+                width: 40px;
+                height: 40px;
+                padding: 0;
+                border-radius: 999px;
+            }
+
+            /* ---- Primary action buttons: stack nicely on mobile ---- */
+            .form-actions {
+                gap: 0.75rem;
+            }
+
+            /* The row that contains the big buttons */
+            .form-actions>.actions {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.75rem;
+            }
+
+            .form-actions>.actions .btn {
+                width: 100%;
+                justify-content: center;
+            }
+
+            /* Checkbox row: make it readable (no squished columns) */
+            .form-actions label {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+
+            .form-actions input[type="checkbox"] {
+                transform: scale(1.15);
+            }
+
+            /* ---- Footer links: stop the ugly wrap ---- */
+            .footer-links {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 0.75rem 0.5rem;
+                align-items: start;
+            }
+
+            .footer-link {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 0.25rem;
+                font-size: 0.8rem;
+                line-height: 1.1;
+                text-align: center;
+                word-break: keep-all;
             }
         }
 
@@ -431,7 +562,9 @@
             overflow: hidden;
             transform: translateY(8px);
             opacity: 0;
-            transition: opacity 140ms ease, transform 140ms ease;
+            transition:
+                opacity 140ms ease,
+                transform 140ms ease;
         }
 
         .modal-overlay[style*="display: flex"] .modal {
@@ -496,7 +629,9 @@
         .ansi-log {
             background: #0f172a;
             color: #e2e8f0;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-family:
+                ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                "Liberation Mono", "Courier New", monospace;
             font-size: 0.9rem;
             line-height: 1.4;
             border-radius: 6px;
@@ -564,24 +699,144 @@
         .tooltip-help .tooltip-box {
             display: none;
             position: absolute;
-            top: 1.8rem;
-            left: 0;
+            top: calc(100% + 10px);
+            left: 50%;
+            transform: translateX(-50%);
             background: #ffffff;
             color: var(--grey-800);
             border: 1px solid var(--grey-300);
             border-radius: 8px;
             box-shadow: var(--box-shadow);
             padding: 0.75rem 1rem;
-            max-width: 460px;
+            /* IMPORTANT: don't shrink-to-fit the tiny icon width */
+            width: 420px;
+            max-width: min(460px, 90vw);
             line-height: 1.4;
             font-size: 0.9rem;
-            white-space: pre-line;
-            /* render \n as line breaks */
+            white-space: normal;
+            box-sizing: border-box;
             z-index: 1500;
+        }
+
+        /* Optional: little arrow */
+        .tooltip-help .tooltip-box::before {
+            content: "";
+            position: absolute;
+            top: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 0 8px 8px 8px;
+            border-style: solid;
+            border-color: transparent transparent var(--grey-300) transparent;
+        }
+
+        .tooltip-help .tooltip-box::after {
+            content: "";
+            position: absolute;
+            top: -7px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 0 7px 7px 7px;
+            border-style: solid;
+            border-color: transparent transparent #ffffff transparent;
+        }
+
+        /* Tooltip content styling (prevents awkward wrapping/bullets) */
+        .tooltip-title {
+            font-weight: 650;
+            font-size: 1rem;
+            margin-bottom: 0.35rem;
+        }
+
+        .tooltip-list {
+            margin: 0.25rem 0 0.35rem 1.2rem;
+            padding: 0;
+        }
+
+        .tooltip-list li {
+            margin: 0.25rem 0;
+        }
+
+        .tooltip-note {
+            margin-top: 0.35rem;
+            color: var(--grey-600);
         }
 
         .tooltip-help:hover .tooltip-box {
             display: block;
+        }
+
+        /* Add Observations Modal Styles */
+        .addobs-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        @media screen and (max-width: 700px) {
+            .addobs-grid {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+        }
+
+        .addobs-section {
+            background-color: var(--grey-100);
+            padding: 1rem;
+            border-radius: var(--border-radius);
+            border: 1px solid var(--grey-200);
+            height: 100%;
+        }
+
+        .addobs-section-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--grey-800);
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .field-group {
+            margin-bottom: 0.75rem;
+        }
+
+        .field-label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--grey-700);
+            margin-bottom: 0.25rem;
+        }
+
+        .field-input {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid var(--grey-300);
+            border-radius: var(--border-radius);
+            font-size: 0.9rem;
+            transition: var(--transition);
+        }
+
+        .field-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-light);
+        }
+
+        .addobs-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .addobs-pills .btn-sm {
+            flex: 1 1 auto;
+            text-align: center;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.8rem;
         }
     </style>
 </head>
@@ -590,48 +845,46 @@
     <header>
         <div class="container">
             <div class="header-left">
-                <img src="https://static.inaturalist.org/sites/1-logo.svg" alt="iNaturalist Logo" class="logo-img"
-                    style="position: absolute; left: 20px; top: 50%; transform: translateY(-50%);">
+                <img src="https://static.inaturalist.org/sites/1-logo.svg" alt="iNaturalist Logo" class="logo-img" />
             </div>
             <div class="header-center">
                 <h1 class="header-title">iNaturalist Label Generator</h1>
             </div>
             <div class="header-right">
                 <a href="https://images.mushroomobserver.org/labels/help" target="_blank" class="btn btn-outline"
-                    style="color: white; border-color: rgba(255,255,255,0.3);">
-                    <i class="fas fa-question-circle"></i>
-                    Help
+                    style="color: white; border-color: rgba(255, 255, 255, 0.3)"><i
+                        class="fas fa-question-circle"></i>Help
                 </a>
             </div>
         </div>
     </header>
-
     <main>
         <div class="container">
             <div class="card">
                 <h2 class="card-title">
-                    <i class="fas fa-search"></i>
-                    Observation Lookup
-                    <span class="tooltip-help">
-                        <i class="fas fa-info-circle" style="color: var(--grey-200);"></i>
-                        <div class="tooltip-box">
-                            Input formats:
-                            • iNaturalist: just the number (e.g., 150291663) or the full observation URL
-                            • Mushroom Observer: MO12345 or a Mushroom Observer observation URL (generates an MO label)
-                            • Convert MO→iNat: motoinat12345 or moinat12345 (generates an iNaturalist label from an MO
-                            observation)
-                            You can enter multiple values separated by spaces or commas.
+                    <i class="fas fa-search"></i>Observation Lookup
+                    <span class="tooltip-help"><i class="fas fa-info-circle" style="color: var(--grey-200)"></i>
+                        <div class="tooltip-box" role="tooltip">
+                            <div class="tooltip-title">Input formats</div>
+                            <ul class="tooltip-list">
+                                <li><strong>iNaturalist:</strong> just the number (e.g., <code>150291663</code>) or the
+                                    full observation URL</li>
+                                <li><strong>Mushroom Observer:</strong> <code>MO12345</code> or a Mushroom Observer
+                                    observation URL (generates a MO label)</li>
+                                <li><strong>Convert MO → iNat:</strong> <code>motoinat12345</code> or
+                                    <code>moinat12345</code> (generates an iNaturalist label from a MO observation)
+                                </li>
+                            </ul>
+                            <div class="tooltip-note">You can enter multiple values separated by spaces or commas.</div>
                         </div>
                     </span>
                 </h2>
-
                 <form id="observationForm">
                     <div class="observation-list" id="observationInputs">
                         <div class="observation-input">
-                            <span class="observation-number">1</span>
-                            <input type="text" id="obs1" name="observations[]" class="obs-input"
-                                placeholder="Enter observation number(s)" required autocomplete="off">
-                            <span class="result"></span>
+                            <span class="observation-number">1</span><input type="text" id="obs1" name="observations[]"
+                                class="obs-input obs-id-input" placeholder="Enter observation number(s)" required
+                                autocomplete="off" /><span class="result"></span>
                             <div class="actions">
                                 <button type="button" class="btn btn-outline btn-icon removeButton">
                                     <i class="fas fa-times"></i>
@@ -639,129 +892,119 @@
                             </div>
                         </div>
                     </div>
-
-                    <div id="warningMessage" class="warning" style="display: none;">
-                        <i class="fas fa-exclamation-triangle"></i>
-                        <span id="warningText"></span>
+                    <div id="warningMessage" class="warning" style="display: none">
+                        <i class="fas fa-exclamation-triangle"></i><span id="warningText"></span>
                     </div>
-
-                    <div class="form-actions" style="display: flex; flex-direction: column; gap: 1rem;">
+                    <div class="form-actions" style="display: flex; flex-direction: column; gap: 1rem">
                         <div class="actions">
                             <button type="button" id="printRtfButton" class="btn btn-primary">
-                                <i class="fas fa-tags"></i>
-                                Print RTF Labels
-                            </button>
-                            <button type="button" id="printPdfButton" class="btn btn-secondary">
-                                <i class="fas fa-file-pdf"></i>
-                                Print PDF Labels
-                            </button>
-                            <button type="button" id="addObsButton" class="btn btn-outline">
-                                <i class="fas fa-plus"></i>
-                                Add observations by date / username
+                                <i class="fas fa-tags"></i>Print RTF Labels</button><button type="button"
+                                id="printPdfButton" class="btn btn-secondary">
+                                <i class="fas fa-file-pdf"></i>Print PDF Labels</button><button type="button"
+                                id="addObsButton" class="btn btn-outline">
+                                <i class="fas fa-plus"></i>Add observations by date / username
                             </button>
                         </div>
-                        <div style="margin-top: 0.5rem; display: flex; gap: 1rem; flex-wrap: wrap;">
-                            <label>
-                                <input type="checkbox" id="omitQrCodes">
-                                Omit QR Codes
-                            </label>
-                            <label>
-                                <input type="checkbox" name="minilabel" id="minilabel">
-                                Print mini-labels
-                            </label>
-                            <label>
-                                <input type="checkbox" name="common_names" id="common_names">
-                                Include common names
-                            </label>
-                            <label>
-                                <input type="checkbox" name="omit_notes" id="omit_notes">
-                                Omit Notes
+                        <div style="
+                  margin-top: 0.5rem;
+                  display: flex;
+                  gap: 1rem;
+                  flex-wrap: wrap;
+                  align-items: center;
+                ">
+                            <label><input type="checkbox" id="omitQrCodes" />Omit QR Codes </label><label
+                                style="display: inline-flex; align-items: center; gap: 0.35rem;">Mini-labels:
+                                <select id="minilabelSize" name="minilabel_size"
+                                    style="padding: 0.25rem 0.4rem; border: 1px solid var(--grey-300); border-radius: var(--border-radius); font-size: 0.9rem; background: white; cursor: pointer;">
+                                    <option value="">Off</option>
+                                    <option value="1">Size 1 (smallest)</option>
+                                    <option value="2">Size 2</option>
+                                    <option value="3">Size 3</option>
+                                    <option value="4">Size 4</option>
+                                    <option value="5">Size 5</option>
+                                    <option value="6">Size 6</option>
+                                    <option value="7">Size 7</option>
+                                    <option value="8">Size 8</option>
+                                    <option value="9">Size 9</option>
+                                    <option value="10">Size 10 (largest)</option>
+                                </select>
+                            </label><label><input type="checkbox" name="common_names" id="common_names" />Include common
+                                names </label><label><input type="checkbox" name="omit_notes" id="omit_notes" />Omit
+                                Notes
                             </label>
                         </div>
-                        <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem;">
+                        <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem">
                             <button type="button" id="editFieldsButton" class="btn btn-outline btn-sm">
-                                <i class="fas fa-plus"></i>
-                                Add Fields
-                            </button>
-                            <button type="button" id="customFieldsButton" class="btn btn-outline btn-sm">
-                                <i class="fas fa-minus"></i>
-                                Remove Fields
+                                <i class="fas fa-plus"></i>Add Fields</button><button type="button"
+                                id="customFieldsButton" class="btn btn-outline btn-sm">
+                                <i class="fas fa-minus"></i>Remove Fields
                             </button>
                         </div>
                     </div>
                 </form>
             </div>
-
             <div class="help-card">
                 <h3 class="help-title">
-                    <i class="fas fa-info-circle"></i>
-                    Quick Help
+                    <i class="fas fa-info-circle"></i>Quick Help
                 </h3>
                 <p class="help-text">
-                    Enter iNaturalist or Mushroom Observer observation numbers, URLs, or a combination of both to look
-                    up species information for your labels. Add multiple observations as needed - often 8 labels fit on
-                    a page. Results appear when you click away from the input or press Enter.
+                    Enter iNaturalist or Mushroom Observer observation numbers, URLs, or
+                    a combination of both to look up species information for your
+                    labels. Add multiple observations as needed - often 8 labels fit on
+                    a page. Results appear when you click away from the input or press
+                    Enter.
                 </p>
-                <p class="help-text" style="margin-top: 0.5rem;">
-                    Tips:
-                <ul style="margin-top: 0.5rem; padding-left: 1.2rem;">
-                    <li><strong>iNaturalist:</strong> Just the number (e.g., <code>150291663</code>) or the full
-                        observation URL.</li>
-                    <li><strong>Mushroom Observer:</strong> Use <code>MO12345</code> (case-insensitive) or a Mushroom
-                        Observer observation URL to generate an MO label.</li>
-                    <li><strong>Convert MO → iNat:</strong> Use <code>motoinat12345</code> or <code>moinat12345</code>
-                        to convert the MO observation and generate an iNaturalist label.</li>
+                <p class="help-text" style="margin-top: 0.5rem">Tips:</p>
+                <ul style="margin-top: 0.5rem; padding-left: 1.2rem">
+                    <li>
+                        <strong>iNaturalist:</strong> Just the number (e.g.,
+                        <code>150291663</code>) or the full observation URL.
+                    </li>
+                    <li>
+                        <strong>Mushroom Observer:</strong> Use
+                        <code>MO12345</code> (case-insensitive) or a Mushroom Observer
+                        observation URL to generate a MO label.
+                    </li>
+                    <li>
+                        <strong>Convert MO → iNat:</strong> Use
+                        <code>motoinat12345</code> or <code>moinat12345</code> to convert
+                        the MO observation and generate an iNaturalist label.
+                    </li>
                 </ul>
-                </p>
-                <div style="display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap;">
+                <div style="display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap">
                     <button type="button" id="downloadCsvButton" class="btn btn-secondary">
-                        <i class="fas fa-file-csv"></i>
-                        Download CSV
-                    </button>
-                    <a href="/labels/help" class="btn btn-accent">
-                        <i class="fas fa-book"></i>
-                        Full Help
+                        <i class="fas fa-file-csv"></i>Download CSV</button><a href="/labels/help"
+                        class="btn btn-accent"><i class="fas fa-book"></i>Full Help
                     </a>
                 </div>
             </div>
         </div>
     </main>
-
     <footer>
         <div class="container">
             <div class="footer-links">
-                <a href="/labels/todo" class="footer-link">
-                    <i class="fas fa-tasks"></i>
-                    To-Do List
-                </a>
-                <a href="https://www.inaturalist.org" target="_blank" class="footer-link">
-                    <i class="fas fa-external-link-alt"></i>
-                    iNaturalist
-                </a>
-                <a href="https://mushroomobserver.org" target="_blank" class="footer-link">
-                    <img src="{{ url_for('static', filename='mo_favicon.ico') }}" alt="Mushroom Observer Icon"
-                        style="height: 1em; vertical-align: middle; margin-right: 0.25em;">
-                    Mushroom Observer
-                </a>
-                <a href="https://github.com/AlanRockefeller/inat.label.py" target="_blank" class="footer-link">
-                    <i class="fab fa-github"></i>
-                    GitHub Repository
-                </a>
-                <a href="https://images.mushroomobserver.org/labels/help" target="_blank" class="footer-link">
-                    <i class="fas fa-question-circle"></i>
-                    Help
+                <a href="/labels/todo" class="footer-link"><i class="fas fa-tasks"></i>To-Do List </a><a
+                    href="https://www.inaturalist.org" target="_blank" class="footer-link"><i
+                        class="fas fa-external-link-alt"></i>iNaturalist </a><a href="https://mushroomobserver.org"
+                    target="_blank" class="footer-link"><img src="{{ url_for('static', filename='mo_favicon.ico') }}"
+                        alt="Mushroom Observer Icon"
+                        style="height: 1em; vertical-align: middle; margin-right: 0.25em" />Mushroom Observer </a><a
+                    href="https://github.com/AlanRockefeller/inat.label.py" target="_blank" class="footer-link"><i
+                        class="fab fa-github"></i>GitHub Repository </a><a
+                    href="https://images.mushroomobserver.org/labels/help" target="_blank" class="footer-link"><i
+                        class="fas fa-question-circle"></i>Help
                 </a>
             </div>
-            <p>By Alan Rockefeller - <a href="https://github.com/AlanRockefeller/inat.label.py/blob/main/LICENSE.md"
-                    target="_blank" class="footer-link">GNU General Public License v3.0</a></p>
+            <p>
+                By Alan Rockefeller -
+                <a href="https://github.com/AlanRockefeller/inat.label.py/blob/main/LICENSE.md" target="_blank"
+                    class="footer-link">MIT License</a>
+            </p>
         </div>
     </footer>
-
     <div id="toast">
-        <i class="fas fa-check-circle"></i>
-        <span id="toastMessage"></span>
+        <i class="fas fa-check-circle"></i><span id="toastMessage"></span>
     </div>
-
     <!-- Log Modal -->
     <div id="logModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
         <div class="modal">
@@ -781,7 +1024,6 @@
             </div>
         </div>
     </div>
-
     <!-- Add Observations Modal -->
     <div id="addObsModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="addObsTitle">
         <div class="modal">
@@ -792,61 +1034,82 @@
                 </button>
             </div>
             <div class="modal-body">
-                <div
-                    style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; align-items: end;">
-                    <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-                        <div>
-                            <label for="addObsStartDate"
-                                style="display:block; font-size:0.9rem; color:var(--grey-700);">Start Date</label>
-                            <input type="date" id="addObsStartDate" class="obs-input" style="padding:0.5rem;">
+                <div class="addobs-grid">
+                    <!-- Date Range Section -->
+                    <div class="addobs-section">
+                        <div class="addobs-section-title">
+                            <i class="fas fa-calendar-alt" style="color: var(--primary)"></i>Date Range
                         </div>
-                        <div>
-                            <label for="addObsEndDate"
-                                style="display:block; font-size:0.9rem; color:var(--grey-700);">End Date</label>
-                            <input type="date" id="addObsEndDate" class="obs-input" style="padding:0.5rem;">
-                            <div style="margin-top:0.25rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-                                <button type="button" class="btn btn-outline btn-sm" id="quickToday">Today</button>
-                                <button type="button" class="btn btn-outline btn-sm"
-                                    id="quickYesterday">Yesterday</button>
+                        <div class="field-group">
+                            <label for="addObsStartDate" class="field-label">Start Date</label><input type="date"
+                                id="addObsStartDate" class="field-input" />
+                        </div>
+                        <div class="field-group">
+                            <label for="addObsEndDate" class="field-label">End Date</label><input type="date"
+                                id="addObsEndDate" class="field-input" />
+                        </div>
+                        <div class="addobs-pills">
+                            <button type="button" class="btn btn-outline btn-sm" id="quickToday">
+                                Today</button><button type="button" class="btn btn-outline btn-sm" id="quickYesterday">
+                                Yesterday</button><button type="button" class="btn btn-outline btn-sm"
+                                id="quickLast7Days">
+                                Last 7 days</button><button type="button" class="btn btn-outline btn-sm"
+                                id="quickLast14Days">
+                                Last 14 days</button><button type="button" class="btn btn-outline btn-sm"
+                                id="quickLast30Days">
+                                Last 30 days</button><button type="button" class="btn btn-outline btn-sm"
+                                id="quickLast365Days">
+                                Last 365 days
+                            </button>
+                        </div>
+                    </div>
+                    <!-- Filters Section -->
+                    <div class="addobs-section">
+                        <div class="addobs-section-title">
+                            <i class="fas fa-filter" style="color: var(--secondary)"></i>Filters
+                        </div>
+                        <div class="field-group">
+                            <label for="addObsUser" class="field-label">iNat Username</label>
+                            <div style="display: flex; align-items: center; gap: 0.5rem">
+                                <input type="text" id="addObsUser" class="field-input" placeholder="username" /><span
+                                    id="addObsUserStatus" aria-live="polite"></span>
                             </div>
                         </div>
-                    </div>
-                    <div>
-                        <label for="addObsUser" style="display:block; font-size:0.9rem; color:var(--grey-700);">iNat
-                            Username</label>
-                        <div style="display:flex; align-items:center; gap:0.5rem;">
-                            <input type="text" id="addObsUser" class="obs-input" placeholder="username" style="flex:1;">
-                            <span id="addObsUserStatus" aria-live="polite" title=""></span>
+                        <div class="field-group">
+                            <label for="addObsTaxon" class="field-label">Taxon (name or ID)</label><input type="text"
+                                id="addObsTaxon" class="field-input" placeholder="e.g., Fungi or 47170" />
                         </div>
-                    </div>
-                    <div>
-                        <label for="addObsTaxon" style="display:block; font-size:0.9rem; color:var(--grey-700);">Taxon
-                            (name or ID)</label>
-                        <input type="text" id="addObsTaxon" class="obs-input" placeholder="e.g., Fungi or 47170">
-                    </div>
-                    <div>
                         <button type="button" id="addObsPreview" class="btn btn-secondary"
-                            style="margin-top:1.25rem; width:100%">
-                            <i class="fas fa-search"></i> Preview
+                            style="width: 100%; margin-top: auto">
+                            <i class="fas fa-search"></i>Preview
                         </button>
                     </div>
                 </div>
-                <div id="addObsResults"
-                    style="margin-top:1rem; max-height:240px; overflow:auto; border:1px solid var(--grey-300); border-radius:8px; padding:0.5rem; display:none;">
-                </div>
+                <div id="addObsResults" style="
+              margin-top: 1rem;
+              max-height: 240px;
+              overflow: auto;
+              border: 1px solid var(--grey-300);
+              border-radius: 8px;
+              padding: 0.5rem;
+              display: none;
+            "></div>
             </div>
             <div class="modal-footer">
-                <button type="button" id="addObsCancel" class="btn btn-outline">Cancel</button>
-                <button type="button" id="addObsConfirm" class="btn btn-primary" disabled>Add</button>
+                <button type="button" id="addObsCancel" class="btn btn-outline">
+                    Cancel</button><button type="button" id="addObsConfirm" class="btn btn-primary" disabled>
+                    Add
+                </button>
             </div>
         </div>
     </div>
-
     <!-- Edit Fields Modal -->
     <div id="editFieldsModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="editFieldsTitle">
         <div class="modal">
             <div class="modal-header">
-                <div class="modal-title" id="editFieldsTitle">Add Observation Fields</div>
+                <div class="modal-title" id="editFieldsTitle">
+                    Add Observation Fields
+                </div>
                 <button id="editFieldsCloseX" class="btn btn-outline btn-icon" aria-label="Close">
                     <i class="fas fa-times"></i>
                 </button>
@@ -855,98 +1118,100 @@
                 <!-- Checkboxes will be populated from observation fields by JavaScript -->
             </div>
             <div class="modal-footer">
-                <button type="button" id="editFieldsCancel" class="btn btn-outline">Cancel</button>
-                <button type="button" id="editFieldsConfirm" class="btn btn-primary">OK</button>
+                <button type="button" id="editFieldsCancel" class="btn btn-outline">
+                    Cancel</button><button type="button" id="editFieldsConfirm" class="btn btn-primary">
+                    OK
+                </button>
             </div>
         </div>
     </div>
-
     <!-- Custom Fields Modal -->
     <div id="customFieldsModal" class="modal-overlay" role="dialog" aria-modal="true"
         aria-labelledby="customFieldsTitle">
         <div class="modal">
             <div class="modal-header">
-                <div class="modal-title" id="customFieldsTitle">Remove Observation Fields</div>
+                <div class="modal-title" id="customFieldsTitle">
+                    Remove Observation Fields
+                </div>
                 <button id="customFieldsCloseX" class="btn btn-outline btn-icon" aria-label="Close">
                     <i class="fas fa-times"></i>
                 </button>
             </div>
             <div class="modal-body" id="customFieldsBody">
-                <p style="margin-bottom: 1rem; color: var(--grey-600);">Enter the name of a field to exclude from
-                    labels:</p>
-                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
-                    <input type="text" id="customFieldName" class="obs-input" placeholder="Enter field name to remove">
-                    <button type="button" id="removeCustomField" class="btn btn-primary">
-                        <i class="fas fa-minus"></i> Remove
+                <p style="margin-bottom: 1rem; color: var(--grey-600)">
+                    Enter the name of a field to exclude from labels:
+                </p>
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem">
+                    <input type="text" id="customFieldName" class="obs-input"
+                        placeholder="Enter field name to remove" /><button type="button" id="removeCustomField"
+                        class="btn btn-primary">
+                        <i class="fas fa-minus"></i>Remove
                     </button>
                 </div>
-                <div id="customFieldsList" style="max-height: 200px; overflow-y: auto;">
+                <div id="customFieldsList" style="max-height: 200px; overflow-y: auto">
                     <!-- Fields to remove will be listed here -->
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" id="customFieldsCancel" class="btn btn-outline">Cancel</button>
-                <button type="button" id="customFieldsConfirm" class="btn btn-primary">OK</button>
+                <button type="button" id="customFieldsCancel" class="btn btn-outline">
+                    Cancel</button><button type="button" id="customFieldsConfirm" class="btn btn-primary">
+                    OK
+                </button>
             </div>
         </div>
     </div>
-
     <script>
         window.__labels_js_ran = (window.__labels_js_ran || 0) + 1;
-
-        window.addEventListener('error', (e) => {
-            console.log(
-                'JS error:',
-                e.message,
-                'at',
-                `${e.filename}:${e.lineno}:${e.colno}`
-            );
-        });
-
-        window.addEventListener('unhandledrejection', (e) => {
-            console.log('Promise rejection:', e.reason);
-        });
-
-        console.log('SCRIPT LOADED', new Date().toISOString());
 
         $(document).ready(function () {
             let observationCount = 1;
             const maxObservations = 500;
+
             let previewCache = {};
             let allObservationData = {};
             let customFields = [];
 
-            // Default fields that inat.label.py automatically adds to labels when present
-            // These should be checked by default in the Add Fields modal
+            // Pass Jinja2 variable to JS
             const DEFAULT_LABEL_FIELDS = {{ default_label_fields | tojson | safe
         }};
 
         function showToast(message, isSuccess = true) {
-            $('#toastMessage').text(message);
-            $('#toast').removeClass('show');
+            $("#toastMessage").text(message);
+            $("#toast").removeClass("show");
+
             if (isSuccess) {
-                $('#toast i').removeClass('fa-exclamation-circle').addClass('fa-check-circle');
-                $('#toast').css('background-color', 'var(--success)');
+                $("#toast i")
+                    .removeClass("fa-exclamation-circle")
+                    .addClass("fa-check-circle");
+                $("#toast").css("background-color", "var(--success)");
             } else {
-                $('#toast i').removeClass('fa-check-circle').addClass('fa-exclamation-circle');
-                $('#toast').css('background-color', 'var(--danger)');
+                $("#toast i")
+                    .removeClass("fa-check-circle")
+                    .addClass("fa-exclamation-circle");
+                $("#toast").css("background-color", "var(--danger)");
             }
-            void $('#toast')[0].offsetWidth;
-            $('#toast').addClass('show');
-            setTimeout(function () { $('#toast').removeClass('show'); }, 3000);
+
+            void $("#toast")[0].offsetWidth;
+            $("#toast").addClass("show");
+
+            setTimeout(function () {
+                $("#toast").removeClass("show");
+            }, 3000);
         }
 
         function updateObservationNumbers() {
-            $('.observation-number').each(function (index) {
+            $(".observation-number").each(function (index) {
                 $(this).text(index + 1);
             });
         }
 
         function countTotalObservations() {
             let total = 0;
-            $('.obs-input').each(function () {
+
+            $(".obs-id-input").each(function () {
                 const inputValue = $(this).val().trim();
-                if (inputValue !== '') {
+
+                if (inputValue !== "") {
                     const obsIds = parseObservationInput(inputValue);
                     total += obsIds.length;
                 }
@@ -956,10 +1221,13 @@
 
         function updateWarningMessage() {
             const total = countTotalObservations();
-            const warningDiv = $('#warningMessage');
-            const warningText = $('#warningText');
+            const warningDiv = $("#warningMessage");
+            const warningText = $("#warningText");
+
             if (total > maxObservations) {
-                warningText.text(`You have entered ${total} observations. If you need to make more than ${maxObservations} labels, please contact Alan Rockefeller to raise the limit.`);
+                warningText.text(
+                    `You have entered ${total} observations. If you need to make more than ${maxObservations} labels, please contact Alan Rockefeller to raise the limit.`,
+                );
                 warningDiv.show();
             } else {
                 warningDiv.hide();
@@ -968,76 +1236,73 @@
 
         function addObservationField() {
             observationCount++;
-            const newField = `
-		    <div class="observation-input">
-			<span class="observation-number">${observationCount}</span>
-			<input type="text"
-			       id="obs${observationCount}"
-			       name="observations[]"
-			       class="obs-input"
-			       placeholder="Enter observation number(s)"
-			       autocomplete="off">
-			<span class="result"></span>
-			<div class="actions">
-			    <button type="button" class="btn btn-outline btn-icon removeButton">
-				<i class="fas fa-times"></i>
-			    </button>
-			</div>
-		    </div>`;
-            $('#observationInputs').append(newField);
-        }
 
+            const newField = `
+            <div class="observation-input">
+                <span class="observation-number">${observationCount}</span>
+                <input type="text"
+                       id="obs${observationCount}"
+                       name="observations[]"
+                       class="obs-input obs-id-input"
+                       placeholder="Enter observation number(s)"
+                       autocomplete="off">
+                <span class="result"></span>
+                <div class="actions">
+                    <button type="button" class="btn btn-outline btn-icon removeButton">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>`;
+            $("#observationInputs").append(newField);
+        }
 
         function renderObservationResult(data, original) {
             const resultItem = $('<div class="result-item"></div>');
+
             if (data.error) {
                 resultItem.html(
-                    `<span style="color: var(--danger);">
-                <i class="fas fa-exclamation-circle"></i>
-                ${escapeHtml(original)}: ${escapeHtml(data.error || '')}
-            </span>`
+                    `<span style="color: var(--danger);" > <i class="fas fa-exclamation-circle" ></i> ${escapeHtml(original)} : ${escapeHtml(data.error || "")} </span>`,
                 );
             } else {
                 // pick a display label based on what the user typed
                 let displayText;
-                const lower = (original || '').toLowerCase();
+                const lower = (original || "").toLowerCase();
 
                 if (/^mo:\d+$/i.test(original)) {
                     const moNum = original.substring(3);
-                    if ((data.inat_id || '').toLowerCase().startsWith('mo')) {
+
+                    if ((data.inat_id || "").toLowerCase().startsWith("mo")) {
                         displayText = `MO${moNum}`;
                     } else {
                         displayText = `MO${moNum} → iNat#${data.inat_id}`;
                     }
                 } else if (/^mo\d+$/i.test(original)) {
                     displayText = original.toUpperCase();
-                } else if (lower.startsWith('motoinat') || lower.startsWith('moinat') || lower.startsWith('inatmo')) {
-                    const moNum = original.replace(/\D+/g, '');
+                } else if (
+                    lower.startsWith("motoinat") ||
+                    lower.startsWith("moinat") ||
+                    lower.startsWith("inatmo")
+                ) {
+                    const moNum = original.replace(/\D+/g, "");
+
                     displayText = `MO${moNum} → iNat#${data.inat_id}`;
                 } else {
                     displayText = `#${data.inat_id}`;
                 }
 
                 resultItem.html(
-                    `<span>
-                ${displayText}:
-                <span style="color:${validateColor(data.color)}" class="species-name">
-                    ${escapeHtml(data.scientific_name || '')}
-                </span>
-                <small style="color: var(--grey-600);">
-                    <i class="fas fa-user"></i> ${escapeHtml(data.user_id || '')}
-                </small>
-            </span>`
+                    `<span> ${displayText} : <span style="color:${validateColor(data.color)}" class="species-name" > ${escapeHtml(data.scientific_name || "")} </span> <small style="color: var(--grey-600);" > <i class="fas fa-user" ></i> ${escapeHtml(data.user_login || "")} </small> </span>`,
                 );
             }
+
             return resultItem;
         }
 
         // 2. Actually look up an observation and render the result
         function lookupObservation($input) {
-            const resultSpan = $input.siblings('.result');
+            const resultSpan = $input.siblings(".result");
             const raw = $input.val().trim();
-            const inputId = $input.attr('id');
+            const inputId = $input.attr("id");
 
             resultSpan.empty();
             delete allObservationData[inputId];
@@ -1047,24 +1312,30 @@
             const obsIds = parseObservationInput(raw);
             if (!obsIds.length) return;
 
+            // Auto-clean the input field
+            $input.val(obsIds.join(", "));
+
             // spinner
             resultSpan.html('<i class="fas fa-spinner fa-spin"></i> Loading...');
 
             $.ajax({
-                url: '/labels/lookup_batch',
-                type: 'POST',
-                data: $.param({ 'obs_ids[]': obsIds }),
+                url: "/labels/lookup_batch",
+                type: "POST",
+                data: $.param({ "obs_ids[]": obsIds }),
                 success: function (resp) {
-                    const items = (resp && resp.items) ? resp.items : [];
+                    const items = resp && resp.items ? resp.items : [];
                     allObservationData[inputId] = items;
                     const resultsDiv = $('<div class="multiple-results"></div>');
 
                     items.forEach(function (data, index) {
-                        const original = data.original_input || data.input || obsIds[index];
+                        const original =
+                            data.original_input || data.input || obsIds[index];
                         const resultItem = renderObservationResult(data, original);
 
                         if (index < items.length - 1) {
-                            resultItem.append('<hr style="margin: 4px 0; border-top: 1px dashed var(--grey-300);">');
+                            resultItem.append(
+                                '<hr style="margin: 4px 0; border-top: 1px dashed var(--grey-300);">',
+                            );
                         }
 
                         resultsDiv.append(resultItem);
@@ -1072,467 +1343,599 @@
 
                     resultSpan.empty().append(resultsDiv);
                 },
+
                 error: function () {
-                    resultSpan.html('<span style="color: var(--danger);"><i class="fas fa-exclamation-circle"></i> Error fetching details</span>');
-                }
+                    resultSpan.html(
+                        '<span style="color: var(--danger);"><i class="fas fa-exclamation-circle"></i> Error fetching details</span>',
+                    );
+                },
             });
         }
 
         // split the user input into IDs
         function parseObservationInput(input) {
             const results = [];
-            const parts = input.split(/[\s,]+/).filter(part => part.trim() !== '');
+            const parts = input
+                .split(/[\s,]+/)
+                .filter((part) => part.trim() !== "");
 
-            parts.forEach(part => {
+            parts.forEach((part) => {
                 const p = part.trim();
 
-                if (/^motoinat\d+$/i.test(p) || /^moinat\d+$/i.test(p) || /^inatmo\d+$/i.test(p)) {
+                if (
+                    /^motoinat\d+$/i.test(p) ||
+                    /^moinat\d+$/i.test(p) ||
+                    /^inatmo\d+$/i.test(p)
+                ) {
                     results.push(p.toLowerCase());
                     return;
                 }
 
                 if (/^mo\d+$/i.test(p)) {
-                    const digits = p.replace(/^[^0-9]+/, '');
+                    const digits = p.replace(/^[^0-9]+/, "");
+
                     results.push(`MO${digits}`);
                     return;
                 }
 
-                if (p.includes('mushroomobserver.org')) {
+                if (p.includes("mushroomobserver.org")) {
                     const match = p.match(/\/(\d+)$/);
+
                     if (match && match[1]) {
                         results.push(`MO${match[1]}`);
                         return;
                     }
                 }
 
-                if (p.includes('inaturalist.org/observations/')) {
+                if (p.includes("inaturalist.org/observations/")) {
                     const match = p.match(/\/observations\/(\d+)/);
+
                     if (match && match[1]) {
                         results.push(match[1]);
                         return;
                     }
                 }
 
-                if (/^\d+$/.test(p)) {
-                    results.push(p);
+                const digitMatch = p.match(/(\d+)/);
+                if (digitMatch) {
+                    results.push(digitMatch[1]);
                 }
             });
 
             return results;
         }
 
-
-        $('#observationInputs').on('input', '.obs-input', function () {
+        $("#observationInputs").on("input", ".obs-id-input", function () {
             const $this = $(this);
-            if ($this.val().trim() !== '' && $this.closest('.observation-input').is(':last-child')) {
+
+            if (
+                $this.val().trim() !== "" &&
+                $this.closest(".observation-input").is(":last-child")
+            ) {
                 addObservationField();
             }
+
             updateWarningMessage();
         });
 
-        $('#observationInputs').on('blur', '.obs-input', function () {
-            if ($(this).val().trim() !== '') {
+        $("#observationInputs").on("blur", ".obs-id-input", function () {
+            if ($(this).val().trim() !== "") {
                 lookupObservation($(this));
             }
         });
 
-        $('#observationForm').on('keydown', function (e) {
-            if (e.key === 'Enter' && $(e.target).is('input.obs-input')) {
+        $("#observationForm").on("keydown", function (e) {
+            if (e.key === "Enter" && $(e.target).is("input.obs-id-input")) {
                 e.preventDefault(); // Prevent default form submission
                 const $currentInput = $(e.target);
-                const $nextInput = $currentInput.closest('.observation-input').next().find('.obs-input');
+                const $nextInput = $currentInput
+                    .closest(".observation-input")
+                    .next()
+                    .find(".obs-id-input");
 
                 if ($nextInput.length) {
                     $nextInput.focus();
                 } else {
                     // If it's the last input, add a new one and focus it
                     addObservationField();
-                    $('.obs-input').last().focus();
+                    $(".obs-id-input").last().focus();
                 }
             }
         });
 
-
-
-        $('#downloadCsvButton').click(function (e) {
+        $("#downloadCsvButton").click(function (e) {
             e.preventDefault();
             const totalObservations = countTotalObservations();
+
             if (totalObservations === 0) {
-                showToast('Please enter at least one observation number', false);
+                showToast("Please enter at least one observation number", false);
                 return;
             }
-            if (totalObservations > maxObservations && !confirm(`Warning: You are attempting to process ${totalObservations} observations. If you need to make more than ${maxObservations} labels, please contact Alan Rockefeller to raise the limit. Do you want to continue?`)) {
+
+            if (
+                totalObservations > maxObservations &&
+                !confirm(
+                    `Warning: You are attempting to process ${totalObservations} observations. If you need to make more than ${maxObservations} labels, please contact Alan Rockefeller to raise the limit. Do you want to continue?`,
+                )
+            ) {
                 return;
             }
 
             var formData = new FormData();
-            $('.obs-input').each(function () {
+
+            $(".obs-id-input").each(function () {
                 const inputValue = $(this).val().trim();
-                if (inputValue !== '') {
+
+                if (inputValue !== "") {
                     const obsIds = parseObservationInput(inputValue);
-                    obsIds.forEach(id => formData.append('observations[]', id));
+                    obsIds.forEach((id) => formData.append("observations[]", id));
                 }
             });
 
             const submitBtn = $(this);
             const originalText = submitBtn.html();
-            submitBtn.html('<i class="fas fa-spinner fa-spin"></i> Processing...').prop('disabled', true);
+            submitBtn
+                .html('<i class="fas fa-spinner fa-spin"></i> Processing...')
+                .prop("disabled", true);
 
             $.ajax({
-                url: '/labels/submit',
-                type: 'POST',
+                url: "/labels/submit",
+                type: "POST",
                 data: formData,
                 processData: false,
                 contentType: false,
                 success(response) {
-                    submitBtn.html(originalText).prop('disabled', false);
-                    var blob = new Blob([response], { type: 'text/csv' });
+                    submitBtn.html(originalText).prop("disabled", false);
+
+                    var blob = new Blob([response], {
+                        type: "text/csv",
+                    });
                     var url = window.URL.createObjectURL(blob);
-                    var a = document.createElement('a');
+                    var a = document.createElement("a");
                     a.href = url;
-                    a.download = 'observations.csv';
+                    a.download = "observations.csv";
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
                     window.URL.revokeObjectURL(url);
-                    showToast('CSV downloaded successfully!');
+                    showToast("CSV downloaded successfully!");
                 },
+
                 error(xhr) {
-                    submitBtn.html(originalText).prop('disabled', false);
-                    let msg = 'The server took too long to respond while generating the CSV. This can happen with very large batches. Please try fewer observations per request, split the job, or wait a moment and retry.';
-                    if (xhr && (xhr.status === 504 || (xhr.responseText || '').includes('504 Gateway'))) {
-                        msg = 'Request timed out while generating the CSV (Gateway Timeout). Try reducing the number of observations per request, splitting into smaller batches, or waiting a bit and retrying. The labels may still be generated, but the download might not start automatically. After a few minutes, check the download link on the Help page.';
+                    submitBtn.html(originalText).prop("disabled", false);
+                    let msg =
+                        "The server took too long to respond while generating the CSV. This can happen with very large batches. Please try fewer observations per request, split the job, or wait a moment and retry.";
+
+                    if (
+                        xhr &&
+                        (xhr.status === 504 ||
+                            (xhr.responseText || "").includes("504 Gateway"))
+                    ) {
+                        msg =
+                            "Request timed out while generating the CSV (Gateway Timeout). Try reducing the number of observations per request, splitting into smaller batches, or waiting a bit and retrying. The labels may still be generated, but the download might not start automatically. After a few minutes, check the download link on the Help page.";
                     }
+
                     showErrorModal(msg);
-                }
+                },
             });
         });
 
-        function validateColor(color) {
-            if (!color) return 'black'; // Fallback to black as a safe default
-
-            // Allow basic hex, rgb, rgba, and var()
-            const simpleColorRegex = /^(#[0-9a-f]{3,6}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)|rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)|var\(--[a-zA-Z0-9-]+\))$/i;
-            if (simpleColorRegex.test(color)) {
-                return color;
-            }
-
-            // Explicitly allowed named colors
-            const namedColors = new Set(['black', 'magenta', 'green', 'purple', 'red', 'blue']);
-            if (namedColors.has(color.toLowerCase())) {
-                return color;
-            }
-
-            return 'black'; // Fallback for any other invalid color
-        }
-
         function collectObservationsFormData() {
             var formData = new FormData();
-            $('.obs-input').each(function () {
+
+            $(".obs-id-input").each(function () {
                 const inputValue = $(this).val().trim();
-                if (inputValue !== '') {
+
+                if (inputValue !== "") {
                     const obsIds = parseObservationInput(inputValue);
-                    obsIds.forEach(id => formData.append('observations[]', id));
+                    obsIds.forEach((id) => formData.append("observations[]", id));
                 }
             });
             return formData;
         }
 
         function escapeHtml(s) {
-            if (s == null) return '';
+            if (s == null) return "";
             return String(s)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;');
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;")
+                .replace(/\//g, "&#x2F;");
         }
 
-
         function ansiToHtml(ansiText) {
-            if (!ansiText) return '';
+            if (!ansiText) return "";
             let html = escapeHtml(ansiText);
+
             // Generic SGR parser: replace color codes with spans, resets with </span>
             // Handle both ESC (\x1b) and literal \u001b sequences
             const replacer = (full, codes) => {
-                const parts = codes.split(';');
-                if (parts.includes('0') || parts.includes('39')) return '</span>';
+                const parts = codes.split(";");
+                if (parts.includes("0") || parts.includes("39")) return "</span>";
+
                 // Map any color present in the sequence
                 const map = {
-                    '31': 'ansi-red', '91': 'ansi-red',
-                    '32': 'ansi-green', '92': 'ansi-green',
-                    '33': 'ansi-yellow', '93': 'ansi-yellow',
-                    '34': 'ansi-blue', '94': 'ansi-blue',
-                    '35': 'ansi-magenta', '95': 'ansi-magenta',
-                    '36': 'ansi-cyan', '96': 'ansi-cyan'
+                    31: "ansi-red",
+                    91: "ansi-red",
+                    32: "ansi-green",
+                    92: "ansi-green",
+                    33: "ansi-yellow",
+                    93: "ansi-yellow",
+                    34: "ansi-blue",
+                    94: "ansi-blue",
+                    35: "ansi-magenta",
+                    95: "ansi-magenta",
+                    36: "ansi-cyan",
+                    96: "ansi-cyan",
                 };
+
                 for (const p of parts) {
                     if (map[p]) return `<span class="${map[p]}">`;
                 }
-                return '';
+
+                return "";
             };
             html = html
-                .replace(/\x1b\[([0-9;]+)m/g, replacer)
-                .replace(/\\u001b\[([0-9;]+)m/g, replacer);
+                .replace(/\x1b\[([0-9; ]+)m/g, replacer)
+                .replace(/\\u001b\[([0-9; ]+)m/g, replacer);
             return html;
         }
 
         // Semantic colorization fallback when no ANSI codes are present
         function semanticColorize(text) {
             const esc = escapeHtml(text);
+
             // Color "Added label for ..." by major group
             if (/^Added label for /i.test(text)) {
                 let cls = null;
-                if (/Fungi/i.test(text)) cls = 'ansi-blue';
-                else if (/Plantae/i.test(text)) cls = 'ansi-green';
-                else if (/Protozoa/i.test(text)) cls = 'ansi-magenta';
-                else if (/Insecta/i.test(text)) cls = 'ansi-red';
-                else if (/(Aves|Reptilia|Mammalia)/i.test(text)) cls = 'ansi-blue';
+                if (/Fungi/i.test(text)) cls = "ansi-blue";
+                else if (/Plantae/i.test(text)) cls = "ansi-green";
+                else if (/Protozoa/i.test(text)) cls = "ansi-magenta";
+                else if (/Insecta/i.test(text)) cls = "ansi-red";
+                else if (/(Aves|Reptilia|Mammalia)/i.test(text)) cls = "ansi-blue";
+
                 if (cls) return `<span class="${cls}">${esc}</span>`;
             }
+
             // Color "generated" red in Summary when counts differ
             if (/^Summary:/i.test(text)) {
                 const mReq = text.match(/requested\s+(\d+)/i);
                 const mGen = text.match(/generated\s+(\d+)/i);
+
                 if (mReq && mGen && mReq[1] !== mGen[1]) {
-                    return esc.replace(/generated/i, '<span class="ansi-red">generated</span>');
+                    return esc.replace(
+                        /generated/i,
+                        '<span class="ansi-red">generated</span>',
+                    );
                 }
             }
+
             return esc;
         }
 
         function showTooManyJobsModal(message) {
-            showErrorModal(message, 'Too Many Concurrent Jobs');
+            showErrorModal(message, "Too Many Concurrent Jobs");
         }
 
-        function showErrorModal(messageHtml, title = 'Error') {
-            $('#logModalTitle').html(`<i class="fas fa-exclamation-triangle"></i> ${title}`);
-            $('#logContent').html(`<div>${messageHtml}</div>`);
-            $('#logModal').css('display', 'flex');
+        function showErrorModal(messageHtml, title = "Error") {
+            $("#logModalTitle").html(
+                `<i class="fas fa-exclamation-triangle"></i> ${title}`,
+            );
+
+            $("#logContent").html(`<div>${messageHtml}</div>`);
+            $("#logModal").css("display", "flex");
         }
 
-        $('#logModalOk, #logModalCloseX').on('click', function () {
-            $('#logModal').hide();
+        function validateColor(color) {
+            if (!color) return "black";
+            const simpleColorRegex =
+                /^(#[0-9a-f]{3,6}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)|rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)|var\(--[a-zA-Z0-9-]+\))$/i;
+            if (simpleColorRegex.test(color)) return color;
+            const namedColors = new Set([
+                "black",
+                "magenta",
+                "green",
+                "purple",
+                "red",
+                "blue",
+            ]);
+            if (namedColors.has(color.toLowerCase())) return color;
+            return "black";
+        }
+
+        $("#logModalOk, #logModalCloseX").on("click", function () {
+            $("#logModal").hide();
         });
 
         // Click on backdrop closes modal (but not clicks inside modal)
-        $('#logModal').on('click', function (e) {
+        $("#logModal").on("click", function (e) {
             if (e.target === this) $(this).hide();
         });
 
         // ESC key closes modal
-        $(document).on('keydown', function (e) {
-            if (e.key === 'Escape') $('#logModal').hide();
+        $(document).on("keydown", function (e) {
+            if (e.key === "Escape") $("#logModal").hide();
         });
 
         function setToday(el) {
             const d = new Date();
-            const pad = n => String(n).padStart(2, '0');
+            const pad = (n) => String(n).padStart(2, "0");
             el.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
         }
 
         function debounce(fn, delay) {
-            let t; return function (...args) { clearTimeout(t); t = setTimeout(() => fn.apply(this, args), delay); };
+            let t;
+            return function (...args) {
+                clearTimeout(t);
+                t = setTimeout(() => fn.apply(this, args), delay);
+            };
         }
 
         const setUserStatus = (state) => {
-            const el = document.getElementById('addObsUserStatus');
+            const el = document.getElementById("addObsUserStatus");
             if (!el) return;
-            if (state === 'ok') {
-                el.innerHTML = '<i class="fa-solid fa-circle-check" style="color: var(--success);"></i>';
-                el.setAttribute('title', 'User exists');
-            } else if (state === 'warn') {
-                el.innerHTML = '<i class="fa-solid fa-circle-exclamation" style="color: var(--danger);"></i>';
-                el.setAttribute('title', 'User not found');
+
+            if (state === "ok") {
+                el.innerHTML =
+                    '<i class="fa-solid fa-circle-check" style="color: var(--success);"></i>';
+                el.setAttribute("title", "User exists");
+            } else if (state === "warn") {
+                el.innerHTML =
+                    '<i class="fa-solid fa-circle-exclamation" style="color: var(--danger);"></i>';
+                el.setAttribute("title", "User not found");
             } else {
-                el.innerHTML = '';
-                el.removeAttribute('title');
+                el.innerHTML = "";
+                el.removeAttribute("title");
             }
         };
 
-        const checkUserExists = debounce(async () => {
-            const usernameInput = $('#addObsUser');
-            let username = (usernameInput.val() || '').trim();
-            if (!username) { setUserStatus('none'); return; }
+        const checkUserExists = debounce(
+            async () => {
+                const usernameInput = $("#addObsUser");
+                let username = (usernameInput.val() || "").trim();
 
-            async function tryUsername(user) {
-                try {
-                    const url = `https://api.inaturalist.org/v1/users/autocomplete?q=${encodeURIComponent(user)}&per_page=10`;
-                    const resp = await fetch(url, { method: 'GET' });
-                    if (!resp.ok) return false;
-                    const data = await resp.json();
-                    return (data.results || []).some(u => (u.login || '').toLowerCase() === user.toLowerCase());
-                } catch (_) {
-                    return false;
+                if (!username) {
+                    setUserStatus("none");
+                    return;
                 }
-            }
 
-            let found = await tryUsername(username);
-            if (found) {
-                setUserStatus('ok');
-            } else if (username.includes(' ')) {
-                const usernameWithUnderscores = username.replace(/ /g, '_');
-                let foundWithUnderscores = await tryUsername(usernameWithUnderscores);
-                if (foundWithUnderscores) {
-                    usernameInput.val(usernameWithUnderscores); // Correct the username in the input field
-                    setUserStatus('ok');
+                async function tryUsername(user) {
+                    try {
+                        const url = `https://api.inaturalist.org/v1/users/autocomplete?q=${encodeURIComponent(user)}&per_page=10`;
+
+                        const resp = await fetch(url, {
+                            method: "GET",
+                        });
+                        if (!resp.ok) return false;
+                        const data = await resp.json();
+                        return (data.results || []).some(
+                            (u) => (u.login || "").toLowerCase() === user.toLowerCase(),
+                        );
+                    } catch (_) {
+                        return false;
+                    }
+                }
+
+                let found = await tryUsername(username);
+
+                if (found) {
+                    setUserStatus("ok");
+                } else if (username.includes(" ")) {
+                    const usernameWithUnderscores = username.replace(/ /g, "_");
+                    let foundWithUnderscores = await tryUsername(
+                        usernameWithUnderscores,
+                    );
+
+                    if (foundWithUnderscores) {
+                        usernameInput.val(usernameWithUnderscores); // Correct the username in the input field
+                        setUserStatus("ok");
+                    } else {
+                        setUserStatus("warn");
+                    }
                 } else {
-                    setUserStatus('warn');
+                    setUserStatus("warn");
                 }
-            } else {
-                setUserStatus('warn');
-            }
-        }, 400);
+            },
+
+            400,
+        );
 
         function addObservationsToForm(observations) {
             if (!observations || !observations.length) return;
 
             observations.forEach(function (obsData) {
                 // find an existing empty row
-                let $empty = $('.obs-input').filter(function () {
-                    return $(this).val().trim() === '';
-                }).first();
+                let $empty = $(".obs-id-input")
+                    .filter(function () {
+                        return $(this).val().trim() === "";
+                    })
+                    .first();
 
                 // if none, create one
                 if (!$empty.length) {
                     addObservationField();
-                    $empty = $('.obs-input').last();
+                    $empty = $(".obs-id-input").last();
                 }
 
                 // put this id in the row
                 $empty.val(obsData.id);
 
                 // Render the result directly from cached data
-                const resultSpan = $empty.siblings('.result');
-                const resultItem = $('<div class="result-item"></div>');
-
-                const displayText = `#${obsData.id}`;
-                resultItem.html(
-                    `<span>
-                ${displayText}:
-                <span style="color:${validateColor(obsData.color) || 'black'}" class="species-name">
-                    ${escapeHtml(obsData.scientific_name || 'Unknown')}
-                </span>
-            </span>`
+                const resultSpan = $empty.siblings(".result");
+                const resultItem = renderObservationResult(
+                    obsData,
+                    String(obsData.id),
                 );
                 resultSpan.empty().append(resultItem);
 
                 // IMPORTANT: pretend the user typed, so the "if last field filled, add another" logic runs
-                $empty.trigger('input');
+                $empty.trigger("input");
             });
 
             updateObservationNumbers();
             updateWarningMessage();
+
             showToast(`Added ${observations.length} observations`);
         }
 
-
-        async function handlePrintStream(btn, format, downloadName, successMsg) {
-            console.log("handlePrintStream called", { format, when: new Date().toISOString() });
-            console.trace("handlePrintStream stack");
-
+        async function handlePrintStream(
+            btn,
+            format,
+            downloadName,
+            successMsg,
+        ) {
             const totalObservations = countTotalObservations();
+
             if (totalObservations === 0) {
-                showToast('Please enter at least one observation number', false);
+                showToast("Please enter at least one observation number", false);
                 return;
             }
-            if (totalObservations > maxObservations && !confirm(`Warning: You are attempting to print ${totalObservations} labels. This may cause a timeout. Do you want to continue?`)) {
+
+            if (
+                totalObservations > maxObservations &&
+                !confirm(
+                    `Warning: You are attempting to print ${totalObservations} labels. This may cause a timeout. Do you want to continue?`,
+                )
+            ) {
                 return;
             }
+
             const formData = collectObservationsFormData();
-            formData.append('format', format);
-            if ($('#omitQrCodes').is(':checked')) {
-                formData.append('omit_qr_codes', 'on');
+            formData.append("format", format);
+
+            if ($("#omitQrCodes").is(":checked")) {
+                formData.append("omit_qr_codes", "on");
             }
-            // Add minilabel, common_names, and omit_notes checkboxes to formData if checked
-            if ($('#minilabel').is(':checked')) {
-                formData.append('minilabel', 'on');
+
+            // Add minilabel size, common_names, and omit_notes to formData
+            const minilabelSize = $("#minilabelSize").val();
+            if (minilabelSize) {
+                formData.append("minilabel", "on");
+                formData.append("minilabel_size", minilabelSize);
             }
-            if ($('#common_names').is(':checked')) {
-                formData.append('common_names', 'on');
+
+            if ($("#common_names").is(":checked")) {
+                formData.append("common_names", "on");
             }
-            if ($('#omit_notes').is(':checked')) {
-                formData.append('omit_notes', 'on');
+
+            if ($("#omit_notes").is(":checked")) {
+                formData.append("omit_notes", "on");
             }
+
             if (customFields.length > 0) {
-                formData.append('use_custom', 'on');
-                customFields.forEach(field => {
-                    formData.append('custom_args[]', field);
+                formData.append("use_custom", "on");
+
+                customFields.forEach((field) => {
+                    formData.append("custom_args[]", field);
                 });
             }
+
             const originalText = btn.html();
-            btn.html('<i class="fas fa-spinner fa-spin"></i> Processing...').prop('disabled', true);
+            btn
+                .html('<i class="fas fa-spinner fa-spin"></i> Processing...')
+                .prop("disabled", true);
             // Open the modal immediately
-            $('#logModalTitle').text('Starting Label Generation...');
-            $('#logContent').html('');
-            $('#logModal').css('display', 'flex');
+            $("#logModalTitle").text("Starting Label Generation...");
+            $("#logContent").html("");
+            $("#logModal").css("display", "flex");
             let firstLogMessageReceived = false;
 
             try {
                 // Start job
-                const startResp = await fetch('/labels/print_start', { method: 'POST', body: formData });
+                const startResp = await fetch("/labels/print_start", {
+                    method: "POST",
+                    body: formData,
+                });
+
                 if (!startResp.ok) {
                     const errorData = await startResp.json();
-                    if (startResp.status === 429 && errorData.error.includes('Too many concurrent jobs')) {
+
+                    if (
+                        startResp.status === 429 &&
+                        errorData.error.includes("Too many concurrent jobs")
+                    ) {
                         showTooManyJobsModal(errorData.error);
                     } else {
-                        throw new Error(errorData.error || 'Failed to start print job');
+                        throw new Error(errorData.error || "Failed to start print job");
                     }
                 }
+
                 const { job_id } = await startResp.json();
-                if (!job_id) throw new Error('No job id returned');
+                if (!job_id) throw new Error("No job id returned");
+
                 // Stream logs via SSE
-                const es = new EventSource(`/labels/print_stream?job_id=${encodeURIComponent(job_id)}`);
+                const es = new EventSource(
+                    `/labels/print_stream?job_id=${encodeURIComponent(job_id)}`,
+                );
 
                 // Fallback polling in case SSE 'done' is blocked by proxies
                 const expectedUrl = `/static/jobs/${job_id}/labels.${format}`;
                 let downloaded = false;
+
                 const poller = setInterval(async () => {
                     try {
-                        const resp = await fetch(expectedUrl, { method: 'HEAD', cache: 'no-store' });
+                        const resp = await fetch(expectedUrl, {
+                            method: "HEAD",
+                            cache: "no-store",
+                        });
+
                         if (resp.ok && !downloaded) {
                             downloaded = true;
-                            btn.html(originalText).prop('disabled', false);
-                            const a = document.createElement('a');
+                            btn.html(originalText).prop("disabled", false);
+                            const a = document.createElement("a");
                             a.href = expectedUrl;
                             a.download = downloadName;
                             document.body.appendChild(a);
                             a.click();
                             document.body.removeChild(a);
-                            const cont = $('#logContent');
-                            cont.append(`\n<div style="margin-top:8px;"><a class="download-link" href="${expectedUrl}" download="${downloadName}"><i class="fas fa-download"></i> Download ${downloadName}</a></div>`);
+                            const cont = $("#logContent");
+
+                            cont.append(
+                                `\n<div style="margin-top:8px;"><a class="download-link" href="${expectedUrl}" download="${downloadName}"><i class="fas fa-download"></i> Download ${downloadName}</a></div>`,
+                            );
                             showToast(successMsg);
                             clearInterval(poller);
                         }
                     } catch (e) {
-                        console.debug('Fallback poll error:', e);
+                        console.debug("Fallback poll error:", e);
                     }
                 }, 2000);
 
-                es.addEventListener('log', (ev) => {
+                es.addEventListener("log", (ev) => {
                     try {
                         const line = JSON.parse(ev.data);
+
                         if (!firstLogMessageReceived) {
-                            const match = line.match(/^Generating (\d+) labels, this will take about (.*)$/);
+                            const match = line.match(
+                                /^Generating (\d+) labels, this will take about (.*)$/,
+                            );
+
                             if (match && parseInt(match[1]) > 25) {
-                                $('#logModalTitle').text(match[0]);
+                                $("#logModalTitle").text(match[0]);
                             } else {
-                                $('#logModalTitle').text('Label Generation Output');
+                                $("#logModalTitle").text("Label Generation Output");
                             }
+
                             firstLogMessageReceived = true;
                         }
 
                         let html = ansiToHtml(line);
+
                         if (!/<span class=/.test(html)) {
                             html = semanticColorize(line);
                         }
-                        const cont = $('#logContent');
-                        cont.append(html + '\n');
-                        const mb = $('#logModal .modal-body');
+
+                        const cont = $("#logContent");
+                        cont.append(html + "\n");
+                        const mb = $("#logModal .modal-body");
                         mb.scrollTop(mb[0].scrollHeight);
                     } catch (e) {
                         // Fallback append raw
-                        const cont = $('#logContent');
-                        cont.append(escapeHtml(ev.data) + '\n');
-                        const mb = $('#logModal .modal-body');
+                        const cont = $("#logContent");
+                        cont.append(escapeHtml(ev.data) + "\n");
+                        const mb = $("#logModal .modal-body");
                         mb.scrollTop(mb[0].scrollHeight);
                     }
                 });
@@ -1542,213 +1945,352 @@
                     // Try to detect done payload
                     try {
                         const payload = JSON.parse(ev.data);
-                        if (payload && typeof payload === 'object' && ('success' in payload)) {
-                            btn.html(originalText).prop('disabled', false);
+
+                        if (
+                            payload &&
+                            typeof payload === "object" &&
+                            "success" in payload
+                        ) {
+                            btn.html(originalText).prop("disabled", false);
+
                             if (payload.success && payload.download_url) {
                                 downloaded = true;
-                                const a = document.createElement('a');
+                                const a = document.createElement("a");
                                 a.href = payload.download_url;
                                 a.download = downloadName;
                                 document.body.appendChild(a);
                                 a.click();
                                 document.body.removeChild(a);
-                                const cont = $('#logContent');
-                                cont.append(`\n<div style="margin-top:8px;"><a class="download-link" href="${payload.download_url}" download="${downloadName}"><i class="fas fa-download"></i> Download ${downloadName}</a></div>`);
+                                const cont = $("#logContent");
+
+                                cont.append(
+                                    `\n<div style="margin-top:8px;"><a class="download-link" href="${payload.download_url}" download="${downloadName}"><i class="fas fa-download"></i> Download ${downloadName}</a></div>`,
+                                );
                                 showToast(successMsg);
                             }
+
                             clearInterval(poller);
                             es.close();
                         }
-                    } catch (_) { /* ignore non-JSON message */ }
+                    } catch (_) {
+                        /* ignore non-JSON message */
+                    }
                 };
 
-                es.addEventListener('done', (ev) => {
-                    btn.html(originalText).prop('disabled', false);
+                es.addEventListener("done", (ev) => {
+                    btn.html(originalText).prop("disabled", false);
+
                     try {
                         const payload = JSON.parse(ev.data);
+
                         if (payload.success && payload.download_url) {
                             downloaded = true;
                             // Auto-download
-                            const a = document.createElement('a');
+                            const a = document.createElement("a");
                             a.href = payload.download_url;
                             a.download = downloadName;
                             document.body.appendChild(a);
                             a.click();
                             document.body.removeChild(a);
                             // Also show a clickable link in case the browser blocks auto-download
-                            const cont = $('#logContent');
-                            cont.append(`\n<div style="margin-top:8px;"><a class="download-link" href="${payload.download_url}" download="${downloadName}"><i class="fas fa-download"></i> Download ${downloadName}</a></div>`);
+                            // Also show a clickable link in case the browser blocks auto-download
+                            const cont = $("#logContent");
+
+                            cont.append(
+                                `\n<div style="margin-top:8px;"><a class="download-link" href="${payload.download_url}" download="${downloadName}"><i class="fas fa-download"></i> Download ${downloadName}</a></div>`,
+                            );
                             showToast(successMsg);
                         } else {
-                            showErrorModal('The label file could not be generated. Please try again.');
+                            showErrorModal(
+                                "The label file could not be generated. Please try again.",
+                            );
                         }
                     } catch (e) {
-                        showErrorModal('Unexpected response from server.');
+                        showErrorModal("Unexpected response from server.");
                     }
+
                     clearInterval(poller);
                     es.close();
                 });
+
                 es.onerror = function () {
                     // Keep modal open, but notify user of streaming issue
                     // Don't close the stream immediately; the server may be buffering
                 };
             } catch (err) {
-                btn.html(originalText).prop('disabled', false);
-                showErrorModal('Failed to start label generation. Please try again.');
+                btn.html(originalText).prop("disabled", false);
+                showErrorModal(
+                    "Failed to start label generation. Please try again.",
+                );
             }
         }
 
-        $('#printRtfButton').click(function () {
-            handlePrintStream($(this), 'rtf', 'labels.rtf', 'RTF labels downloaded successfully!');
+        $("#printRtfButton").click(function () {
+            handlePrintStream(
+                $(this),
+                "rtf",
+                "labels.rtf",
+                "RTF labels downloaded successfully!",
+            );
         });
 
-        $('#printPdfButton').click(function () {
-            handlePrintStream($(this), 'pdf', 'labels.pdf', 'PDF labels downloaded successfully!');
+        $("#printPdfButton").click(function () {
+            handlePrintStream(
+                $(this),
+                "pdf",
+                "labels.pdf",
+                "PDF labels downloaded successfully!",
+            );
         });
 
         // Add Observations modal handlers
-        $('#addObsButton').click(function () {
-            $('#addObsResults').hide().empty();
-            $('#addObsConfirm').prop('disabled', true);
-            const startDateEl = document.getElementById('addObsStartDate');
-            const endDateEl = document.getElementById('addObsEndDate');
-            setToday(endDateEl);
-            const d = new Date();
-            d.setDate(d.getDate() - 7);
-            const pad = n => String(n).padStart(2, '0');
-            startDateEl.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-            $('#addObsUser').val('');
-            setUserStatus('none');
-            $('#addObsTaxon').val('Fungi');
-            $('#addObsModal').css('display', 'flex');
+        // Add Observations modal handlers
+        $("#addObsButton").click(function () {
+            $("#addObsResults").hide().empty();
+            $("#addObsConfirm").prop("disabled", true);
+
+            // Set default date range: Last 7 days inclusive
+            setQuickDateRange(7);
+
+            $("#addObsUser").val("");
+            setUserStatus("none");
+            $("#addObsTaxon").val("Fungi");
+            $("#addObsModal").css("display", "flex");
+
+            // Auto-focus username after modal opens
+            setTimeout(() => {
+                $("#addObsUser").focus();
+            }, 50);
         });
-        $('#addObsCloseX, #addObsCancel').click(function () {
-            $('#addObsModal').hide();
+
+        // Standard modal close behaviors
+        $("#addObsCloseX, #addObsCancel").click(function () {
+            $("#addObsModal").hide();
         });
-        $('#quickToday').click(function () {
-            const today = new Date();
-            const pad = n => String(n).padStart(2, '0');
-            const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
-            $('#addObsStartDate').val(todayStr);
-            $('#addObsEndDate').val(todayStr);
+
+        // Backdrop click close for AddObs modal
+        $("#addObsModal").on("click", function (e) {
+            if (e.target === this) $(this).hide();
         });
-        $('#quickYesterday').click(function () {
+
+        // Date Presets
+        function setQuickDateRange(daysInclusive) {
+            const end = new Date();
+            const start = new Date();
+            // inclusive range: if daysInclusive is 1, start == end
+            start.setDate(end.getDate() - (daysInclusive - 1));
+
+            const pad = (n) => String(n).padStart(2, "0");
+            const endStr = `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`;
+            const startStr = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+
+            $("#addObsStartDate").val(startStr);
+            $("#addObsEndDate").val(endStr);
+        }
+
+        $("#quickToday").click(function () {
+            setQuickDateRange(1);
+        });
+
+        $("#quickYesterday").click(function () {
             const yesterday = new Date();
             yesterday.setDate(yesterday.getDate() - 1);
-            const pad = n => String(n).padStart(2, '0');
+            const pad = (n) => String(n).padStart(2, "0");
             const yesterdayStr = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
-            $('#addObsStartDate').val(yesterdayStr);
-            $('#addObsEndDate').val(yesterdayStr);
+            $("#addObsStartDate").val(yesterdayStr);
+            $("#addObsEndDate").val(yesterdayStr);
         });
 
+        $("#quickLast7Days").click(function () {
+            setQuickDateRange(7);
+        });
+
+        $("#quickLast14Days").click(function () {
+            setQuickDateRange(14);
+        });
+
+        $("#quickLast30Days").click(function () {
+            setQuickDateRange(30);
+        });
+
+        $("#quickLast365Days").click(function () {
+            setQuickDateRange(365);
+        });
+
+        // Preview Logic
         let lastPreviewIds = [];
+        let isPreviewing = false;
 
-        // Username existence check: on input/blur
-        $('#addObsUser').on('input', checkUserExists);
-        $('#addObsUser').on('blur', checkUserExists);
+        // Username existence check
+        $("#addObsUser").on("input", checkUserExists);
+        $("#addObsUser").on("blur", checkUserExists);
 
-        $('#addObsPreview').click(async function () {
-            const startDate = $('#addObsStartDate').val();
-            const endDate = $('#addObsEndDate').val();
-            const username = $('#addObsUser').val().trim();
-            const taxon = $('#addObsTaxon').val().trim();
+        $("#addObsPreview").click(async function () {
+            if (isPreviewing) return;
+
+            const startDate = $("#addObsStartDate").val();
+            const endDate = $("#addObsEndDate").val();
+            const username = $("#addObsUser").val().trim();
+            const taxon = $("#addObsTaxon").val().trim();
+
             if (!startDate || !endDate || !username || !taxon) {
-                showToast('Please enter start date, end date, username, and taxon', false);
+                showToast(
+                    "Please enter start date, end date, username, and taxon",
+                    false,
+                );
                 return;
             }
+
+            isPreviewing = true;
+            const $btn = $(this);
+            const originalText = $btn.html();
+            $btn
+                .html('<i class="fas fa-spinner fa-spin"></i> Previewing...')
+                .prop("disabled", true);
+            $("#addObsConfirm").prop("disabled", true);
+            $("#addObsResults")
+                .show()
+                .html(
+                    '<div style="color:var(--grey-600); padding:1rem; text-align:center;"><i class="fas fa-spinner fa-spin"></i> Searching observations...</div>',
+                );
+
             const fd = new FormData();
-            fd.append('d1', startDate);
-            fd.append('d2', endDate);
-            fd.append('username', username);
-            fd.append('taxon', taxon);
-            $('#addObsResults').show().html('<i class="fas fa-spinner fa-spin"></i> Searching...');
-            fetch('/labels/find_observations', { method: 'POST', body: fd })
-                .then(r => r.json().then(j => ({ ok: r.ok, j })))
-                .then(({ ok, j }) => {
-                    if (!ok) throw new Error(j.error || 'Search failed');
-                    let items = j.items || [];
-                    lastPreviewIds = items.map(x => x.id); // Store all IDs from original response
+            fd.append("d1", startDate);
+            fd.append("d2", endDate);
+            fd.append("username", username);
+            fd.append("taxon", taxon);
 
-                    // Clear and populate cache
-                    previewCache = {};
-                    items.forEach(item => {
-                        previewCache[item.id] = item;
-                    });
-
-                    let warningMessage = '';
-                    if (items.length > maxObservations) {
-                        const lastAllowedObservation = items[maxObservations - 1];
-                        const suggestedEndDate = lastAllowedObservation.observed_on.split('T')[0];
-                        warningMessage = `<div style="padding: 0.5rem; background-color: #fff3cd; color: #856404; border-radius: 8px; margin-bottom: 0.5rem;">
-                          <i class="fas fa-exclamation-triangle"></i>
-                          Found ${items.length} observations. Showing the first ${maxObservations}. To stay under the limit, try setting the end date to ${suggestedEndDate}.
-                          </div>`;
-                        items = items.slice(0, maxObservations); // Truncate for display
-                    }
-
-                    if (!items.length) {
-                        $('#addObsResults').html('<div>No observations found.</div>');
-                        $('#addObsConfirm').prop('disabled', true);
-                        return;
-                    }
-                    const rows = items.map(x => `<label style=\"display:block; margin:2px 0;\"><input type=\"checkbox\" class=\"addObsRowCk\" data-id=\"${x.id}\" checked> #${x.id} — <span class="species-name" style="color:${validateColor(x.color || 'black')}">${escapeHtml(x.scientific_name || '')}</span></label>`).join('');
-                    const header = `<div style=\"display:flex; align-items:center; justify-content:space-between;\"><div style=\"font-size:0.95rem;\">Found ${lastPreviewIds.length} observations</div><div><label style=\"user-select:none;\"><input type=\"checkbox\" id=\"addObsSelectAll\" checked> Select all</label></div></div>`;
-                    const body = `<div id=\"addObsList\" style=\"margin-top:0.5rem;\">${rows}</div>`;
-                    const footer = `<div id=\"addObsSelectedCount\" style=\"margin-top:0.5rem; font-size:0.9rem;\">Selected: ${items.length} of ${lastPreviewIds.length}</div>`;
-                    $('#addObsResults').html(warningMessage + header + body + footer);
-                    $('#addObsConfirm').prop('disabled', false);
-                })
-                .catch(err => {
-                    $('#addObsResults').html(`<span style="color: var(--danger);"><i class="fas fa-exclamation-circle"></i> ${escapeHtml(err.message)}</span>`);
-                    $('#addObsConfirm').prop('disabled', true);
+            try {
+                const response = await fetch("/labels/find_observations", {
+                    method: "POST",
+                    body: fd,
                 });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || "Search failed");
+
+                let items = data.items || [];
+                lastPreviewIds = items.map((x) => x.id);
+
+                // Update cache
+                previewCache = {};
+                items.forEach((item) => {
+                    previewCache[item.id] = item;
+                });
+
+                let warningMessage = "";
+                if (items.length > maxObservations) {
+                    const lastAllowed = items[maxObservations - 1];
+                    const suggestedEnd = lastAllowed.observed_on.split("T")[0];
+                    warningMessage = `<div style="padding: 0.5rem; background-color: #fff3cd; color: #856404; border-radius: 8px; margin-bottom: 0.5rem;">
+                                        <i class="fas fa-exclamation-triangle"></i>
+                                        Found ${items.length} observations. Showing the first ${maxObservations}. To stay under the limit, try setting the end date to ${escapeHtml(suggestedEnd)}.
+                                    </div>`;
+                    items = items.slice(0, maxObservations);
+                }
+
+                if (items.length === 0) {
+                    $("#addObsResults").html(
+                        '<div style="padding:1rem;">No observations found.</div>',
+                    );
+                    return; // Keep Add disabled
+                }
+
+                const rows = items
+                    .map(
+                        (x) => `
+                                    <label style="display:block; margin:2px 0;">
+                                        <input type="checkbox" class="addObsRowCk" data-id="${x.id}" checked>
+                                        #${x.id} — <span class="species-name" style="color:${validateColor(x.color || "black")}">${escapeHtml(x.scientific_name || "")}</span>
+                                    </label>`,
+                    )
+                    .join("");
+
+                const header = `
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
+                                        <div style="font-size:0.95rem; font-weight:600;">Found ${lastPreviewIds.length} observations</div>
+                                        <div>
+                                            <label style="user-select:none; cursor:pointer;">
+                                                <input type="checkbox" id="addObsSelectAll" checked> Select all
+                                            </label>
+                                        </div>
+                                    </div>`;
+
+                const body = `<div id="addObsList">${rows}</div>`;
+                const shown = items.length;
+                const found = lastPreviewIds.length;
+                let footerText = `Selected: ${shown} of ${shown}`;
+                if (found > shown) {
+                    footerText += ` (found ${found})`;
+                }
+                const footer = `<div id="addObsSelectedCount" style="margin-top:0.5rem; font-size:0.9rem; color:var(--grey-600);">${footerText}</div>`;
+
+                $("#addObsResults").html(warningMessage + header + body + footer);
+                $("#addObsConfirm").prop("disabled", false);
+            } catch (err) {
+                $("#addObsResults").html(
+                    `<span style="color: var(--danger);"><i class="fas fa-exclamation-circle"></i> ${escapeHtml(err.message)}</span>`,
+                );
+            } finally {
+                isPreviewing = false;
+                $btn.html(originalText).prop("disabled", false);
+            }
         });
+
         function updateAddObsSelectionState() {
-            const total = $('#addObsList .addObsRowCk').length;
-            const selected = $('#addObsList .addObsRowCk:checked').length;
-            $('#addObsSelectedCount').text(`Selected: ${selected} of ${total}`);
-            $('#addObsConfirm').prop('disabled', selected === 0);
-            if (selected === total) {
-                $('#addObsSelectAll').prop('checked', true);
-            } else if (selected === 0) {
-                $('#addObsSelectAll').prop('checked', false);
+            const total = $("#addObsList .addObsRowCk").length;
+            const selected = $("#addObsList .addObsRowCk:checked").length;
+            $("#addObsSelectedCount").text(`Selected: ${selected} of ${total}`);
+            $("#addObsConfirm").prop("disabled", selected === 0);
+
+            const $sa = $("#addObsSelectAll");
+            if (selected === 0) {
+                $sa.prop("checked", false).prop("indeterminate", false);
+            } else if (selected === total) {
+                $sa.prop("checked", true).prop("indeterminate", false);
             } else {
-                $('#addObsSelectAll').prop('checked', false);
+                $sa.prop("checked", false).prop("indeterminate", true);
             }
         }
 
-        $('#addObsResults').on('change', '#addObsSelectAll', function () {
-            const checked = this.checked;
-            $('#addObsList .addObsRowCk').prop('checked', checked);
-            updateAddObsSelectionState();
-        });
-        $('#addObsResults').on('change', '.addObsRowCk', function () {
+        // "Select All" click logic
+        $("#addObsResults").on("change", "#addObsSelectAll", function () {
+            const wantChecked = this.checked; // State after click
+            // Logic: check or uncheck all based on the new state of the master checkbox
+            $("#addObsList .addObsRowCk").prop("checked", wantChecked);
             updateAddObsSelectionState();
         });
 
-        $('#addObsConfirm').click(function () {
-            const selectedIds = Array.from(document.querySelectorAll('#addObsList .addObsRowCk:checked')).map(el => el.getAttribute('data-id'));
+        $("#addObsResults").on("change", ".addObsRowCk", function () {
+            updateAddObsSelectionState();
+        });
+
+        $("#addObsConfirm").click(function () {
+            const selectedIds = Array.from(
+                document.querySelectorAll("#addObsList .addObsRowCk:checked"),
+            ).map((el) => el.getAttribute("data-id"));
             if (selectedIds.length === 0) {
-                showToast('No observations selected', false);
+                showToast("No observations selected", false);
                 return;
             }
-            const selectedObservations = selectedIds.map(id => previewCache[id]).filter(Boolean);
+            const selectedObservations = selectedIds
+                .map((id) => previewCache[id])
+                .filter(Boolean);
             addObservationsToForm(selectedObservations);
-            $('#addObsModal').hide();
+            $("#addObsModal").hide();
         });
 
-
-        $('#observationInputs').on('click', '.removeButton', function () {
-            const input = $(this).closest('.observation-input');
-            const inputId = input.find('.obs-input').attr('id');
+        $("#observationInputs").on("click", ".removeButton", function () {
+            const input = $(this).closest(".observation-input");
+            const inputId = input.find(".obs-id-input").attr("id");
             delete allObservationData[inputId];
-            if ($('.observation-input').length > 1) {
+
+            if ($(".observation-input").length > 1) {
                 input.remove();
                 updateObservationNumbers();
                 updateWarningMessage();
             } else {
-                input.find('.obs-input').val('');
-                input.find('.result').empty();
+                input.find(".obs-id-input").val("");
+                input.find(".result").empty();
             }
         });
 
@@ -1759,18 +2301,22 @@
         // Helper to check if a field is in the default list (case-insensitive)
         function isDefaultField(fieldName) {
             const normalized = fieldName.toLowerCase();
-            return DEFAULT_LABEL_FIELDS.some(f => f.toLowerCase() === normalized);
+            return DEFAULT_LABEL_FIELDS.some(
+                (f) => f.toLowerCase() === normalized,
+            );
         }
 
         // Populate the Add Fields modal with checkboxes from observation data
         function updateAddFieldsModal() {
             const allFields = new Set();
+
             for (const inputId in allObservationData) {
                 const observations = allObservationData[inputId];
+
                 if (observations) {
-                    observations.forEach(obs => {
+                    observations.forEach((obs) => {
                         if (obs.ofvs) {
-                            obs.ofvs.forEach(field => {
+                            obs.ofvs.forEach((field) => {
                                 allFields.add(field.name);
                             });
                         }
@@ -1779,14 +2325,19 @@
             }
 
             const sortedFields = Array.from(allFields).sort();
-            const modalBody = $('#editFieldsBody');
+            const modalBody = $("#editFieldsBody");
             modalBody.empty();
 
             if (sortedFields.length === 0) {
-                modalBody.html('<p style="color: var(--grey-600);">No observation fields found in the current observations. Observation fields will appear here when you add observations that have additional field data (such as DNA barcodes, herbarium accession numbers, or custom fields).</p>');
+                modalBody.html(
+                    '<p style="color: var(--grey-600);">No observation fields found in the current observations. Observation fields will appear here when you add observations that have additional field data (such as DNA barcodes, herbarium accession numbers, or custom fields).</p>',
+                );
             } else {
-                modalBody.append('<p style="margin-bottom: 1rem; color: var(--grey-600);">Select fields to include on labels. Fields checked by default are automatically included by the label generator. Uncheck them to remove them from your labels.</p>');
-                sortedFields.forEach(fieldName => {
+                modalBody.append(
+                    '<p style="margin-bottom: 1rem; color: var(--grey-600);">Select fields to include on labels. Fields checked by default are automatically included by the label generator. Uncheck them to remove them from your labels.</p>',
+                );
+
+                sortedFields.forEach((fieldName) => {
                     // Determine if this field should be checked:
                     // - If user has explicitly added it, check it
                     // - If user has explicitly removed it, uncheck it
@@ -1796,6 +2347,7 @@
                     const isDefault = isDefaultField(fieldName);
 
                     let isChecked;
+
                     if (isExplicitlyAdded) {
                         isChecked = true;
                     } else if (isExplicitlyRemoved) {
@@ -1804,40 +2356,42 @@
                         isChecked = isDefault;
                     }
 
-                    const fieldId = 'addfield-' + fieldName.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9-]/g, '');
-                    const defaultIndicator = isDefault ? '<span style="color: var(--grey-500); font-size: 0.85em; margin-left: 0.5rem;">(default)</span>' : '';
-                    const checkbox = $(`
-                        <div style="padding: 0.35rem 0;">
-                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                                <input type="checkbox" class="add-field-checkbox" data-fieldname="${escapeHtml(fieldName)}" data-isdefault="${isDefault}" ${isChecked ? 'checked' : ''}>
-                                <span>${escapeHtml(fieldName)}${defaultIndicator}</span>
-                            </label>
-                        </div>
-                    `);
+                    const fieldId =
+                        "addfield-" +
+                        fieldName.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "");
+                    const defaultIndicator = isDefault
+                        ? '<span style="color: var(--grey-500); font-size: 0.85em; margin-left: 0.5rem;">(default)</span>'
+                        : "";
+
+                    const checkbox = $(
+                        `<div style="padding: 0.35rem 0;"><label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;"><input type="checkbox" class="add-field-checkbox" data-fieldname="${escapeHtml(fieldName)}" data-isdefault="${isDefault}" ${isChecked ? "checked" : ""}><span>${escapeHtml(fieldName)}${defaultIndicator}</span></label></div>`,
+                    );
                     modalBody.append(checkbox);
                 });
             }
         }
 
         // Add Fields Modal handlers
-        $('#editFieldsButton').on('click', function () {
+        $("#editFieldsButton").on("click", function () {
             updateAddFieldsModal();
-            $('#editFieldsModal').css('display', 'flex');
+            $("#editFieldsModal").css("display", "flex");
         });
 
-        $('#editFieldsCloseX, #editFieldsCancel').on('click', function () {
-            $('#editFieldsModal').hide();
+        $("#editFieldsCloseX, #editFieldsCancel").on("click", function () {
+            $("#editFieldsModal").hide();
         });
 
         // When OK is clicked, compare selection to defaults and update addFields/removeFields
-        $('#editFieldsConfirm').on('click', function () {
+        $("#editFieldsConfirm").on("click", function () {
             addFields = [];
             removeFields = [];
 
-            $('.add-field-checkbox').each(function () {
-                const fieldName = $(this).data('fieldname');
-                const isDefault = $(this).data('isdefault') === true || $(this).data('isdefault') === 'true';
-                const isChecked = $(this).is(':checked');
+            $(".add-field-checkbox").each(function () {
+                const fieldName = $(this).data("fieldname");
+                const isDefault =
+                    $(this).data("isdefault") === true ||
+                    $(this).data("isdefault") === "true";
+                const isChecked = $(this).is(":checked");
 
                 if (isDefault && !isChecked) {
                     // User unchecked a default field -> need to remove it
@@ -1846,63 +2400,67 @@
                     // User checked a non-default field -> need to add it
                     addFields.push(fieldName);
                 }
+
                 // If default and checked, or non-default and unchecked, no action needed
             });
 
             updateCustomFieldsFromLists();
-            $('#editFieldsModal').hide();
+            $("#editFieldsModal").hide();
         });
 
         // Remove Fields Modal handlers
-        $('#customFieldsButton').on('click', function () {
+        $("#customFieldsButton").on("click", function () {
             renderRemoveFields();
-            $('#customFieldsModal').css('display', 'flex');
+            $("#customFieldsModal").css("display", "flex");
         });
 
-        $('#customFieldsCloseX, #customFieldsCancel, #customFieldsConfirm').on('click', function () {
-            $('#customFieldsModal').hide();
-        });
+        $("#customFieldsCloseX, #customFieldsCancel, #customFieldsConfirm").on(
+            "click",
+            function () {
+                $("#customFieldsModal").hide();
+            },
+        );
 
-        $('#removeCustomField').on('click', function () {
-            const fieldName = $('#customFieldName').val().trim();
+        $("#removeCustomField").on("click", function () {
+            const fieldName = $("#customFieldName").val().trim();
+
             if (fieldName) {
                 removeFields.push(fieldName);
                 updateCustomFieldsFromLists();
                 renderRemoveFields();
-                $('#customFieldName').val('');
+                $("#customFieldName").val("");
             }
         });
 
         // Allow Enter key to remove field
-        $('#customFieldName').on('keydown', function (e) {
-            if (e.key === 'Enter') {
+        $("#customFieldName").on("keydown", function (e) {
+            if (e.key === "Enter") {
                 e.preventDefault();
-                $('#removeCustomField').click();
+                $("#removeCustomField").click();
             }
         });
 
         function renderRemoveFields() {
-            const list = $('#customFieldsList');
+            const list = $("#customFieldsList");
             list.empty();
+
             if (removeFields.length === 0) {
-                list.html('<p style="color: var(--grey-500); font-style: italic;">No fields to remove yet.</p>');
+                list.html(
+                    '<p style="color: var(--grey-500); font-style: italic;">No fields to remove yet.</p>',
+                );
                 return;
             }
+
             removeFields.forEach((field, index) => {
-                const item = $(`
-                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0;">
-                        <span><i class="fas fa-minus" style="color: var(--danger); margin-right: 0.5rem;"></i>${escapeHtml(field)}</span>
-                        <button type="button" class="btn btn-outline btn-icon btn-sm remove-remove-field" data-index="${index}">
-                            <i class="fas fa-times"></i>
-                        </button>
-                    </div>
-                `);
+                const item = $(
+                    `<div style="display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0;"><span><i class="fas fa-minus" style="color: var(--danger); margin-right: 0.5rem;"></i>${escapeHtml(field)}</span><button type="button" class="btn btn-outline btn-icon btn-sm remove-remove-field" data-index="${index}"><i class="fas fa-times"></i></button></div>`,
+                );
                 list.append(item);
             });
         }
 
-        $('#customFieldsList').on('click', '.remove-remove-field', function () {
-            const index = $(this).data('index');
+        $("#customFieldsList").on("click", ".remove-remove-field", function () {
+            const index = $(this).data("index");
             removeFields.splice(index, 1);
             updateCustomFieldsFromLists();
             renderRemoveFields();
@@ -1911,12 +2469,12 @@
         // Update the customFields array from both lists (used when generating labels)
         function updateCustomFieldsFromLists() {
             customFields = [];
-            addFields.forEach(field => customFields.push('+' + field));
-            removeFields.forEach(field => customFields.push('-' + field));
+            addFields.forEach((field) => customFields.push("+" + field));
+            removeFields.forEach((field) => customFields.push("-" + field));
         }
 
         addObservationField();
-        });
+      });
     </script>
 </body>
 
