@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: February 22, 2026
-Version: 3.9.3
+Date: January 29, 2026
+Version: 3.9.2
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -2880,9 +2880,7 @@ def main():
     )
     parser.add_argument(
         "--minilabel",
-        nargs="?",
-        const=True,
-        default=False,
+        action="store_true",
         help="Generate minilabels with only observation number and QR code",
     )
     parser.add_argument(
@@ -2976,21 +2974,9 @@ def main():
     if args.title == "Notes":
         parser.error("argument --title: 'Notes' field can not be used as title")
 
-    # Normalize --minilabel: accept bare flag (True) or a size value
-    if args.minilabel is not False:
-        if args.minilabel is True:
-            args.minilabel = True
-        else:
-            # Could be a string if passed as --minilabel=3, treat as size
-            try:
-                parsed_size = int(args.minilabel)
-                if 1 <= parsed_size <= 10:
-                    args.minilabel_size = parsed_size
-                    args.minilabel = True
-                else:
-                    parser.error("--minilabel value must be between 1 and 10")
-            except (ValueError, TypeError):
-                args.minilabel = True
+    # Auto-enable minilabel mode if --minilabel-size is given
+    if args.minilabel_size is not None:
+        args.minilabel = True
 
     # Default minilabel size to 1 if minilabels enabled but no size specified
     if args.minilabel and args.minilabel_size is None:

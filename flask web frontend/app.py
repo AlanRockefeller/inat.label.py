@@ -383,8 +383,6 @@ def lookup_batch_internal(obs_inputs):
                     ] = f"No data found for Mushroom Observer #{mo_num}"
                     results[idx]["status"] = 404
                 continue
-            scientific_name = "Unknown"
-            user_id = "Unknown"
 
             consensus = result.get("consensus") or {}
             owner = result.get("owner") or {}
