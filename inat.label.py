@@ -2786,9 +2786,10 @@ def sort_labels(items, sort_mode, title_field=None, sort_field_name=None):
                 try:
                     # Parse to datetime, then normalize to date object to avoid naive/aware mismatch
                     d = dateutil_parser.parse(date_str).date()
+                except (ValueError, TypeError):
+                    print_error(f"Warning: Could not parse date '{date_str}', sorting last")
+                else:
                     return (0, d, index)
-                except Exception:
-                    pass
             # Missing or unparseable: sort last using datetime.date.max
             return (1, datetime.date.max, index)
 

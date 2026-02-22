@@ -736,7 +736,7 @@ def print_start():
     if request.form.get("minilabel"):
         command.append("--minilabel")
         minilabel_size = request.form.get("minilabel_size", "").strip()
-        if minilabel_size and minilabel_size.isdigit():
+        if minilabel_size and minilabel_size.isdecimal():
             size_val = int(minilabel_size)
             if 1 <= size_val <= 10:
                 command.extend(["--minilabel-size", str(size_val)])
