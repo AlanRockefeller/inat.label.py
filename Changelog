@@ -1,5 +1,10 @@
 # Changelog
 
+# 3.9.4
+February 23, 2026
+
+- Update for better coding practices, type hints, etc.   Should not be any functional changes.
+
 # 3.9.3
 February 22, 2026
 
