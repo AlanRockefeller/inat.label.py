@@ -1,5 +1,15 @@
 # Changelog
 
+# 3.9.5
+February 23, 2026
+
+- Add the --num-per-page command line argument.   Thanks to Douglas Smith for the suggestion!
+
+# 3.9.4
+February 23, 2026
+
+- Update for better coding practices, type hints, etc.   Should not be any functional changes.
+
 # 3.9.3
 February 22, 2026
 
