@@ -3188,6 +3188,11 @@ def main() -> None:
             "argument --num-per-page: must be a positive even integer greater than 1"
         )
 
+    if args.num_per_page != 6 and not args.stack_order:
+        print_error(
+            "Warning: --num-per-page has no effect without --stack-order."
+        )
+
     # User can not use 'Notes" as title field
     if args.title == "Notes":
         parser.error("argument --title: 'Notes' field can not be used as title")
