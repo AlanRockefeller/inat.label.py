@@ -5,7 +5,7 @@ iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: February 23, 2026
-Version: 3.9.4
+Version: 3.9.5
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -798,6 +798,10 @@ _taxon_batcher_thread: Optional[threading.Thread] = None
 _taxon_batcher_stop = threading.Event()
 _TAXON_BATCH_MAX = int(os.environ.get("INAT_TAXON_BATCH_MAX", "50"))
 _TAXON_BATCH_WINDOW = float(os.environ.get("INAT_TAXON_BATCH_WINDOW", "0.1"))
+# How often (seconds) to check batcher liveness while waiting for a taxon event.
+# There is no upper time limit on the wait itself — In normal operation, the batcher’s 
+# finally-block signals every dequeued ID, so indefinite waiting is safe.
+_BATCHER_LIVENESS_POLL = 5.0
 
 
 def _run_taxon_batcher() -> None:
@@ -876,6 +880,30 @@ def _start_taxon_batcher() -> None:
         _taxon_batcher_thread.start()
 
 
+def _wait_for_taxon_event(event: threading.Event, taxon_id_int: int) -> None:
+    """Block until *event* is set, restarting the batcher if it has died.
+
+    Polls every _BATCHER_LIVENESS_POLL seconds so a crashed batcher is detected
+    and restarted rather than silently starving callers.  The ID is re-enqueued
+    when the batcher is restarted and is no longer in the queue, covering the
+    rare case where the batcher died after dequeuing the ID but before its
+    finally-block could signal the event.
+
+    There is no wall-clock timeout: the batcher's finally-block guarantees it
+    signals every ID it has dequeued, so waiting indefinitely is safe in the
+    normal case and the liveness-poll loop handles the crash case.
+    """
+    while not event.wait(timeout=_BATCHER_LIVENESS_POLL):
+        if not (_taxon_batcher_thread is not None and _taxon_batcher_thread.is_alive()):
+            print_error(
+                f"Taxon batcher thread died; restarting for taxon {taxon_id_int}"
+            )
+            with _taxon_batch_lock:
+                if taxon_id_int not in _taxon_batch_queue:
+                    _taxon_batch_queue.append(taxon_id_int)
+            _start_taxon_batcher()
+
+
 def get_taxon_details(taxon_id: int | str, retries: int = 6) -> Optional[ObsData]:
     """Fetch taxon details (including ancestors) with caching and batching.
 
@@ -915,10 +943,7 @@ def get_taxon_details(taxon_id: int | str, retries: int = 6) -> Optional[ObsData
             wait_event = None
 
     if wait_event is not None:
-        if not wait_event.wait(timeout=_MAX_WAIT_SECONDS):
-            print_error(
-                f"Timeout waiting for taxon {taxon_id_int} (batcher may have died)"
-            )
+        _wait_for_taxon_event(wait_event, taxon_id_int)
         with _taxon_cache_lock:
             return _taxon_cache.get(taxon_id_int)
 
@@ -929,12 +954,7 @@ def get_taxon_details(taxon_id: int | str, retries: int = 6) -> Optional[ObsData
     _start_taxon_batcher()
 
     # Block until the batcher signals our event.
-    if not my_event.wait(timeout=_MAX_WAIT_SECONDS):
-        print_error(f"Timeout waiting for taxon {taxon_id_int} (batcher may have died)")
-        # Remove our stale event so future callers can enqueue a fresh fetch.
-        with _taxon_pending_lock:
-            if _taxon_pending.get(taxon_id_int) is my_event:
-                _taxon_pending.pop(taxon_id_int, None)
+    _wait_for_taxon_event(my_event, taxon_id_int)
     with _taxon_cache_lock:
         return _taxon_cache.get(taxon_id_int)
 
