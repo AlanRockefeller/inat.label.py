@@ -553,7 +553,11 @@ def parse_html_notes(notes: str | None) -> str | None:
 
     # Convert hyperlinks to text URLs
     for a in soup.find_all("a"):
-        a.replace_with(f"{a.text} ({a['href']})")
+        href = a.get("href")
+        if href:
+            a.replace_with(f"{a.text} ({href})")
+        else:
+            a.replace_with(a.text)
 
     # Mark bold and italic text for RTF formatting
     for tag in soup.find_all(["strong", "b"]):
@@ -3523,9 +3527,11 @@ def main() -> None:
     sorted_labels = sort_labels(labels, args.sort, args.title, args.sort_field)
     labels = sorted_labels
 
+    original_count = len(labels)
+
     if args.stack_order:
         stacked_labels = []
-        m = len(labels)  # number of labels
+        m = original_count  # number of labels
         labels_per_page = args.num_per_page
         rows_per_page = labels_per_page // 2  # assuming 2 columns
         n = (
@@ -3645,10 +3651,10 @@ def main() -> None:
             else str(len(failed))
         )
         generated_word = "generated"
-        if total_requested != len(labels):
+        if total_requested != original_count:
             generated_word = Fore.RED + "generated" + Style.RESET_ALL
         print(
-            f"Summary: requested {total_requested}, {generated_word} {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s",
+            f"Summary: requested {total_requested}, {generated_word} {original_count}, failed {failed_count_text}, time {elapsed:.2f}s",
             flush=True,
         )
         if failed:
