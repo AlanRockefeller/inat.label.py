@@ -5,7 +5,7 @@ iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: February 23, 2026
-Version: 3.9.5
+Version: 3.9.6
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -803,7 +803,7 @@ _taxon_batcher_stop = threading.Event()
 _TAXON_BATCH_MAX = int(os.environ.get("INAT_TAXON_BATCH_MAX", "50"))
 _TAXON_BATCH_WINDOW = float(os.environ.get("INAT_TAXON_BATCH_WINDOW", "0.1"))
 # How often (seconds) to check batcher liveness while waiting for a taxon event.
-# There is no upper time limit on the wait itself — In normal operation, the batcher’s 
+# There is no upper time limit on the wait itself — In normal operation, the batcher’s
 # finally-block signals every dequeued ID, so indefinite waiting is safe.
 _BATCHER_LIVENESS_POLL = 5.0
 
@@ -1089,6 +1089,20 @@ def get_mushroom_observer_data(
                         observation["ofvs"].append(
                             {"name": field_name, "value": f"{bp_count} bp"}
                         )
+
+        if mo_observation.get("collection_numbers"):
+            parts = []
+            for cn in mo_observation["collection_numbers"]:
+                collector = cn.get("collector", "").strip()
+                number = cn.get("number", "").strip()
+                if collector and number:
+                    parts.append(f"{collector} {number}")
+                elif number:
+                    parts.append(number)
+            if parts:
+                observation["ofvs"].append(
+                    {"name": "Collection #", "value": "; ".join(parts)}
+                )
 
         return observation, "Fungi"
     else:
@@ -1681,9 +1695,14 @@ def create_inaturalist_label(
     if microhabitat:
         label.append(("Microhabitat", microhabitat))
 
-    collection_number = get_field_value(observation_data, "Collection Number")
-    if collection_number:
-        label.append(("Collection Number", collection_number))
+    inat_cn = get_field_value(observation_data, "Collection Number")
+    mo_cn = get_field_value(observation_data, "Collection #")
+    if inat_cn and mo_cn:
+        label.append(("Collection #", f"MO {mo_cn}; iNat {inat_cn}"))
+    elif mo_cn:
+        label.append(("Collection #", mo_cn))
+    elif inat_cn:
+        label.append(("Collection #", inat_cn))
 
     associated_species = get_field_value(observation_data, "Associated Species")
     if associated_species:
@@ -2222,10 +2241,36 @@ def create_pdf_content(
     doc.build(story)
 
 
+def _minilabel_source_abbr(label: LabelFields) -> str:
+    """Return 'MO' for Mushroom Observer labels, 'iNat' for iNaturalist labels."""
+    for field, _ in label:
+        if field == "Mushroom Observer Number":
+            return "MO"
+    return "iNat"
+
+
+def _minilabel_qr_url(label: LabelFields) -> Optional[str]:
+    """Return the source-appropriate URL for a minilabel QR code.
+
+    Prefers the canonical URL for the detected source ('Mushroom Observer URL'
+    for MO labels, 'iNaturalist URL' for iNat labels).  Falls back to the first
+    field whose name contains 'URL' if the preferred field is absent.
+    """
+    preferred = (
+        "Mushroom Observer URL"
+        if _minilabel_source_abbr(label) == "MO"
+        else "iNaturalist URL"
+    )
+    url = next((v for f, v in label if f == preferred), None)
+    if url is None:
+        url = next((v for f, v in label if "URL" in f), None)
+    return url
+
+
 def create_minilabel_pdf_content(
     labels: list[TaggedLabel], filename: str, minilabel_size: int = 1
 ) -> None:
-    """Render minilabels into a multi-column PDF, with QR on left and 'iNat' + number top-aligned on the right."""
+    """Render minilabels into a multi-column PDF, with QR on left and 'iNat' or 'MO' + number top-aligned on the right."""
     register_fonts()
 
     # page + margins
@@ -2300,8 +2345,15 @@ def create_minilabel_pdf_content(
 
     for label, _ in labels:
         # get the two things we actually need
-        obs_number = next((v for f, v in label if "Observation Number" in f), None)
-        qr_url = next((v for f, v in label if "URL" in f), None)
+        obs_number = next(
+            (
+                v
+                for f, v in label
+                if "Observation Number" in f or f == "Mushroom Observer Number"
+            ),
+            None,
+        )
+        qr_url = _minilabel_qr_url(label)
 
         if not obs_number or not qr_url:
             story.append(Spacer(1, 0.04 * inch))
@@ -2320,7 +2372,7 @@ def create_minilabel_pdf_content(
         qr_image = ReportLabImage(qr_img_data, width=qr_size, height=qr_size)
 
         # right-hand stacked text
-        p_title = Paragraph("iNaturalist", text_style)
+        p_title = Paragraph(_minilabel_source_abbr(label), text_style)
         p_id = Paragraph(rl_safe(obs_number), text_style)
 
         text_width = col_width - qr_size
@@ -2713,9 +2765,15 @@ def create_minilabel_rtf_content(
         row = []
         for label, _ in row_labels:
             obs_number = next(
-                (value for field, value in label if "Observation Number" in field), None
+                (
+                    value
+                    for field, value in label
+                    if "Observation Number" in field
+                    or field == "Mushroom Observer Number"
+                ),
+                None,
             )
-            qr_url = next((value for field, value in label if "URL" in field), None)
+            qr_url = _minilabel_qr_url(label)
 
             if not obs_number or not qr_url:
                 row.append("")
@@ -2748,8 +2806,16 @@ def create_minilabel_rtf_content(
                 + qr_hex
                 + r"}"
             )
-            # Observation number, slightly spaced but no redundant paragraph breaks
-            cell_content += r"\pard\fs" + str(rtf_font_half_pts) + " " + str(obs_number)
+            # Source abbreviation + observation number on separate lines
+            source_abbr = _minilabel_source_abbr(label)
+            cell_content += (
+                r"\pard\fs"
+                + str(rtf_font_half_pts)
+                + " "
+                + source_abbr
+                + r"\line "
+                + str(obs_number)
+            )
             cell_content += "}"
             row.append(cell_content)
 
@@ -3189,9 +3255,7 @@ def main() -> None:
         )
 
     if args.num_per_page != 6 and not args.stack_order:
-        print_error(
-            "Warning: --num-per-page has no effect without --stack-order."
-        )
+        print_error("Warning: --num-per-page has no effect without --stack-order.")
 
     # User can not use 'Notes" as title field
     if args.title == "Notes":
