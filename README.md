@@ -149,7 +149,7 @@ The script generates herbarium labels to the standard output by default, or labe
 
 ## Dependencies
 
-- Python 3.6+
+- Python 3.10+
 - requests
 - requests-toolbelt
 - python-dateutil
