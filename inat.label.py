@@ -804,7 +804,7 @@ _taxon_batcher_stop = threading.Event()
 _TAXON_BATCH_MAX = int(os.environ.get("INAT_TAXON_BATCH_MAX", "50"))
 _TAXON_BATCH_WINDOW = float(os.environ.get("INAT_TAXON_BATCH_WINDOW", "0.1"))
 # How often (seconds) to check batcher liveness while waiting for a taxon event.
-# There is no upper time limit on the wait itself — In normal operation, the batcher's
+# There is no upper time limit on the wait itself -- In normal operation, the batcher's
 # finally-block signals every dequeued ID, so indefinite waiting is safe.
 _BATCHER_LIVENESS_POLL = 5.0
 
@@ -928,7 +928,7 @@ def get_taxon_details(taxon_id: int | str) -> Optional[ObsData]:
     except (ValueError, TypeError):
         return None
 
-    # Fast path: cache hit — only return entries that carry ancestor data.
+    # Fast path: cache hit - only return entries that carry ancestor data.
     with _taxon_cache_lock:
         cached = _taxon_cache.get(taxon_id_int)
         if cached is not None and cached.get("ancestors") is not None:
