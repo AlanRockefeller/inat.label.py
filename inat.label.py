@@ -223,8 +223,7 @@ def _rate_limit_wait() -> None:
 
         # 3. Check Smoothing / Burst
         # Ensure schedule catches up to now if we were idle
-        if _next_allowed_time < now:
-            _next_allowed_time = now
+        _next_allowed_time = max(_next_allowed_time, now)
 
         # Burst mode: minimal wait (just the hard cap wait, if any).
         # Do not increment _next_allowed_time to create debt; just keep it current.
@@ -585,7 +584,9 @@ def normalize_string(s: str) -> str:
     return unicodedata.normalize("NFKD", s.strip().lower())
 
 
-def extract_observation_id(input_string: str, debug: bool = False) -> str | None:
+def extract_observation_id(  # pylint: disable=unused-argument
+    input_string: str, debug: bool = False
+) -> str | None:
     """Normalize a user-supplied input into an observation identifier.
 
     Accepts iNaturalist numeric IDs or URLs, and Mushroom Observer IDs like "MO12345" or MO URLs.
@@ -649,7 +650,7 @@ def fetch_api_data(url: str, retries: int = 6) -> tuple[ObsData | None, str | No
         except ValueError:
             # Try HTTP-date
             try:
-                from email.utils import parsedate_to_datetime
+                from email.utils import parsedate_to_datetime  # pylint: disable=import-outside-toplevel
 
                 dt = parsedate_to_datetime(ra)
                 # parsedate_to_datetime returns an aware datetime; use aware now()
@@ -1105,11 +1106,11 @@ def get_mushroom_observer_data(
                 )
 
         return observation, "Fungi"
-    else:
-        print(
-            f"Error: Mushroom Observer observation {mo_id} does not exist or has no results."
-        )
-        return None, "Life"
+
+    print(
+        f"Error: Mushroom Observer observation {mo_id} does not exist or has no results."
+    )
+    return None, "Life"
 
 
 def get_observation_data(
@@ -1157,9 +1158,9 @@ def get_observation_data(
                     observation["taxon_details"] = taxon_details
 
         return observation, iconic_taxon_name
-    else:
-        print(f"Error: Observation {observation_id} does not exist.", flush=True)
-        return None, "Life"
+
+    print(f"Error: Observation {observation_id} does not exist.", flush=True)
+    return None, "Life"
 
 
 def field_exists(observation_data: ObsData, field_name: str) -> bool:
@@ -1335,6 +1336,8 @@ def parse_date(date_string: str | None) -> datetime.date | None:
     except (ValueError, TypeError):
         return None
 
+    return None
+
 
 def format_scientific_name(observation_data: ObsData) -> str:
     """Format the scientific name based on taxonomic rank.
@@ -1404,7 +1407,7 @@ def format_scientific_name(observation_data: ObsData) -> str:
                 return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{epithet}__ITALIC_END__"
             # If the name has three parts but doesn't match our species ancestor,
             # it might be "Genus species epithet" format
-            elif len(name_parts) == 3:
+            if len(name_parts) == 3:
                 return f"__ITALIC_START__{name_parts[0]} {name_parts[1]}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{name_parts[2]}__ITALIC_END__"
 
         # If we get here, we need to find parent species from ancestors
@@ -1419,12 +1422,11 @@ def format_scientific_name(observation_data: ObsData) -> str:
             # If the scientific_name is just the infraspecific epithet
             if len(name_parts) == 1:
                 return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
-            else:
-                # If scientific_name already contains full info, just make sure format is correct
-                return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{name_parts[-1]}__ITALIC_END__"
-        else:
-            # Fallback: couldn't find parent species
-            return scientific_name
+            # If scientific_name already contains full info, just make sure format is correct
+            return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{name_parts[-1]}__ITALIC_END__"
+
+        # Fallback: couldn't find parent species
+        return scientific_name
 
     # Infrageneric ranks (below genus): subgenus, section, subsection
     # We need the genus; fetch ancestors if not present
@@ -1758,7 +1760,7 @@ def create_inaturalist_label(
     return label, iconic_taxon_name
 
 
-def create_fungus_fair_label(
+def create_fungus_fair_label(  # pylint: disable=unused-argument
     observation_data: ObsData | None,
     iconic_taxon_name: str,
     show_common_names: bool = False,
@@ -1878,7 +1880,7 @@ def create_pdf_content(
     register_fonts()
     if fungus_fair_mode:
         try:
-            from PIL import Image as PILImage
+            from PIL import Image as PILImage  # pylint: disable=import-outside-toplevel
         except ImportError:
             print_error(
                 "Error: PIL (Pillow) is required for fungus fair mode image handling."
@@ -1900,6 +1902,8 @@ def create_pdf_content(
     )  # Must be twice the margin to cut labels that are the same size
     frame_width = (doc.width - column_gap) / 2
     frame_height = doc.height
+    left_margin = doc.leftMargin  # pylint: disable=no-member
+    bottom_margin = doc.bottomMargin  # pylint: disable=no-member
 
     doc.addPageTemplates(
         [
@@ -1907,8 +1911,8 @@ def create_pdf_content(
                 id="TwoCol",
                 frames=[
                     Frame(
-                        doc.leftMargin,
-                        doc.bottomMargin,
+                        left_margin,
+                        bottom_margin,
                         frame_width,
                         frame_height,
                         id="col1",
@@ -1918,8 +1922,8 @@ def create_pdf_content(
                         rightPadding=0,
                     ),
                     Frame(
-                        doc.leftMargin + frame_width + column_gap,
-                        doc.bottomMargin,
+                        left_margin + frame_width + column_gap,
+                        bottom_margin,
                         frame_width,
                         frame_height,
                         id="col2",
@@ -1972,7 +1976,7 @@ def create_pdf_content(
     )
     story = []
 
-    for label, iconic_taxon_name in labels:
+    for label, _iconic_taxon_name in labels:
         label_content = []
         notes_value = ""  # Default if not found
 
@@ -2130,7 +2134,7 @@ def create_pdf_content(
                     continue
                 if title_field and field == title_field:
                     continue
-                elif field == "Scientific Name":
+                if field == "Scientific Name":
                     p = Paragraph(
                         f"<b>{field}:</b> {rl_safe(value)}", custom_normal_style
                     )
@@ -2292,15 +2296,17 @@ def create_minilabel_pdf_content(
     qr_box_size = size_cfg[1]
     usable_width = doc.width  # inside margins
     col_width = usable_width / num_columns
+    left_margin = doc.leftMargin  # pylint: disable=no-member
+    bottom_margin = doc.bottomMargin  # pylint: disable=no-member
 
     # make 8 skinny frames
     frames = []
     for i in range(num_columns):
-        x = doc.leftMargin + i * col_width
+        x = left_margin + i * col_width
         frames.append(
             Frame(
                 x,
-                doc.bottomMargin,
+                bottom_margin,
                 col_width,
                 doc.height,
                 id=f"mini-col-{i}",
@@ -2440,7 +2446,7 @@ def create_rtf_content(
     """
     if fungus_fair_mode:
         try:
-            from PIL import Image as PILImage
+            from PIL import Image as PILImage  # pylint: disable=import-outside-toplevel
         except ImportError:
             print_error(
                 "Error: PIL (Pillow) is required for fungus fair mode image handling."
@@ -2462,7 +2468,6 @@ def create_rtf_content(
         return text
 
     try:
-        total = len(labels)
         for idx, (label, _iconic_taxon_name) in enumerate(labels):
             # Calculate space before to handle spacing between labels without ghost space at top of columns
             sb_twips = 0
@@ -3025,7 +3030,7 @@ def sort_labels(
         _, (label, _) = item
         if sort_mode == "voucher":
             return get_voucher_value(label)
-        elif sort_mode == "custom":
+        if sort_mode == "custom":
             if sort_field_name:
                 return label_get(label, sort_field_name)
         return None
@@ -3066,19 +3071,19 @@ def sort_labels(
             # Missing or unparseable: sort last using datetime.date.max
             return (1, datetime.date.max, index)
 
-        else:  # Default behavior (Observation Number or Title)
-            target_field = (
-                title_field if title_field else "iNaturalist Observation Number"
-            )
+        # Default behavior (Observation Number or Title)
+        target_field = (
+            title_field if title_field else "iNaturalist Observation Number"
+        )
 
-            raw_val = label_get(label, target_field)
-            if not raw_val and not title_field:
-                # Fallback for default sort if iNat num missing
-                raw_val = label_get(label, "Mushroom Observer Number")
+        raw_val = label_get(label, target_field)
+        if not raw_val and not title_field:
+            # Fallback for default sort if iNat num missing
+            raw_val = label_get(label, "Mushroom Observer Number")
 
-            # Default key uses strictly numeric logic (backward compatibility)
-            numeric_sort_val = parse_key_default(raw_val)
-            return (numeric_sort_val, index)
+        # Default key uses strictly numeric logic (backward compatibility)
+        numeric_sort_val = parse_key_default(raw_val)
+        return (numeric_sort_val, index)
 
     sorted_items = sorted(items, key=get_sort_key_legacy)
     return [x[1] for x in sorted_items]
@@ -3330,16 +3335,21 @@ def main() -> None:
     # Read observation IDs from file if --file is provided
     if args.file:
         try:
-            with open(args.file, "r") as file:
+            with open(args.file, "r", encoding="utf-8") as file:
                 file_contents = file.read()
                 # Split file contents by whitespace, commas, or newlines
                 file_observation_ids = re.split(r"[,\s]+", file_contents.strip())
                 observation_ids.extend(file_observation_ids)
-        except Exception as e:
+        except (OSError, ValueError) as e:
             print(f"Error reading file {args.file}: {e}")
             sys.exit(1)
 
     # Process input for Fungus Fair mode (CSV files)
+    def _norm_csv_key(s: str | None) -> str:
+        if not s:
+            return ""
+        return s.strip().lower().replace(" ", "").replace("_", "")
+
     if args.fungusfair:
         for csv_file in csv_files:
             if not os.path.exists(csv_file):
@@ -3350,19 +3360,18 @@ def main() -> None:
                 with open(csv_file, "r", encoding="utf-8-sig") as f:
                     reader = csv.DictReader(f)
 
-                    def norm_key(s: str | None) -> str:
-                        if not s:
-                            return ""
-                        return s.strip().lower().replace(" ", "").replace("_", "")
-
                     header_map = {}
                     if reader.fieldnames:
                         for field in reader.fieldnames:
-                            header_map[norm_key(field)] = field
+                            header_map[_norm_csv_key(field)] = field
 
-                    def get_val(row: dict[str, str], keys: list[str]) -> str | None:
+                    def get_val(
+                        row: dict[str, str],
+                        keys: list[str],
+                        hmap: dict[str, str],
+                    ) -> str | None:
                         for key in keys:
-                            real_key = header_map.get(norm_key(key))
+                            real_key = hmap.get(_norm_csv_key(key))
                             if real_key and row.get(real_key):
                                 return row[real_key].strip()
                         return None
@@ -3374,12 +3383,12 @@ def main() -> None:
 
                         manual_label = []
                         sci_name = get_val(
-                            row, ["scientificname", "scientific_name", "name"]
+                            row, ["scientificname", "scientific_name", "name"], header_map
                         )
-                        common_name = get_val(row, ["commonname", "common_name"])
-                        habitat = get_val(row, ["habitat"])
-                        spore_print = get_val(row, ["sporeprint", "spore_print"])
-                        edibility = get_val(row, ["edibility"])
+                        common_name = get_val(row, ["commonname", "common_name"], header_map)
+                        habitat = get_val(row, ["habitat"], header_map)
+                        spore_print = get_val(row, ["sporeprint", "spore_print"], header_map)
+                        edibility = get_val(row, ["edibility"], header_map)
 
                         if sci_name:
                             manual_label.append(
@@ -3513,57 +3522,57 @@ def main() -> None:
                             f"https://www.inaturalist.org/observations/{observation_id}"
                         )
                 return ("skip", None)
+
+            if args.fungusfair:
+                _result = create_fungus_fair_label(
+                    observation_data,
+                    iconic_taxon_name,
+                    show_common_names=args.common_names,
+                    debug=args.debug,
+                )
             else:
-                if args.fungusfair:
-                    _result = create_fungus_fair_label(
-                        observation_data,
-                        iconic_taxon_name,
-                        show_common_names=args.common_names,
-                        debug=args.debug,
+                _result = create_inaturalist_label(
+                    observation_data,
+                    iconic_taxon_name,
+                    show_common_names=args.common_names,
+                    omit_notes=args.omit_notes,
+                    debug=args.debug,
+                    custom_add=fields_to_add,
+                    custom_remove=fields_to_remove,
+                )
+
+            if _result is not None:
+                label, updated_iconic_taxon = _result
+                # Print as soon as the label is created
+                scientific_name = next(
+                    (v for f, v in label if f == "Scientific Name"), ""
+                )
+                scientific_name_plain = scientific_name.replace(
+                    "__ITALIC_START__", ""
+                ).replace("__ITALIC_END__", "")
+                if updated_iconic_taxon == "Fungi":
+                    print(
+                        Fore.BLUE
+                        + f"Added label for {updated_iconic_taxon}"
+                        + Style.RESET_ALL
+                        + f" {scientific_name_plain}",
+                        flush=True,
+                    )
+                elif updated_iconic_taxon == "Plantae":
+                    print(
+                        Fore.GREEN
+                        + f"Added label for {updated_iconic_taxon}"
+                        + Style.RESET_ALL
+                        + f" {scientific_name_plain}",
+                        flush=True,
                     )
                 else:
-                    _result = create_inaturalist_label(
-                        observation_data,
-                        iconic_taxon_name,
-                        show_common_names=args.common_names,
-                        omit_notes=args.omit_notes,
-                        debug=args.debug,
-                        custom_add=fields_to_add,
-                        custom_remove=fields_to_remove,
+                    print(
+                        f"Added label for {updated_iconic_taxon} {scientific_name_plain}",
+                        flush=True,
                     )
-
-                if _result is not None:
-                    label, updated_iconic_taxon = _result
-                    # Print as soon as the label is created
-                    scientific_name = next(
-                        (v for f, v in label if f == "Scientific Name"), ""
-                    )
-                    scientific_name_plain = scientific_name.replace(
-                        "__ITALIC_START__", ""
-                    ).replace("__ITALIC_END__", "")
-                    if updated_iconic_taxon == "Fungi":
-                        print(
-                            Fore.BLUE
-                            + f"Added label for {updated_iconic_taxon}"
-                            + Style.RESET_ALL
-                            + f" {scientific_name_plain}",
-                            flush=True,
-                        )
-                    elif updated_iconic_taxon == "Plantae":
-                        print(
-                            Fore.GREEN
-                            + f"Added label for {updated_iconic_taxon}"
-                            + Style.RESET_ALL
-                            + f" {scientific_name_plain}",
-                            flush=True,
-                        )
-                    else:
-                        print(
-                            f"Added label for {updated_iconic_taxon} {scientific_name_plain}",
-                            flush=True,
-                        )
-                    return ("ok", (index, label, updated_iconic_taxon))
-                return ("err", (index, f"Could not create label for {observation_id}"))
+                return ("ok", (index, label, updated_iconic_taxon))
+            return ("err", (index, f"Could not create label for {observation_id}"))
         except Exception as e:
             return ("err", (index, f"Unexpected error for {input_value}: {e!s}"))
 
@@ -3640,7 +3649,7 @@ def main() -> None:
                     rtf_content = create_minilabel_rtf_content(
                         labels, minilabel_size=args.minilabel_size
                     )
-                    with open(args.rtf, "w") as rtf_file:
+                    with open(args.rtf, "w", encoding="utf-8") as rtf_file:
                         rtf_file.write(rtf_content)
                     print(f"RTF file created: {os.path.basename(args.rtf)}", flush=True)
                 elif pdf_mode:
@@ -3652,12 +3661,12 @@ def main() -> None:
                 rtf_content = create_rtf_content(
                     labels, no_qr=args.no_qr, fungus_fair_mode=args.fungusfair
                 )
-                with open(args.rtf, "w") as rtf_file:
+                with open(args.rtf, "w", encoding="utf-8") as rtf_file:
                     rtf_file.write(rtf_content)
                 try:
                     size_bytes = os.path.getsize(args.rtf)
                     size_kb = (size_bytes + 1023) // 1024
-                except Exception:
+                except OSError:
                     size_kb = None
                 basename = os.path.basename(args.rtf)
                 if size_kb is not None:
@@ -3675,7 +3684,7 @@ def main() -> None:
                 try:
                     size_bytes = os.path.getsize(args.pdf)
                     size_kb = (size_bytes + 1023) // 1024
-                except Exception:
+                except OSError:
                     size_kb = None
                 basename = os.path.basename(args.pdf)
                 if size_kb is not None:
