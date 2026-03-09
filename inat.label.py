@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: January 29, 2026
-Version: 3.9.2
+Date: March 9, 2026
+Version: 3.9.7
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -68,55 +68,84 @@ The dependencies can be installed with the following command:
 
     pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab
 
-Python version 3.6 or higher is recommended.
+Python version 3.7 or higher is required (uses ``from __future__ import annotations``).
 
 """
 
+from __future__ import annotations
+
 import argparse
-import colorama
-from colorama import Fore, Style
-import math
+import binascii
+import csv
 import datetime
 import html
+import math
 import os
-import re
-import sys
-import time
-import shutil
-import csv
-import unicodedata
 import random
-from io import BytesIO
+import re
+import shutil
 import subprocess
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from concurrent.futures import ThreadPoolExecutor
+import sys
 import threading
+import time
+import unicodedata
 from collections import deque
-import binascii
-from bs4 import BeautifulSoup
-from dateutil import parser as dateutil_parser
+from concurrent.futures import ThreadPoolExecutor
+from functools import cmp_to_key
+from io import BytesIO
+from typing import Any, Dict, List, Optional, Tuple
+
+import colorama
 import qrcode
+import requests
+from bs4 import BeautifulSoup
+from colorama import Fore, Style
+from dateutil import parser as dateutil_parser
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import (
-    BaseDocTemplate,
-    Frame,
-    PageTemplate,
-    Paragraph,
-    Spacer,
-    Image as ReportLabImage,
-    KeepTogether,
-    Table,
-    TableStyle,
-    KeepInFrame,
-)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont, TTFError
+from reportlab.platypus import (
+    BaseDocTemplate,
+    Frame,
+    Image as ReportLabImage,
+    KeepInFrame,
+    KeepTogether,
+    PageTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+)
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
+# ---------------------------------------------------------------------------
+# Type aliases
+# ---------------------------------------------------------------------------
+
+# A single label row: (field_name, display_value)
+LabelField = Tuple[str, str]
+
+# All rows for one label, in display order
+LabelFields = List[LabelField]
+
+# A label paired with its iNaturalist iconic taxon category.
+# Both elements are always present; functions return Optional[TaggedLabel] on error.
+TaggedLabel = Tuple[LabelFields, str]
+
+# A TaggedLabel tagged with its original input index, used during sorting.
+IndexedLabel = Tuple[int, TaggedLabel]
+
+# A single observation dict returned by the iNat or MO API.
+ObsData = Dict[str, Any]
+
+# Return type of the per-observation worker function in main().
+ProcessResult = Tuple[str, Optional[Any]]
+
+# ---------------------------------------------------------------------------
 PDF_BASE_FONT = os.environ.get("PDF_BASE_FONT", "Times-Roman")
 _fonts_registered = False
 _fonts_lock = threading.Lock()
@@ -148,8 +177,23 @@ _request_semaphore = threading.BoundedSemaphore(
 _MAX_WAIT_SECONDS = float(os.environ.get("INAT_MAX_WAIT_SECONDS", "30"))
 _QUIET = bool(int(os.environ.get("INAT_QUIET", "0")))
 
+# Minilabel size presets (1 = smallest/current, 10 = largest)
+# Each entry: (num_columns, qr_box_size, pdf_qr_inches, pdf_font_pt, rtf_qr_twips, rtf_font_half_pts)
+MINILABEL_SIZES = {
+    1: (8, 1, 0.33, 7.5, 500, 16),
+    2: (7, 1, 0.40, 8.0, 570, 17),
+    3: (6, 2, 0.48, 8.5, 660, 18),
+    4: (6, 2, 0.55, 9.0, 750, 19),
+    5: (5, 2, 0.62, 9.5, 850, 20),
+    6: (5, 2, 0.70, 10.0, 950, 22),
+    7: (4, 3, 0.80, 10.5, 1100, 24),
+    8: (4, 3, 0.90, 11.0, 1250, 26),
+    9: (3, 3, 1.00, 11.5, 1400, 28),
+    10: (3, 4, 1.10, 12.0, 1550, 30),
+}
 
-def _rate_limit_wait():
+
+def _rate_limit_wait() -> None:
     """Respect RPM window with smoothing only after a small burst threshold.
 
     - Allows a small initial burst (< _SMOOTH_THRESHOLD in the last 60s) with no artificial spacing
@@ -179,14 +223,15 @@ def _rate_limit_wait():
 
         # 3. Check Smoothing / Burst
         # Ensure schedule catches up to now if we were idle
-        if _next_allowed_time < now:
-            _next_allowed_time = now
+        _next_allowed_time = max(_next_allowed_time, now)
 
         # Burst mode: minimal wait (just the hard cap wait, if any).
         # Do not increment _next_allowed_time to create debt; just keep it current.
         # This allows the *next* request to also burst or start smoothing from now.
         # Smoothing mode: respect the schedule.
-        smoothing_target = now if len(_request_times) < _SMOOTH_THRESHOLD else _next_allowed_time
+        smoothing_target = (
+            now if len(_request_times) < _SMOOTH_THRESHOLD else _next_allowed_time
+        )
 
         # 4. Calculate final wait
         final_time = max(now + wait_for_cap, smoothing_target)
@@ -208,8 +253,13 @@ def _rate_limit_wait():
         time.sleep(wait)
 
 
-def get_session():
-    """Get or create a requests session with connection pooling."""
+def get_session() -> requests.Session:
+    """Get or create a thread-local requests session with connection pooling.
+
+    Returns:
+        A ``requests.Session`` configured with retry logic and pooled
+        connections, unique to the calling thread.
+    """
     if not hasattr(_thread_local, "session"):
         _thread_local.session = requests.Session()
         # Let our own code handle 429s with Retry-After; adapter will only retry on transient 5xx
@@ -227,10 +277,13 @@ def get_session():
     return _thread_local.session
 
 
-def print_error(message):
+def print_error(message: object) -> None:
     """Print an error message in red (cross-platform) to stderr.
 
     Uses colorama for coloring when available; falls back to ANSI escape codes.
+
+    Args:
+        message: Value to print; coerced to str via ``str()``.
     """
     try:
         print(Fore.RED + str(message) + Style.RESET_ALL, file=sys.stderr)
@@ -239,7 +292,7 @@ def print_error(message):
         print(f"\033[91m{message}\033[0m", file=sys.stderr)
 
 
-def register_fonts():
+def register_fonts() -> None:
     """Register both a preferred font and a system Unicode font to be used conditionally."""
     global PDF_BASE_FONT, _fonts_registered
 
@@ -369,13 +422,31 @@ RTF_HEADER = r"""{\rtf1\ansi\uc1\deff3\adeflang1025
 """
 
 
-def generate_qr_code(url, minilabel_mode=False):
-    """Generate a small PNG QR code for the given URL and return (hex_string, size_tuple)."""
+def generate_qr_code(
+    url: str,
+    minilabel_mode: bool = False,
+    qr_box_size: int | None = None,
+) -> tuple[str | None, tuple[int, int] | None]:
+    """Generate a small PNG QR code for the given URL and return (hex_string, size_tuple).
+
+    Args:
+        url: URL to encode in the QR code.
+        minilabel_mode: If True and *qr_box_size* is None, use box size 1.
+        qr_box_size: Override the pixel box size; takes precedence over
+            *minilabel_mode*.
+
+    Returns:
+        A ``(hex_string, (width, height))`` tuple, or ``(None, None)`` on
+        error.
+    """
     try:
-        if minilabel_mode:
-            qr = qrcode.QRCode(version=1, box_size=1, border=1)
+        if qr_box_size is not None:
+            box = qr_box_size
+        elif minilabel_mode:
+            box = 1
         else:
-            qr = qrcode.QRCode(version=1, box_size=2, border=1)
+            box = 2
+        qr = qrcode.QRCode(version=1, box_size=box, border=1)
         qr.add_data(url)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
@@ -390,9 +461,18 @@ def generate_qr_code(url, minilabel_mode=False):
         return None, None
 
 
-def escape_rtf(text):
-    """Escape special characters for RTF output. This function handles standard RTF control
-    characters and encodes any non-ASCII characters using RTF's \\uXXXX notation."""
+def escape_rtf(text: object) -> str:
+    """Escape special characters for RTF output.
+
+    Handles standard RTF control characters and encodes any non-ASCII
+    characters using RTF's \\uXXXX notation.
+
+    Args:
+        text: Value to escape; coerced to str if not already.
+
+    Returns:
+        RTF-safe string, or empty string if text is falsy.
+    """
     if not text:
         return ""
     text = str(text)
@@ -420,7 +500,7 @@ def escape_rtf(text):
 
 
 # Remove formatting tags in stdout
-def remove_formatting_tags(text):
+def remove_formatting_tags(text: str) -> str:
     """Strip internal formatting markers and prune empty/garbage lines for plaintext output."""
     tags_to_remove = [
         "__BOLD_START__",
@@ -440,7 +520,7 @@ def remove_formatting_tags(text):
     return "\n".join(cleaned_lines)
 
 
-def rl_safe(text):
+def rl_safe(text: object) -> str:
     """Escape text for ReportLab Paragraphs and restore internal formatting markers."""
     if not text:
         return ""
@@ -453,7 +533,7 @@ def rl_safe(text):
     )
 
 
-def parse_html_notes(notes):
+def parse_html_notes(notes: str | None) -> str | None:
     """Convert HTML notes into simplified text with inline formatting markers.
 
     - Unwraps paragraph tags
@@ -472,7 +552,11 @@ def parse_html_notes(notes):
 
     # Convert hyperlinks to text URLs
     for a in soup.find_all("a"):
-        a.replace_with(f"{a.text} ({a['href']})")
+        href = a.get("href")
+        if href:
+            a.replace_with(f"{a.text} ({href})")
+        else:
+            a.replace_with(a.text)
 
     # Mark bold and italic text for RTF formatting
     for tag in soup.find_all(["strong", "b"]):
@@ -495,12 +579,14 @@ def parse_html_notes(notes):
     return processed_text
 
 
-def normalize_string(s):
+def normalize_string(s: str) -> str:
     """Lowercase, strip whitespace, and apply NFKD Unicode normalization for comparisons."""
     return unicodedata.normalize("NFKD", s.strip().lower())
 
 
-def extract_observation_id(input_string, debug=False):
+def extract_observation_id(  # pylint: disable=unused-argument
+    input_string: str, debug: bool = False
+) -> str | None:
     """Normalize a user-supplied input into an observation identifier.
 
     Accepts iNaturalist numeric IDs or URLs, and Mushroom Observer IDs like "MO12345" or MO URLs.
@@ -539,12 +625,22 @@ def extract_observation_id(input_string, debug=False):
     return None
 
 
-def fetch_api_data(url, retries=6):
+def fetch_api_data(url: str, retries: int = 6) -> tuple[ObsData | None, str | None]:
     """Fetch data from a URL with robust retries and friendly errors.
+
     Uses Retry-After header for 429s and exponential backoff with jitter.
+
+    Args:
+        url: The URL to fetch.
+        retries: Maximum number of retry attempts before giving up.
+
+    Returns:
+        A ``(data, error)`` tuple.  *data* is the parsed JSON dict on
+        success, ``None`` on failure.  *error* is ``None`` on success or
+        a short error-message string on failure.
     """
 
-    def _parse_retry_after(resp):
+    def _parse_retry_after(resp: requests.Response) -> float | None:
         """Parse HTTP Retry-After header as seconds, supporting both delta and HTTP-date."""
         ra = resp.headers.get("Retry-After")
         if not ra:
@@ -554,10 +650,12 @@ def fetch_api_data(url, retries=6):
         except ValueError:
             # Try HTTP-date
             try:
-                from email.utils import parsedate_to_datetime
+                from email.utils import parsedate_to_datetime  # pylint: disable=import-outside-toplevel
 
                 dt = parsedate_to_datetime(ra)
-                return max(0.0, (dt - datetime.datetime.utcnow()).total_seconds())
+                # parsedate_to_datetime returns an aware datetime; use aware now()
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                return max(0.0, (dt - now_utc).total_seconds())
             except Exception:
                 return None
 
@@ -691,118 +789,189 @@ def fetch_api_data(url, retries=6):
     return None, "Exceeded maximum retries due to rate limiting or network errors"
 
 
-# Batched taxon-details cache and fetcher
-_taxon_cache = {}
+# Taxon-details: in-memory cache + batch-fetch + single-flight deduplication
+# Only complete entries (those containing "ancestors") are stored in the cache.
+_taxon_cache: Dict[int, ObsData] = {}
 _taxon_cache_lock = threading.Lock()
-_taxon_pending = {}
+# Single-flight: maps taxon ID → Event that is set when the fetch completes.
+_taxon_pending: Dict[int, threading.Event] = {}
 _taxon_pending_lock = threading.Lock()
-_taxon_batch_queue = deque()
-_taxon_batcher_thread = None
+# Batch-fetch queue and background batcher thread.
+_taxon_batch_queue: deque = deque()  # deque[int]
+_taxon_batch_lock = threading.Lock()
+_taxon_batcher_thread: Optional[threading.Thread] = None
 _taxon_batcher_stop = threading.Event()
 _TAXON_BATCH_MAX = int(os.environ.get("INAT_TAXON_BATCH_MAX", "50"))
 _TAXON_BATCH_WINDOW = float(os.environ.get("INAT_TAXON_BATCH_WINDOW", "0.1"))
+# How often (seconds) to check batcher liveness while waiting for a taxon event.
+# There is no upper time limit on the wait itself -- In normal operation, the batcher's
+# finally-block signals every dequeued ID, so indefinite waiting is safe.
+_BATCHER_LIVENESS_POLL = 5.0
 
 
-def _start_taxon_batcher():
-    """Start the background batcher thread for /taxa lookups if not already running."""
-    global _taxon_batcher_thread
-    if _taxon_batcher_thread and _taxon_batcher_thread.is_alive():
-        return
+def _run_taxon_batcher() -> None:
+    """Background thread: drain _taxon_batch_queue and fetch each taxon individually.
 
-    def _loop():
-        """Background loop that batches pending taxon IDs and fetches them via a single /taxa call."""
-        while not _taxon_batcher_stop.is_set():
-            ids = []
-            start_wait = time.time()
-            # Collect a batch up to max size or window
-            while len(ids) < _TAXON_BATCH_MAX:
+    Sleeps for _TAXON_BATCH_WINDOW seconds between drain cycles, or exits when
+    _taxon_batcher_stop is set.  On each cycle:
+      - Pops up to _TAXON_BATCH_MAX IDs from the queue.
+      - Fetches each via /v1/taxa/{id} (the only endpoint that returns "ancestors").
+        NOTE: /v1/taxa?id=1,2,3 omits "ancestors" from its response objects, so
+        individual single-taxon requests are required here.
+      - Stores complete entries (those with "ancestors") in _taxon_cache.
+        A pre-existing good cache entry is never overwritten by a failure.
+      - Signals every pending Event so callers unblock.
+    """
+    while not _taxon_batcher_stop.wait(timeout=_TAXON_BATCH_WINDOW):
+        with _taxon_batch_lock:
+            batch: List[int] = []
+            seen_in_batch: set = set()
+            while _taxon_batch_queue and len(batch) < _TAXON_BATCH_MAX:
+                tid = _taxon_batch_queue.popleft()
+                if tid not in seen_in_batch:
+                    seen_in_batch.add(tid)
+                    batch.append(tid)
+
+        if not batch:
+            continue
+
+        # Guarantee callers are unblocked even if an unexpected exception occurs.
+        try:
+            for tid in batch:
+                data: Optional[ObsData] = None
+                error: Optional[str] = None
+                try:
+                    url = f"https://api.inaturalist.org/v1/taxa/{tid}"
+                    data, error = fetch_api_data(url)
+                except Exception as exc:  # pragma: no cover
+                    error = str(exc)
+
+                if error:
+                    print_error(f"Error fetching taxon {tid}: {error}")
+                elif data and data.get("results"):
+                    taxon = data["results"][0]
+                    if taxon.get("ancestors") is not None:
+                        # Failures never overwrite good cache entries; successes do.
+                        with _taxon_cache_lock:
+                            _taxon_cache[tid] = taxon
+
+                # Unblock this taxon's waiter as soon as its result is known.
                 with _taxon_pending_lock:
-                    if _taxon_batch_queue:
-                        tid = _taxon_batch_queue.popleft()
-                        if tid not in ids:
-                            ids.append(tid)
-                    else:
-                        # No work pending right now
-                        pass
-                if ids:
-                    if time.time() - start_wait >= _TAXON_BATCH_WINDOW:
-                        break
-                    # Small sleep to allow more IDs to accumulate
-                    time.sleep(0.01)
-                else:
-                    # Avoid tight loop when idle
-                    time.sleep(0.01)
-                    if not _taxon_batch_queue:
-                        # still nothing; continue outer while
-                        continue
-            if not ids:
-                # nothing to do this round
-                continue
-            # Perform a single batched request
-            url = "https://api.inaturalist.org/v1/taxa?id=" + ",".join(
-                str(i) for i in ids
+                    event = _taxon_pending.pop(tid, None)
+                    if event is not None:
+                        event.set()
+
+        finally:
+            # Safety net: unblock any waiters not yet signalled (e.g. loop aborted early).
+            with _taxon_pending_lock:
+                for tid in batch:
+                    event = _taxon_pending.pop(tid, None)
+                    if event is not None:
+                        event.set()
+
+
+def _start_taxon_batcher() -> None:
+    """Start the background taxon-batcher thread if it is not already running."""
+    global _taxon_batcher_thread
+    if _taxon_batcher_thread is not None and _taxon_batcher_thread.is_alive():
+        return
+    with _taxon_batch_lock:
+        if _taxon_batcher_thread is not None and _taxon_batcher_thread.is_alive():
+            return
+        _taxon_batcher_stop.clear()
+        _taxon_batcher_thread = threading.Thread(
+            target=_run_taxon_batcher, name="taxon-batcher", daemon=True
+        )
+        _taxon_batcher_thread.start()
+
+
+def _wait_for_taxon_event(event: threading.Event, taxon_id_int: int) -> None:
+    """Block until *event* is set, restarting the batcher if it has died.
+
+    Polls every _BATCHER_LIVENESS_POLL seconds so a crashed batcher is detected
+    and restarted rather than silently starving callers.  The ID is re-enqueued
+    when the batcher is restarted and is no longer in the queue, covering the
+    rare case where the batcher died after dequeuing the ID but before its
+    finally-block could signal the event.
+
+    There is no wall-clock timeout: the batcher's finally-block guarantees it
+    signals every ID it has dequeued, so waiting indefinitely is safe in the
+    normal case and the liveness-poll loop handles the crash case.
+    """
+    while not event.wait(timeout=_BATCHER_LIVENESS_POLL):
+        if not (_taxon_batcher_thread is not None and _taxon_batcher_thread.is_alive()):
+            print_error(
+                f"Taxon batcher thread died; restarting for taxon {taxon_id_int}"
             )
-            data, error = fetch_api_data(url)
-            results_by_id = {}
-            if not error and data and data.get("results") is not None:
-                for item in data["results"]:
-                    tid = item.get("id")
-                    if tid is not None:
-                        results_by_id[tid] = item
-            # Fulfill waiters and populate cache
-            with _taxon_pending_lock, _taxon_cache_lock:
-                for tid in ids:
-                        _taxon_cache[tid] = results_by_id.get(tid)
-                        evt = _taxon_pending.get(tid)
-                        if evt:
-                            evt.set()
-                            _taxon_pending.pop(tid, None)
-
-    _taxon_batcher_thread = threading.Thread(
-        target=_loop, name="inat-taxa-batcher", daemon=True
-    )
-    _taxon_batcher_thread.start()
+            with _taxon_batch_lock:
+                if taxon_id_int not in _taxon_batch_queue:
+                    _taxon_batch_queue.append(taxon_id_int)
+            _start_taxon_batcher()
 
 
-def get_taxon_details(taxon_id, retries=6):
-    """Fetch taxon details (including ancestors) with caching.
+def get_taxon_details(taxon_id: int | str) -> Optional[ObsData]:
+    """Fetch taxon details (including ancestors) with caching and batching.
 
-    Uses the /v1/taxa/{id} endpoint to ensure 'ancestors' are present. Caches results in-memory.
+    Enqueues taxon_id for the background batcher thread, which fetches each
+    taxon via /v1/taxa/{id} (the endpoint that returns the full "ancestors"
+    list).  Single-flight deduplication prevents duplicate concurrent fetches
+    for the same ID.  Caches only complete entries (those with "ancestors").
+
+    Args:
+        taxon_id: iNaturalist taxon ID (int or coercible string).
+
+    Returns:
+        Taxon dict with 'ancestors' populated, or None on failure/not found.
     """
     try:
-        tid = int(taxon_id)
-    except Exception:
+        taxon_id_int = int(taxon_id)
+    except (ValueError, TypeError):
         return None
 
-    # Cache fast-path; ensure we have ancestors
+    # Fast path: cache hit - only return entries that carry ancestor data.
     with _taxon_cache_lock:
-        cached = _taxon_cache.get(tid)
-    if cached and cached.get("ancestors") is not None:
-        return cached
+        cached = _taxon_cache.get(taxon_id_int)
+        if cached is not None and cached.get("ancestors") is not None:
+            return cached
 
-    # Fetch directly (ensures ancestors are included)
-    url = f"https://api.inaturalist.org/v1/taxa/{tid}"
-    data, error = fetch_api_data(url, retries)
-    if error:
-        print_error(f"Error fetching taxon {tid}: {error}")
-        return cached  # Return whatever we had (may be None or partial)
+    # Single-flight: if another thread is already fetching this ID, wait for it.
+    my_event: Optional[threading.Event] = None
+    with _taxon_pending_lock:
+        existing = _taxon_pending.get(taxon_id_int)
+        if existing is not None:
+            wait_event: Optional[threading.Event] = existing
+        else:
+            my_event = threading.Event()
+            _taxon_pending[taxon_id_int] = my_event
+            wait_event = None
 
-    if data and data.get("results"):
-        item = data["results"][0]
+    if wait_event is not None:
+        _wait_for_taxon_event(wait_event, taxon_id_int)
         with _taxon_cache_lock:
-            _taxon_cache[tid] = item
-        return item
-    return cached
+            return _taxon_cache.get(taxon_id_int)
+
+    # We are the designated fetcher: enqueue the ID and let the batcher handle it.
+    assert my_event is not None
+    with _taxon_batch_lock:
+        _taxon_batch_queue.append(taxon_id_int)
+    _start_taxon_batcher()
+
+    # Block until the batcher signals our event.
+    _wait_for_taxon_event(my_event, taxon_id_int)
+    with _taxon_cache_lock:
+        return _taxon_cache.get(taxon_id_int)
 
 
-def get_mushroom_observer_data(mo_id, retries=6):
+def get_mushroom_observer_data(
+    mo_id: str, retries: int = 6
+) -> tuple[ObsData | None, str]:
     """Fetch observation data from Mushroom Observer API."""
     mo_number = mo_id.replace("MO", "")
     url = f"https://mushroomobserver.org/api2/observations/{mo_number}?detail=high"
     data, error = fetch_api_data(url, retries)
 
     if error:
-        if "Status code: 404" in error:
+        if "Not found (404)" in error:
             print(
                 f"Error: Mushroom Observer observation {mo_id} does not exist.",
                 flush=True,
@@ -920,15 +1089,33 @@ def get_mushroom_observer_data(mo_id, retries=6):
                             {"name": field_name, "value": f"{bp_count} bp"}
                         )
 
+        if mo_observation.get("collection_numbers"):
+            parts = []
+            for cn in mo_observation["collection_numbers"]:
+                if not isinstance(cn, dict):
+                    continue
+                collector = str(cn.get("collector", "") or "").strip()
+                number = str(cn.get("number", "") or "").strip()
+                if collector and number:
+                    parts.append(f"{collector} {number}")
+                elif number:
+                    parts.append(number)
+            if parts:
+                observation["ofvs"].append(
+                    {"name": "Collection #", "value": "; ".join(parts)}
+                )
+
         return observation, "Fungi"
-    else:
-        print(
-            f"Error: Mushroom Observer observation {mo_id} does not exist or has no results."
-        )
-        return None, "Life"
+
+    print(
+        f"Error: Mushroom Observer observation {mo_id} does not exist or has no results."
+    )
+    return None, "Life"
 
 
-def get_observation_data(observation_id, retries=6):
+def get_observation_data(
+    observation_id: int | str, retries: int = 6
+) -> tuple[ObsData | None, str]:
     """Fetch observation data from iNaturalist or Mushroom Observer.
 
     Accepts either an iNaturalist observation ID (int/str) or an MO ID like "MO12345".
@@ -950,7 +1137,9 @@ def get_observation_data(observation_id, retries=6):
     if data and data.get("results"):
         observation = data["results"][0]
         taxon = observation.get("taxon", {})
-        iconic_taxon_name = taxon.get("iconic_taxon_name") if taxon else "Life"
+        iconic_taxon_name = (
+            (taxon.get("iconic_taxon_name") or "Life") if taxon else "Life"
+        )
 
         if taxon and "id" in taxon:
             taxon_id = taxon["id"]
@@ -969,12 +1158,12 @@ def get_observation_data(observation_id, retries=6):
                     observation["taxon_details"] = taxon_details
 
         return observation, iconic_taxon_name
-    else:
-        print(f"Error: Observation {observation_id} does not exist.", flush=True)
-        return None, "Life"
+
+    print(f"Error: Observation {observation_id} does not exist.", flush=True)
+    return None, "Life"
 
 
-def field_exists(observation_data, field_name):
+def field_exists(observation_data: ObsData, field_name: str) -> bool:
     """Return True if an observation has a custom field with the given name."""
     return any(
         field["name"].lower() == field_name.lower()
@@ -982,7 +1171,7 @@ def field_exists(observation_data, field_name):
     )
 
 
-def get_field_value(observation_data, field_name):
+def get_field_value(observation_data: ObsData, field_name: str) -> str | None:
     """Return the value for a custom field by name, or None if absent."""
     for field in observation_data.get("ofvs", []):
         if field["name"].lower() == field_name.lower():
@@ -990,7 +1179,7 @@ def get_field_value(observation_data, field_name):
     return None
 
 
-def format_mushroom_observer_url(url):
+def format_mushroom_observer_url(url: str | None) -> str | None:
     """Normalize Mushroom Observer URLs to https://mushroomobserver.org/obs/<id> when possible."""
     if url:
         match = re.search(
@@ -1002,14 +1191,23 @@ def format_mushroom_observer_url(url):
     return url
 
 
-def get_coordinates(observation_data):
-    """Return ("lat, lon", accuracy_str) from observation geojson, if present.
+def get_coordinates(observation_data: ObsData) -> tuple[str, str | None]:
+    """Return ``("lat, lon", accuracy_str)`` from observation geojson, if present.
 
     - Formats lat/lon with variable precision based on accuracy.
-    - For private observations, returns ("private", None).
-    - For obscured observations, uses the larger of iNat positional_accuracy or the
-      computed diagonal of the 0.2°×0.2° obscuration cell at the observation latitude.
-    - Returns ("Not available", None) when no coordinates are present.
+    - For private observations, returns ``("private", None)``.
+    - For obscured observations, uses the larger of iNat *positional_accuracy*
+      or the computed diagonal of the 0.2° × 0.2° obscuration cell at the
+      observation latitude.
+    - Returns ``("Not available", None)`` when no coordinates are present.
+
+    Args:
+        observation_data: A single iNaturalist observation dict.
+
+    Returns:
+        A ``(coords_string, accuracy_string)`` tuple.  *accuracy_string* is
+        ``None`` when accuracy is unknown, otherwise a human-readable string
+        like ``"45m"`` or ``"2km"``.
     """
     geoprivacy = observation_data.get("geoprivacy")
     if geoprivacy == "private":
@@ -1030,7 +1228,7 @@ def get_coordinates(observation_data):
         )
         return math.hypot(0.2 * m_per_deg_lat, 0.2 * m_per_deg_lon)
 
-    def _coord_decimals_for_accuracy(acc_m) -> int:
+    def _coord_decimals_for_accuracy(acc_m: float | None) -> int:
         if acc_m is None:
             return 5
         if acc_m >= 20000:
@@ -1085,7 +1283,7 @@ def get_coordinates(observation_data):
     return f"{latitude}, {longitude}", accuracy_str
 
 
-def parse_date(date_string):
+def parse_date(date_string: str | None) -> datetime.date | None:
     """Parse a variety of date strings and return a datetime.date or None.
 
     Only the calendar date is kept; any time-of-day or timezone (e.g. PST)
@@ -1138,8 +1336,10 @@ def parse_date(date_string):
     except (ValueError, TypeError):
         return None
 
+    return None
 
-def format_scientific_name(observation_data):
+
+def format_scientific_name(observation_data: ObsData) -> str:
     """Format the scientific name based on taxonomic rank.
 
     - Species-level and above: return the taxon's canonical name.
@@ -1207,7 +1407,7 @@ def format_scientific_name(observation_data):
                 return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{epithet}__ITALIC_END__"
             # If the name has three parts but doesn't match our species ancestor,
             # it might be "Genus species epithet" format
-            elif len(name_parts) == 3:
+            if len(name_parts) == 3:
                 return f"__ITALIC_START__{name_parts[0]} {name_parts[1]}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{name_parts[2]}__ITALIC_END__"
 
         # If we get here, we need to find parent species from ancestors
@@ -1222,12 +1422,11 @@ def format_scientific_name(observation_data):
             # If the scientific_name is just the infraspecific epithet
             if len(name_parts) == 1:
                 return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
-            else:
-                # If scientific_name already contains full info, just make sure format is correct
-                return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{name_parts[-1]}__ITALIC_END__"
-        else:
-            # Fallback: couldn't find parent species
-            return scientific_name
+            # If scientific_name already contains full info, just make sure format is correct
+            return f"__ITALIC_START__{species_name}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{name_parts[-1]}__ITALIC_END__"
+
+        # Fallback: couldn't find parent species
+        return scientific_name
 
     # Infrageneric ranks (below genus): subgenus, section, subsection
     # We need the genus; fetch ancestors if not present
@@ -1256,24 +1455,34 @@ def format_scientific_name(observation_data):
 
 
 def create_inaturalist_label(
-    observation_data,
-    iconic_taxon_name,
-    show_common_names=False,
-    omit_notes=False,
-    debug=False,
-    custom_add=None,
-    custom_remove=None,
-):
+    observation_data: ObsData | None,
+    iconic_taxon_name: str,
+    show_common_names: bool = False,
+    omit_notes: bool = False,
+    debug: bool = False,
+    custom_add: list[str] | None = None,
+    custom_remove: list[str] | None = None,
+) -> Optional[TaggedLabel]:
     """Build a label record from observation data.
 
-    Returns (label_fields, iconic_taxon_name) where label_fields is a list of (field, value) tuples
-    suitable for either RTF/PDF rendering or plaintext output. If observation_data is None, returns (None, None).
-    When omit_notes is True, the Notes field is omitted entirely. When debug is True, custom
-    observation fields (OFVs) are logged to stderr to aid troubleshooting.
+    Args:
+        observation_data: A single iNaturalist or Mushroom Observer observation
+            dict, or ``None`` (in which case ``None`` is returned).
+        iconic_taxon_name: Taxon category string from the API (e.g. ``"Fungi"``).
+        show_common_names: Include the common name field when True.
+        omit_notes: Skip the Notes field entirely when True.
+        debug: Log all custom observation fields (OFVs) to stderr.
+        custom_add: Extra OFV field names to append to the label.
+        custom_remove: Field names to remove from the label.
+
+    Returns:
+        A ``(label_fields, iconic_taxon_name)`` tuple where *label_fields* is a
+        list of ``(field, value)`` strings suitable for RTF/PDF/plaintext
+        rendering, or ``None`` when *observation_data* is ``None``.
     """
     # If no data, return quietly; upstream will report a single concise error.
     if observation_data is None:
-        return None, None
+        return None
 
     obs_number = observation_data["id"]
     # Check if this is a Mushroom Observer observation
@@ -1356,7 +1565,7 @@ def create_inaturalist_label(
 
     # Add these fields to all labels
     geoprivacy = observation_data.get("geoprivacy")
-    is_private = (geoprivacy == "private")
+    is_private = geoprivacy == "private"
 
     if isinstance(obs_number, str) and obs_number.startswith("MO"):
         # For Mushroom Observer data
@@ -1367,11 +1576,13 @@ def create_inaturalist_label(
         ]
         if not is_private:
             fields_to_add.append(("Location", location))
-        fields_to_add.extend([
-            ("Coordinates", gps_coords),
-            ("Date Observed", date_observed_str),
-            ("Observer", observer),
-        ])
+        fields_to_add.extend(
+            [
+                ("Coordinates", gps_coords),
+                ("Date Observed", date_observed_str),
+                ("Observer", observer),
+            ]
+        )
         label.extend(fields_to_add)
     else:
         # For iNaturalist data
@@ -1381,11 +1592,13 @@ def create_inaturalist_label(
         ]
         if not is_private:
             fields_to_add.append(("Location", location))
-        fields_to_add.extend([
-            ("Coordinates", gps_coords),
-            ("Date Observed", date_observed_str),
-            ("Observer", observer),
-        ])
+        fields_to_add.extend(
+            [
+                ("Coordinates", gps_coords),
+                ("Date Observed", date_observed_str),
+                ("Observer", observer),
+            ]
+        )
         label.extend(fields_to_add)
 
     # Handle DNA Barcode fields consistently for both platforms
@@ -1486,9 +1699,14 @@ def create_inaturalist_label(
     if microhabitat:
         label.append(("Microhabitat", microhabitat))
 
-    collection_number = get_field_value(observation_data, "Collection Number")
-    if collection_number:
-        label.append(("Collection Number", collection_number))
+    inat_cn = get_field_value(observation_data, "Collection Number")
+    mo_cn = get_field_value(observation_data, "Collection #")
+    if inat_cn and mo_cn:
+        label.append(("Collection #", f"MO {mo_cn}; iNat {inat_cn}"))
+    elif mo_cn:
+        label.append(("Collection #", mo_cn))
+    elif inat_cn:
+        label.append(("Collection #", inat_cn))
 
     associated_species = get_field_value(observation_data, "Associated Species")
     if associated_species:
@@ -1521,13 +1739,13 @@ def create_inaturalist_label(
     ):
         # Format Mushroom Observer URL in the best possible way
         formatted_url = format_mushroom_observer_url(mushroom_observer_url)
-        label.append(("Mushroom Observer URL", formatted_url))
+        label.append(("Mushroom Observer URL", formatted_url or ""))
 
     if not omit_notes:
         notes = observation_data.get("description") or ""
         # Convert HTML in notes field to text
         notes_parsed = parse_html_notes(notes)
-        label.append(("Notes", notes_parsed))
+        label.append(("Notes", notes_parsed or ""))
 
     if custom_add:
         for field_name in custom_add:
@@ -1542,12 +1760,29 @@ def create_inaturalist_label(
     return label, iconic_taxon_name
 
 
-def create_fungus_fair_label(
-    observation_data, iconic_taxon_name, show_common_names=False, debug=False
-):
-    """Build a minimal label record for fungus fair usage (Sci Name, Common Name, Habitat, Spore Print, Edibility)."""
+def create_fungus_fair_label(  # pylint: disable=unused-argument
+    observation_data: ObsData | None,
+    iconic_taxon_name: str,
+    show_common_names: bool = False,
+    debug: bool = False,
+) -> Optional[TaggedLabel]:
+    """Build a minimal label record for fungus fair usage.
+
+    Includes Scientific Name, Common Name, Habitat, Spore Print, and
+    Edibility fields only.
+
+    Args:
+        observation_data: A single observation dict, or ``None``.
+        iconic_taxon_name: Taxon category string from the API.
+        show_common_names: Include the common name field when True.
+        debug: Unused; reserved for future use.
+
+    Returns:
+        A ``(label_fields, iconic_taxon_name)`` tuple, or ``None``
+        when *observation_data* is ``None``.
+    """
     if observation_data is None:
-        return None, None
+        return None
 
     taxon = observation_data.get("taxon", {})
     # Only use the preferred common name; do not fall back to scientific name
@@ -1609,7 +1844,7 @@ def create_fungus_fair_label(
     return label, iconic_taxon_name
 
 
-def find_non_ascii_chars(labels):
+def find_non_ascii_chars(labels: list[TaggedLabel]) -> set[str]:
     """Find all non-ASCII characters in the label data, ignoring certain common symbols."""
     non_ascii_chars = set()
     # The default font handles '±' (U+00B1) correctly
@@ -1625,17 +1860,27 @@ def find_non_ascii_chars(labels):
 
 
 def create_pdf_content(
-    labels, filename, no_qr=False, title_field=None, fungus_fair_mode=False
-):
+    labels: list[TaggedLabel],
+    filename: str,
+    no_qr: bool = False,
+    title_field: str | None = None,
+    fungus_fair_mode: bool = False,
+) -> None:
     """Render labels into a two-column PDF at the given filename.
 
-    Expects labels as an iterable of (label_fields, iconic_taxon_name). Adds a QR code when a URL is present.
+    Args:
+        labels: Iterable of ``(label_fields, iconic_taxon_name)`` tuples.
+        filename: Output PDF path.
+        no_qr: Omit QR codes when True.
+        title_field: Field name to render as a large centered title.
+        fungus_fair_mode: Use the fungus-fair layout (large names, edibility
+            image) instead of the standard herbarium layout.
     """
 
     register_fonts()
     if fungus_fair_mode:
         try:
-            from PIL import Image as PILImage
+            from PIL import Image as PILImage  # pylint: disable=import-outside-toplevel
         except ImportError:
             print_error(
                 "Error: PIL (Pillow) is required for fungus fair mode image handling."
@@ -1657,6 +1902,8 @@ def create_pdf_content(
     )  # Must be twice the margin to cut labels that are the same size
     frame_width = (doc.width - column_gap) / 2
     frame_height = doc.height
+    left_margin = doc.leftMargin  # pylint: disable=no-member
+    bottom_margin = doc.bottomMargin  # pylint: disable=no-member
 
     doc.addPageTemplates(
         [
@@ -1664,8 +1911,8 @@ def create_pdf_content(
                 id="TwoCol",
                 frames=[
                     Frame(
-                        doc.leftMargin,
-                        doc.bottomMargin,
+                        left_margin,
+                        bottom_margin,
                         frame_width,
                         frame_height,
                         id="col1",
@@ -1675,8 +1922,8 @@ def create_pdf_content(
                         rightPadding=0,
                     ),
                     Frame(
-                        doc.leftMargin + frame_width + column_gap,
-                        doc.bottomMargin,
+                        left_margin + frame_width + column_gap,
+                        bottom_margin,
                         frame_width,
                         frame_height,
                         id="col2",
@@ -1729,7 +1976,7 @@ def create_pdf_content(
     )
     story = []
 
-    for label, iconic_taxon_name in labels:
+    for label, _iconic_taxon_name in labels:
         label_content = []
         notes_value = ""  # Default if not found
 
@@ -1887,7 +2134,7 @@ def create_pdf_content(
                     continue
                 if title_field and field == title_field:
                     continue
-                elif field == "Scientific Name":
+                if field == "Scientific Name":
                     p = Paragraph(
                         f"<b>{field}:</b> {rl_safe(value)}", custom_normal_style
                     )
@@ -2000,23 +2247,37 @@ def create_pdf_content(
     doc.build(story)
 
 
-def create_minilabel_pdf_content(labels, filename):
-    """Render minilabels into an 8-column PDF, with QR on left and 'iNat' + number top-aligned on the right."""
-    register_fonts()
-    from reportlab.platypus import (
-        BaseDocTemplate,
-        Frame,
-        PageTemplate,
-        Paragraph,
-        Spacer,
-        Image as ReportLabImage,
-        Table,
-        TableStyle,
+def _minilabel_source_abbr(label: LabelFields) -> str:
+    """Return 'MO' for Mushroom Observer labels, 'iNat' for iNaturalist labels."""
+    for field, _ in label:
+        if field == "Mushroom Observer Number":
+            return "MO"
+    return "iNat"
+
+
+def _minilabel_qr_url(label: LabelFields) -> Optional[str]:
+    """Return the source-appropriate URL for a minilabel QR code.
+
+    Prefers the canonical URL for the detected source ('Mushroom Observer URL'
+    for MO labels, 'iNaturalist URL' for iNat labels).  Falls back to the first
+    field whose name contains 'URL' if the preferred field is absent.
+    """
+    preferred = (
+        "Mushroom Observer URL"
+        if _minilabel_source_abbr(label) == "MO"
+        else "iNaturalist URL"
     )
-    from reportlab.lib.units import inch
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    import binascii
-    from io import BytesIO
+    url = next((v for f, v in label if f == preferred), None)
+    if url is None:
+        url = next((v for f, v in label if "URL" in f), None)
+    return url
+
+
+def create_minilabel_pdf_content(
+    labels: list[TaggedLabel], filename: str, minilabel_size: int = 1
+) -> None:
+    """Render minilabels into a multi-column PDF, with QR on left and 'iNat' or 'MO' + number top-aligned on the right."""
+    register_fonts()
 
     # page + margins
     doc = BaseDocTemplate(
@@ -2028,18 +2289,24 @@ def create_minilabel_pdf_content(labels, filename):
         bottomMargin=0.5 * inch,
     )
 
-    num_columns = 8
+    size_cfg = MINILABEL_SIZES.get(minilabel_size, MINILABEL_SIZES[1])
+    num_columns = size_cfg[0]
+    pdf_qr_inches = size_cfg[2]
+    pdf_font_pt = size_cfg[3]
+    qr_box_size = size_cfg[1]
     usable_width = doc.width  # inside margins
     col_width = usable_width / num_columns
+    left_margin = doc.leftMargin  # pylint: disable=no-member
+    bottom_margin = doc.bottomMargin  # pylint: disable=no-member
 
     # make 8 skinny frames
     frames = []
     for i in range(num_columns):
-        x = doc.leftMargin + i * col_width
+        x = left_margin + i * col_width
         frames.append(
             Frame(
                 x,
-                doc.bottomMargin,
+                bottom_margin,
                 col_width,
                 doc.height,
                 id=f"mini-col-{i}",
@@ -2078,33 +2345,42 @@ def create_minilabel_pdf_content(labels, filename):
         "MiniLabelText",
         parent=styles["Normal"],
         fontName=base_font,
-        fontSize=7.5 * font_size_multiplier,
-        leading=8.5 * font_size_multiplier,
+        fontSize=pdf_font_pt * font_size_multiplier,
+        leading=(pdf_font_pt + 1) * font_size_multiplier,
     )
 
     story = []
 
     for label, _ in labels:
         # get the two things we actually need
-        obs_number = next((v for f, v in label if "Observation Number" in f), None)
-        qr_url = next((v for f, v in label if "URL" in f), None)
+        obs_number = next(
+            (
+                v
+                for f, v in label
+                if "Observation Number" in f or f == "Mushroom Observer Number"
+            ),
+            None,
+        )
+        qr_url = _minilabel_qr_url(label)
 
         if not obs_number or not qr_url:
             story.append(Spacer(1, 0.04 * inch))
             continue
 
         # make small QR
-        qr_hex, _ = generate_qr_code(qr_url, minilabel_mode=True)
+        qr_hex, _ = generate_qr_code(
+            qr_url, minilabel_mode=True, qr_box_size=qr_box_size
+        )
         if not qr_hex:
             story.append(Spacer(1, 0.04 * inch))
             continue
 
         qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
-        qr_size = 0.33 * inch  # small but scannable
+        qr_size = pdf_qr_inches * inch  # scaled by minilabel size
         qr_image = ReportLabImage(qr_img_data, width=qr_size, height=qr_size)
 
         # right-hand stacked text
-        p_title = Paragraph("iNaturalist", text_style)
+        p_title = Paragraph(_minilabel_source_abbr(label), text_style)
         p_id = Paragraph(rl_safe(obs_number), text_style)
 
         text_width = col_width - qr_size
@@ -2151,16 +2427,26 @@ def create_minilabel_pdf_content(labels, filename):
     doc.build(story)
 
 
-def create_rtf_content(labels, no_qr=False, fungus_fair_mode=False):
+def create_rtf_content(
+    labels: list[TaggedLabel], no_qr: bool = False, fungus_fair_mode: bool = False
+) -> str:
     """Generate RTF content for the given labels and return it as a string.
 
-    - keeps QR code right-justified
-    - avoids blank space at the top of the right column in LibreOffice
-    - avoids a trailing blank paragraph after the last label
+    - Keeps QR code right-justified.
+    - Avoids blank space at the top of the right column in LibreOffice.
+    - Avoids a trailing blank paragraph after the last label.
+
+    Args:
+        labels: Iterable of ``(label_fields, iconic_taxon_name)`` tuples.
+        no_qr: Omit QR codes when True.
+        fungus_fair_mode: Use the fungus-fair layout.
+
+    Returns:
+        A complete RTF document as a string.
     """
     if fungus_fair_mode:
         try:
-            from PIL import Image as PILImage
+            from PIL import Image as PILImage  # pylint: disable=import-outside-toplevel
         except ImportError:
             print_error(
                 "Error: PIL (Pillow) is required for fungus fair mode image handling."
@@ -2172,17 +2458,16 @@ def create_rtf_content(labels, no_qr=False, fungus_fair_mode=False):
 
     rtf_content = rtf_header
 
-    def split_hex_string(s, n):
+    def split_hex_string(s: str, n: int) -> str:
         return "\n".join([s[i : i + n] for i in range(0, len(s), n)])
 
-    def _format_rtf_text(text):
+    def _format_rtf_text(text: str) -> str:
         text = escape_rtf(text)
         text = text.replace("__BOLD_START__", r"{\b ").replace("__BOLD_END__", r"}")
         text = text.replace("__ITALIC_START__", r"{\i ").replace("__ITALIC_END__", r"}")
         return text
 
     try:
-        total = len(labels)
         for idx, (label, _iconic_taxon_name) in enumerate(labels):
             # Calculate space before to handle spacing between labels without ghost space at top of columns
             sb_twips = 0
@@ -2462,13 +2747,19 @@ def create_rtf_content(labels, no_qr=False, fungus_fair_mode=False):
     return rtf_content
 
 
-def create_minilabel_rtf_content(labels):
+def create_minilabel_rtf_content(
+    labels: list[TaggedLabel], minilabel_size: int = 1
+) -> str:
     """Generate RTF content for minilabels and return it as a string."""
     rtf_header = MINILABEL_RTF_HEADER
     rtf_footer = r"}"
     rtf_content = rtf_header
 
-    num_columns = 8
+    size_cfg = MINILABEL_SIZES.get(minilabel_size, MINILABEL_SIZES[1])
+    num_columns = size_cfg[0]
+    qr_box_size = size_cfg[1]
+    desired_twips = size_cfg[4]
+    rtf_font_half_pts = size_cfg[5]
     page_width_twips = 12240
     margins = 720  # 0.5 inch
     usable_width = page_width_twips - (2 * margins)
@@ -2481,22 +2772,30 @@ def create_minilabel_rtf_content(labels):
         row = []
         for label, _ in row_labels:
             obs_number = next(
-                (value for field, value in label if "Observation Number" in field), None
+                (
+                    value
+                    for field, value in label
+                    if "Observation Number" in field
+                    or field == "Mushroom Observer Number"
+                ),
+                None,
             )
-            qr_url = next((value for field, value in label if "URL" in field), None)
+            qr_url = _minilabel_qr_url(label)
 
             if not obs_number or not qr_url:
                 row.append("")
                 continue
 
-            qr_hex, qr_size = generate_qr_code(qr_url, minilabel_mode=True)
+            qr_hex, qr_size = generate_qr_code(
+                qr_url, minilabel_mode=True, qr_box_size=qr_box_size
+            )
             if not qr_hex:
                 row.append("")
                 continue
 
             qr_pixel_width = qr_size[0]
             qr_pixel_height = qr_size[1]
-            desired_twips = 500  # QR display size (500 twips ≈ 0.35 inch)
+            # desired_twips is set from size_cfg above
 
             # Build cell content
             cell_content = "{"
@@ -2514,8 +2813,16 @@ def create_minilabel_rtf_content(labels):
                 + qr_hex
                 + r"}"
             )
-            # Observation number, slightly spaced but no redundant paragraph breaks
-            cell_content += r"\pard\fs16 " + str(obs_number)
+            # Source abbreviation + observation number on separate lines
+            source_abbr = _minilabel_source_abbr(label)
+            cell_content += (
+                r"\pard\fs"
+                + str(rtf_font_half_pts)
+                + " "
+                + source_abbr
+                + r"\line "
+                + str(obs_number)
+            )
             cell_content += "}"
             row.append(cell_content)
 
@@ -2554,7 +2861,7 @@ def create_minilabel_rtf_content(labels):
     return rtf_content
 
 
-def normalize_edibility(s):
+def normalize_edibility(s: str | None) -> str | None:
     """Normalize edibility string to a canonical set of values."""
     if not s:
         return None
@@ -2570,7 +2877,7 @@ def normalize_edibility(s):
     }.get(t)
 
 
-def get_pretty_edibility(edibility_value):
+def get_pretty_edibility(edibility_value: str | None) -> str | None:
     """Map normalized edibility values to human-friendly display strings."""
     if not edibility_value:
         return edibility_value
@@ -2584,7 +2891,7 @@ def get_pretty_edibility(edibility_value):
 
 
 # Check to see if the observation is in California
-def is_within_california(latitude, longitude):
+def is_within_california(latitude: float, longitude: float) -> bool:
     """Return True if the point lies within an approximate California bounding box."""
     # Approximate bounding box for California
     CA_NORTH = 42.0
@@ -2595,7 +2902,194 @@ def is_within_california(latitude, longitude):
     return (CA_SOUTH <= latitude <= CA_NORTH) and (CA_WEST <= longitude <= CA_EAST)
 
 
-def main():
+def label_get(label_fields: LabelFields | None, field_name: str) -> str | None:
+    """Case-insensitive lookup for a field in a label list of (field, value)."""
+    if not label_fields:
+        return None
+    field_name_lower = field_name.lower()
+    for item in label_fields:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        f, v = item
+        if isinstance(f, str) and f.lower() == field_name_lower:
+            return v
+    return None
+
+
+def get_voucher_value(label_fields: LabelFields) -> str | None:
+    """Return the value of the first found voucher field."""
+    val = label_get(label_fields, "Voucher Number")
+    if val:
+        return val
+    # Fallback to alternative name
+    return label_get(label_fields, "Voucher Number(s)")
+
+
+def parse_key_default(value: object) -> int:
+    """Parse sort key for default behavior (strict numeric extraction for backward compatibility).
+
+    Returns:
+        Trailing integer extracted from *value*, or 0 if none is found.
+    """
+    if value is None:
+        return 0
+    val_str = str(value).strip()
+
+    # Strict trailing integer extraction: matches strict original behavior
+    # "Plot 12" -> 12
+    # "Plot 12a" -> 0 (because 'a' is trailing)
+    m = re.search(r"(\d+)\s*$", val_str)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    return 0
+
+
+def normalize(value: object) -> tuple[int, str]:
+    """Return (is_missing, s_lower) for value, with whitespace collapsed."""
+    if value is None:
+        return (1, "")
+    s = str(value).strip()
+    if not s:
+        return (1, "")
+    # Collapse internal whitespace for consistent prefix matching
+    # "Plot  2" and "Plot 2" -> "plot 2"
+    s_clean = " ".join(s.split()).lower()
+    return (0, s_clean)
+
+
+def split_trailing_number(s: str) -> tuple[str, int] | tuple[None, None]:
+    """Return (prefix, num) if trailing number exists, else (None, None)."""
+    match = re.search(r"^(.*?)(\d+)$", s)
+    if match:
+        try:
+            return (match.group(1), int(match.group(2)))
+        except ValueError:
+            pass
+    return (None, None)
+
+
+def cmp_alpha_then_trailing_num(val_a: str | None, val_b: str | None) -> int:
+    """Comparator for voucher/custom sorts.
+
+    Rules:
+        1. Missing values sort last.
+        2. Primary sort: Alphabetical.
+        3. Tie-break: Trailing number value, ONLY if prefixes match.
+    """
+    (miss_a, s_a) = normalize(val_a)
+    (miss_b, s_b) = normalize(val_b)
+
+    if miss_a != miss_b:
+        return miss_a - miss_b
+
+    # Both present.
+    # Check for trailing number match.
+    (pref_a, num_a) = split_trailing_number(s_a)
+    (pref_b, num_b) = split_trailing_number(s_b)
+
+    if pref_a is not None and pref_b is not None and pref_a == pref_b:
+        # Both have trailing numbers and prefixes match. Compare numbers.
+        if num_a != num_b:
+            return (num_a > num_b) - (num_a < num_b)
+
+    # Fallback to alpha sort
+    if s_a != s_b:
+        return (s_a > s_b) - (s_a < s_b)
+
+    return 0
+
+
+def sort_labels(
+    items: list[IndexedLabel],
+    sort_mode: str | None,
+    title_field: str | None = None,
+    sort_field_name: str | None = None,
+) -> list[TaggedLabel]:
+    """Sort a list of tagged items.
+
+    Args:
+        items: List of tuples ``(original_index, (label_fields, taxon_name))``.
+        sort_mode: One of ``'none'``, ``'date'``, ``'voucher'``, ``'custom'``
+            (or ``None`` for default numeric sort by observation number).
+        title_field: Optional title field name override for the default sort.
+        sort_field_name: Custom field name used when *sort_mode* is ``'custom'``.
+
+    Returns:
+        List of ``(label_fields, taxon_name)`` tuples in the requested order.
+    """
+    # If sort_mode is 'none', strictly preserve input order using the index
+    if sort_mode == "none":
+        # Sort by index
+        sorted_items = sorted(items, key=lambda x: x[0])
+        return [x[1] for x in sorted_items]
+
+    def get_raw_value(item: IndexedLabel) -> str | None:
+        _, (label, _) = item
+        if sort_mode == "voucher":
+            return get_voucher_value(label)
+        if sort_mode == "custom":
+            if sort_field_name:
+                return label_get(label, sort_field_name)
+        return None
+
+    if sort_mode in ("voucher", "custom"):
+
+        def cmp_items(item_a: IndexedLabel, item_b: IndexedLabel) -> int:
+            val_a = get_raw_value(item_a)
+            val_b = get_raw_value(item_b)
+
+            res = cmp_alpha_then_trailing_num(val_a, val_b)
+            if res != 0:
+                return res
+
+            # Stable sort using index
+            return item_a[0] - item_b[0]
+
+        sorted_items = sorted(items, key=cmp_to_key(cmp_items))
+        return [x[1] for x in sorted_items]
+
+    # Legacy key-based sorting for default and date (unchanged logic)
+    def get_sort_key_legacy(item: IndexedLabel) -> tuple:
+        index, (label, _) = item
+
+        if sort_mode == "date":
+            # Special case for date: parse to comparable or None
+            date_str = label_get(label, "Date Observed")
+            if date_str:
+                try:
+                    # Parse to datetime, then normalize to date object to avoid naive/aware mismatch
+                    d = dateutil_parser.parse(date_str).date()
+                except (ValueError, TypeError):
+                    print_error(
+                        f"Warning: Could not parse date '{date_str}', sorting last"
+                    )
+                else:
+                    return (0, d, index)
+            # Missing or unparseable: sort last using datetime.date.max
+            return (1, datetime.date.max, index)
+
+        # Default behavior (Observation Number or Title)
+        target_field = (
+            title_field if title_field else "iNaturalist Observation Number"
+        )
+
+        raw_val = label_get(label, target_field)
+        if not raw_val and not title_field:
+            # Fallback for default sort if iNat num missing
+            raw_val = label_get(label, "Mushroom Observer Number")
+
+        # Default key uses strictly numeric logic (backward compatibility)
+        numeric_sort_val = parse_key_default(raw_val)
+        return (numeric_sort_val, index)
+
+    sorted_items = sorted(items, key=get_sort_key_legacy)
+    return [x[1] for x in sorted_items]
+
+
+def main() -> None:
     """
     Command-line entry point that builds herbarium labels from iNaturalist or Mushroom Observer observation identifiers and writes them to stdout, an RTF file, or a PDF file.
 
@@ -2669,6 +3163,14 @@ def main():
         help="Generate minilabels with only observation number and QR code",
     )
     parser.add_argument(
+        "--minilabel-size",
+        type=int,
+        choices=range(1, 11),
+        default=None,
+        metavar="N",
+        help="Minilabel size from 1 (smallest) to 10 (largest). Default: 1",
+    )
+    parser.add_argument(
         "--omit-notes", action="store_true", help="Omit the Notes field from all labels"
     )
     parser.add_argument(
@@ -2704,10 +3206,26 @@ def main():
     parser.add_argument("--commonname", type=str, help="Common name (fungus fair mode)")
     parser.add_argument("--habitat", type=str, help="Habitat (fungus fair mode)")
     parser.add_argument(
+        "--sort",
+        choices=["none", "date", "voucher", "custom"],
+        help="Sort order for labels (default: observation number)",
+    )
+    parser.add_argument(
+        "--sort-field",
+        metavar="FIELD",
+        help="Field name to sort by (required if --sort=custom)",
+    )
+    parser.add_argument(
         "--sporeprint", type=str, help="Spore print color (fungus fair mode)"
     )
 
     args = parser.parse_args()
+
+    # Validation for --sort and --sort-field
+    if args.sort == "custom" and not args.sort_field:
+        parser.error("--sort=custom requires --sort-field to be specified.")
+    if args.sort != "custom" and args.sort_field:
+        parser.error("--sort-field can only be used with --sort=custom.")
 
     fields_to_add = []
     fields_to_remove = []
@@ -2737,13 +3255,26 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    #If using number per page, this must be greater than 1 to make sense
-    if args.num_per_page <= 1:
-        parser.error("argument --num-per-page: must be an integer greater than 1")
+    # --num-per-page is only meaningful with --stack-order; validate only then
+    if args.stack_order and (args.num_per_page <= 1 or args.num_per_page % 2 != 0):
+        parser.error(
+            "argument --num-per-page: must be a positive even integer greater than 1"
+        )
+
+    if args.num_per_page != 6 and not args.stack_order:
+        print_error("Warning: --num-per-page has no effect without --stack-order.")
 
     # User can not use 'Notes" as title field
     if args.title == "Notes":
         parser.error("argument --title: 'Notes' field can not be used as title")
+
+    # Auto-enable minilabel mode if --minilabel-size is given
+    if args.minilabel_size is not None:
+        args.minilabel = True
+
+    # Default minilabel size to 1 if minilabels enabled but no size specified
+    if args.minilabel and args.minilabel_size is None:
+        args.minilabel_size = 1
 
     # If it is minilabel mode, stack order can not be used, yet. -- let me know if this is needed.
     if args.minilabel and args.stack_order:
@@ -2804,16 +3335,21 @@ def main():
     # Read observation IDs from file if --file is provided
     if args.file:
         try:
-            with open(args.file, "r") as file:
+            with open(args.file, "r", encoding="utf-8") as file:
                 file_contents = file.read()
                 # Split file contents by whitespace, commas, or newlines
                 file_observation_ids = re.split(r"[,\s]+", file_contents.strip())
                 observation_ids.extend(file_observation_ids)
-        except Exception as e:
+        except (OSError, ValueError) as e:
             print(f"Error reading file {args.file}: {e}")
             sys.exit(1)
 
     # Process input for Fungus Fair mode (CSV files)
+    def _norm_csv_key(s: str | None) -> str:
+        if not s:
+            return ""
+        return s.strip().lower().replace(" ", "").replace("_", "")
+
     if args.fungusfair:
         for csv_file in csv_files:
             if not os.path.exists(csv_file):
@@ -2824,19 +3360,18 @@ def main():
                 with open(csv_file, "r", encoding="utf-8-sig") as f:
                     reader = csv.DictReader(f)
 
-                    def norm_key(s):
-                        if not s:
-                            return ""
-                        return s.strip().lower().replace(" ", "").replace("_", "")
-
                     header_map = {}
                     if reader.fieldnames:
                         for field in reader.fieldnames:
-                            header_map[norm_key(field)] = field
+                            header_map[_norm_csv_key(field)] = field
 
-                    def get_val(row, keys):
+                    def get_val(
+                        row: dict[str, str],
+                        keys: list[str],
+                        hmap: dict[str, str],
+                    ) -> str | None:
                         for key in keys:
-                            real_key = header_map.get(norm_key(key))
+                            real_key = hmap.get(_norm_csv_key(key))
                             if real_key and row.get(real_key):
                                 return row[real_key].strip()
                         return None
@@ -2848,12 +3383,12 @@ def main():
 
                         manual_label = []
                         sci_name = get_val(
-                            row, ["scientificname", "scientific_name", "name"]
+                            row, ["scientificname", "scientific_name", "name"], header_map
                         )
-                        common_name = get_val(row, ["commonname", "common_name"])
-                        habitat = get_val(row, ["habitat"])
-                        spore_print = get_val(row, ["sporeprint", "spore_print"])
-                        edibility = get_val(row, ["edibility"])
+                        common_name = get_val(row, ["commonname", "common_name"], header_map)
+                        habitat = get_val(row, ["habitat"], header_map)
+                        spore_print = get_val(row, ["sporeprint", "spore_print"], header_map)
+                        edibility = get_val(row, ["edibility"], header_map)
 
                         if sci_name:
                             manual_label.append(
@@ -2887,7 +3422,7 @@ def main():
                                 )
                             manual_label.append(("Edibility", "unknown"))
 
-                        labels.append((manual_label, "Fungus"))
+                        labels.append((len(labels), (manual_label, "Fungus")))
             except Exception as e:
                 print_error(f"Error reading CSV file {csv_file}: {e}")
 
@@ -2914,7 +3449,7 @@ def main():
         manual_label.append(("Edibility", args.edibility or "unknown"))
 
         # Add to labels list
-        labels.append((manual_label, "Fungus"))
+        labels.append((len(labels), (manual_label, "Fungus")))
 
     elif not observation_ids and not labels:
         # Standard behavior: show help if no IDs, no manual label, and no CSV labels
@@ -2968,16 +3503,15 @@ def main():
 
     start_time = time.time()
 
-    def process_one(input_value):
+    def process_one(index: int, input_value: str) -> ProcessResult:
         """Process one input: normalize ID, fetch data, optionally find-CA, and build label."""
         try:
             observation_id = extract_observation_id(input_value, debug=args.debug)
             if observation_id is None:
-                return ("err", f"Invalid input '{input_value}'")
-            result = get_observation_data(observation_id)
-            if result is None:
-                return ("err", f"Failed to fetch observation {observation_id}")
-            observation_data, iconic_taxon_name = result
+                return ("err", (index, f"Invalid input '{input_value}'"))
+            observation_data, iconic_taxon_name = get_observation_data(observation_id)
+            if observation_data is None:
+                return ("err", (index, f"Failed to fetch observation {observation_id}"))
             if args.find_ca:
                 geo = observation_data.get("geojson")
                 if geo and geo.get("coordinates"):
@@ -2988,58 +3522,59 @@ def main():
                             f"https://www.inaturalist.org/observations/{observation_id}"
                         )
                 return ("skip", None)
+
+            if args.fungusfair:
+                _result = create_fungus_fair_label(
+                    observation_data,
+                    iconic_taxon_name,
+                    show_common_names=args.common_names,
+                    debug=args.debug,
+                )
             else:
-                if args.fungusfair:
-                    label, updated_iconic_taxon = create_fungus_fair_label(
-                        observation_data,
-                        iconic_taxon_name,
-                        show_common_names=args.common_names,
-                        debug=args.debug,
+                _result = create_inaturalist_label(
+                    observation_data,
+                    iconic_taxon_name,
+                    show_common_names=args.common_names,
+                    omit_notes=args.omit_notes,
+                    debug=args.debug,
+                    custom_add=fields_to_add,
+                    custom_remove=fields_to_remove,
+                )
+
+            if _result is not None:
+                label, updated_iconic_taxon = _result
+                # Print as soon as the label is created
+                scientific_name = next(
+                    (v for f, v in label if f == "Scientific Name"), ""
+                )
+                scientific_name_plain = scientific_name.replace(
+                    "__ITALIC_START__", ""
+                ).replace("__ITALIC_END__", "")
+                if updated_iconic_taxon == "Fungi":
+                    print(
+                        Fore.BLUE
+                        + f"Added label for {updated_iconic_taxon}"
+                        + Style.RESET_ALL
+                        + f" {scientific_name_plain}",
+                        flush=True,
+                    )
+                elif updated_iconic_taxon == "Plantae":
+                    print(
+                        Fore.GREEN
+                        + f"Added label for {updated_iconic_taxon}"
+                        + Style.RESET_ALL
+                        + f" {scientific_name_plain}",
+                        flush=True,
                     )
                 else:
-                    label, updated_iconic_taxon = create_inaturalist_label(
-                        observation_data,
-                        iconic_taxon_name,
-                        show_common_names=args.common_names,
-                        omit_notes=args.omit_notes,
-                        debug=args.debug,
-                        custom_add=fields_to_add,
-                        custom_remove=fields_to_remove,
+                    print(
+                        f"Added label for {updated_iconic_taxon} {scientific_name_plain}",
+                        flush=True,
                     )
-
-                if label is not None:
-                    # Print as soon as the label is created
-                    scientific_name = next(
-                        (v for f, v in label if f == "Scientific Name"), ""
-                    )
-                    scientific_name_plain = scientific_name.replace(
-                        "__ITALIC_START__", ""
-                    ).replace("__ITALIC_END__", "")
-                    if updated_iconic_taxon == "Fungi":
-                        print(
-                            Fore.BLUE
-                            + f"Added label for {updated_iconic_taxon}"
-                            + Style.RESET_ALL
-                            + f" {scientific_name_plain}",
-                            flush=True,
-                        )
-                    elif updated_iconic_taxon == "Plantae":
-                        print(
-                            Fore.GREEN
-                            + f"Added label for {updated_iconic_taxon}"
-                            + Style.RESET_ALL
-                            + f" {scientific_name_plain}",
-                            flush=True,
-                        )
-                    else:
-                        print(
-                            f"Added label for {updated_iconic_taxon} {scientific_name_plain}",
-                            flush=True,
-                        )
-                    return ("ok", (label, updated_iconic_taxon))
-                return ("err", f"Could not create label for {observation_id}")
+                return ("ok", (index, label, updated_iconic_taxon))
+            return ("err", (index, f"Could not create label for {observation_id}"))
         except Exception as e:
-            return ("err", f"Unexpected error for {input_value}: {e!s}")
+            return ("err", (index, f"Unexpected error for {input_value}: {e!s}"))
 
     # Respect API guidelines by limiting concurrency to a small number (<=5)
     max_workers = (
@@ -3052,51 +3587,51 @@ def main():
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
-            executor.submit(process_one, input_value) for input_value in observation_ids
+            executor.submit(process_one, i, input_value)
+            for i, input_value in enumerate(observation_ids)
         ]
         for fut in futures:
             status, payload = fut.result()
             if status == "ok" and payload:
-                labels.append(payload)
+                # payload is (index, label, taxon)
+                index, label, taxon = payload
+                labels.append((index, (label, taxon)))
             elif status == "err" and payload:
-                failed.append(payload)
+                # Payload is (index, msg)
+                index, msg = payload
+                failed.append(f"[{index}] {msg}")
 
-    # Sort labels by iNaturalist Observation Number by default, or by specified title field
-    sort_param = ("iNaturalist Observation Number", "Mushroom Observer Number")
-    if args.title:
-        sort_param = (args.title,)
-    sorted_labels = sorted(
-        labels,
-        key=lambda x: next(
-            (
-                int(
-                    y[1][len(y[1].rstrip("0123456789")) :]
-                    if y[1][len(y[1].rstrip("0123456789")) :].isdigit()
-                    else 0
-                )
-                for y in x[0]
-                if y[0] in sort_param
-            ),
-            0,
-        ),
-    )
+    # Sort labels using the centralized helper
+    # labels contains tuples of (index, (label, taxon))
+    sorted_labels = sort_labels(labels, args.sort, args.title, args.sort_field)
     labels = sorted_labels
+
+    original_count = len(labels)
 
     if args.stack_order:
         stacked_labels = []
-        m = len(labels)  # number of labels
-        np = args.num_per_page  # number of labels per page
-        nr = np // 2  # number of rows per page (assuming 2 columns)
-        n = m // np if m % np == 0 else (m // np) + 1  # number of pages
-        # For this we will assume 2 columns of 3 labels each per page
+        m = original_count  # number of labels
+        labels_per_page = args.num_per_page
+        rows_per_page = labels_per_page // 2  # assuming 2 columns
+        n = (
+            m + labels_per_page - 1
+        ) // labels_per_page  # number of pages (ceiling division)
+        # For this we will assume 2 columns of rows_per_page labels each per page
         # Reorders so that cutting columns, stacking left-on-right, then cutting
         # from bottom yields labels in original order.
-        for i in range(n * np):
+        for i in range(n * labels_per_page):
             # Map output position i to source index j:
-            # - (i % np) % nr: row within page (0-nr-1)
-            # - (i % np) // nr: column within page (0-1)
-            # - i // np: which page
-            j = n * (2 * ((i % np) % nr) + (i % np) // nr) + i // np
+            # - (i % labels_per_page) % rows_per_page: row within page
+            # - (i % labels_per_page) // rows_per_page: column within page (0-1)
+            # - i // labels_per_page: which page
+            j = (
+                n
+                * (
+                    2 * ((i % labels_per_page) % rows_per_page)
+                    + (i % labels_per_page) // rows_per_page
+                )
+                + i // labels_per_page
+            )
             if j >= m:
                 j = m - 1  # re-use last label as spacer to fill pages
             stacked_labels.append(labels[j])
@@ -3111,23 +3646,27 @@ def main():
                     )
                     sys.exit(1)
                 if rtf_mode:
-                    rtf_content = create_minilabel_rtf_content(labels)
-                    with open(args.rtf, "w") as rtf_file:
+                    rtf_content = create_minilabel_rtf_content(
+                        labels, minilabel_size=args.minilabel_size
+                    )
+                    with open(args.rtf, "w", encoding="utf-8") as rtf_file:
                         rtf_file.write(rtf_content)
                     print(f"RTF file created: {os.path.basename(args.rtf)}", flush=True)
                 elif pdf_mode:
-                    create_minilabel_pdf_content(labels, args.pdf)
+                    create_minilabel_pdf_content(
+                        labels, args.pdf, minilabel_size=args.minilabel_size
+                    )
                     print(f"PDF file created: {os.path.basename(args.pdf)}", flush=True)
             elif rtf_mode:
                 rtf_content = create_rtf_content(
                     labels, no_qr=args.no_qr, fungus_fair_mode=args.fungusfair
                 )
-                with open(args.rtf, "w") as rtf_file:
+                with open(args.rtf, "w", encoding="utf-8") as rtf_file:
                     rtf_file.write(rtf_content)
                 try:
                     size_bytes = os.path.getsize(args.rtf)
                     size_kb = (size_bytes + 1023) // 1024
-                except Exception:
+                except OSError:
                     size_kb = None
                 basename = os.path.basename(args.rtf)
                 if size_kb is not None:
@@ -3145,7 +3684,7 @@ def main():
                 try:
                     size_bytes = os.path.getsize(args.pdf)
                     size_kb = (size_bytes + 1023) // 1024
-                except Exception:
+                except OSError:
                     size_kb = None
                 basename = os.path.basename(args.pdf)
                 if size_kb is not None:
@@ -3191,10 +3730,10 @@ def main():
             else str(len(failed))
         )
         generated_word = "generated"
-        if total_requested != len(labels):
+        if total_requested != original_count:
             generated_word = Fore.RED + "generated" + Style.RESET_ALL
         print(
-            f"Summary: requested {total_requested}, {generated_word} {len(labels)}, failed {failed_count_text}, time {elapsed:.2f}s",
+            f"Summary: requested {total_requested}, {generated_word} {original_count}, failed {failed_count_text}, time {elapsed:.2f}s",
             flush=True,
         )
         if failed:

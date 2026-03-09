@@ -1,5 +1,37 @@
 # Changelog
 
+# 3.9.7 
+March 9, 2026
+
+- Fixed a crash when using `--find-ca` on observations that failed to load.
+- Improved error handling for missing observation data so failures return a clear message instead of crashing.
+- Fixed `iconic_taxon_name` defaulting so missing values now fall back to `"Life"`.
+- Removed dead code that checked for an impossible `None` return from `get_observation_data()`.
+- Removed the unused `retries` parameter from `get_taxon_details()`.
+- Updated the related function documentation to match the current code.
+
+# 3.9.6
+February 24, 2026
+
+- Mushroom Observer collection numbers are now imported
+- Minilabels now show the correct source (before they always said iNaturalist)
+- Minilabel QR codes now prefer the correct URL
+
+# 3.9.5
+February 23, 2026
+
+- Add the --num-per-page command line argument.   Thanks to Douglas Smith for the suggestion!
+
+# 3.9.4
+February 23, 2026
+
+- Update for better coding practices, type hints, etc.   Should not be any functional changes.
+
+# 3.9.3
+February 22, 2026
+
+- Add the ability to select the size of minilabels
+- Add label sorting capabilities (--sort none|date|voucher|custom, --sort-field FIELD)
 
 # 3.9.2
 January 29, 2026

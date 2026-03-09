@@ -350,7 +350,7 @@ def lookup_batch_internal(obs_inputs):
                         "original_input": obs_inputs[idx],
                         "inat_id": inat_id,
                         "scientific_name": scientific_name,
-                        "user_id": user_login,
+                        "user_login": user_login,
                         "color": color,
                         "ofvs": r.get("ofvs", []),
                     }
@@ -383,13 +383,13 @@ def lookup_batch_internal(obs_inputs):
                     ] = f"No data found for Mushroom Observer #{mo_num}"
                     results[idx]["status"] = 404
                 continue
-            scientific_name = "Unknown"
-            user_id = "Unknown"
 
             consensus = result.get("consensus") or {}
             owner = result.get("owner") or {}
             scientific_name = consensus.get("name") or result.get("name", "Unknown")
-            user_id = owner.get("login_name") or result.get("login_name", "Unknown")
+            user_login = (
+                owner.get("login_name") or result.get("login_name") or "Unknown"
+            )
 
             ofvs = []
             mo_url = f"https://mushroomobserver.org/obs/{mo_num}"
@@ -432,7 +432,7 @@ def lookup_batch_internal(obs_inputs):
                         "original_input": obs_inputs[idx],
                         "inat_id": f"MO{mo_num}",
                         "scientific_name": scientific_name,
-                        "user_id": user_id,
+                        "user_login": user_login,
                         "color": "magenta",
                         "ofvs": ofvs,
                     }
@@ -462,7 +462,7 @@ def lookup_batch_internal(obs_inputs):
                     "original_input": base.get("original_input", obs_inputs[idx]),
                     "inat_id": base.get("inat_id", ""),
                     "scientific_name": base.get("scientific_name", "Unknown"),
-                    "user_id": base.get("user_id", "Unknown"),
+                    "user_login": base.get("user_login", "Unknown"),
                     "color": base.get("color", "black"),
                     "ofvs": base.get("ofvs", []),
                 }
@@ -735,6 +735,11 @@ def print_start():
         command.append("--no-qr")
     if request.form.get("minilabel"):
         command.append("--minilabel")
+        minilabel_size = request.form.get("minilabel_size", "").strip()
+        if minilabel_size and minilabel_size.isdecimal():
+            size_val = int(minilabel_size)
+            if 1 <= size_val <= 10:
+                command.extend(["--minilabel-size", str(size_val)])
     if request.form.get("common_names"):
         command.append("--common-names")
     if request.form.get("omit_notes"):
@@ -966,10 +971,13 @@ def find_observations():
                 elif iconic in ("Aves", "Reptilia", "Mammalia"):
                     color = "blue"
 
+                user_login = (r.get("user") or {}).get("login") or username
                 current_batch.append(
                     {
                         "id": oid,
+                        "inat_id": str(oid),
                         "scientific_name": taxon.get("name", ""),
+                        "user_login": user_login,
                         "iconic_taxon_name": iconic,
                         "observed_on": r.get("observed_on"),
                         "color": color,
