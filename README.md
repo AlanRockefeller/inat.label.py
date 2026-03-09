@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.9.5
+# iNaturalist Herbarium Label Generator version 3.9.7
 # By Alan Rockefeller
-# February 23, 2026
+# March 9, 2026
 
 
 ## Description
@@ -149,7 +149,7 @@ The script generates herbarium labels to the standard output by default, or labe
 
 ## Dependencies
 
-- Python 3.6+
+- Python 3.10+
 - requests
 - requests-toolbelt
 - python-dateutil
