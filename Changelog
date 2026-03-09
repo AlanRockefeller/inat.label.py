@@ -3,6 +3,16 @@
 # 3.9.7 
 March 9, 2026
 
+Douglas Smith's changes: 
+
+- Added a new `--num-per-page` option for `--stack-order`, so you can choose how many labels go on each page instead of always using 6.
+- Updated stack-order label reordering logic to work with the selected page size.
+- Fixed a bug where `GenBank Accession Number` was added to labels even when its value was the literal text `none`.
+- Stack ordering still assumes 2 columns, but now calculates the number of rows from `--num-per-page`.
+- Empty spaces at the end of stack-ordered output are still filled by repeating the last label so full pages can be printed and cut correctly.
+
+Alan's changes:
+
 - Fixed a crash when using `--find-ca` on observations that failed to load.
 - Improved error handling for missing observation data so failures return a clear message instead of crashing.
 - Fixed `iconic_taxon_name` defaulting so missing values now fall back to `"Life"`.
