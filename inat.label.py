@@ -803,7 +803,7 @@ _taxon_batcher_stop = threading.Event()
 _TAXON_BATCH_MAX = int(os.environ.get("INAT_TAXON_BATCH_MAX", "50"))
 _TAXON_BATCH_WINDOW = float(os.environ.get("INAT_TAXON_BATCH_WINDOW", "0.1"))
 # How often (seconds) to check batcher liveness while waiting for a taxon event.
-# There is no upper time limit on the wait itself — In normal operation, the batcher’s
+# There is no upper time limit on the wait itself — In normal operation, the batcher's
 # finally-block signals every dequeued ID, so indefinite waiting is safe.
 _BATCHER_LIVENESS_POLL = 5.0
 
@@ -1093,8 +1093,10 @@ def get_mushroom_observer_data(
         if mo_observation.get("collection_numbers"):
             parts = []
             for cn in mo_observation["collection_numbers"]:
-                collector = cn.get("collector", "").strip()
-                number = cn.get("number", "").strip()
+                if not isinstance(cn, dict):
+                    continue
+                collector = str(cn.get("collector", "") or "").strip()
+                number = str(cn.get("number", "") or "").strip()
                 if collector and number:
                     parts.append(f"{collector} {number}")
                 elif number:
