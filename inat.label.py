@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: February 23, 2026
-Version: 3.9.6
+Date: March 9, 2026
+Version: 3.9.7
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -908,7 +908,7 @@ def _wait_for_taxon_event(event: threading.Event, taxon_id_int: int) -> None:
             _start_taxon_batcher()
 
 
-def get_taxon_details(taxon_id: int | str, retries: int = 6) -> Optional[ObsData]:
+def get_taxon_details(taxon_id: int | str) -> Optional[ObsData]:
     """Fetch taxon details (including ancestors) with caching and batching.
 
     Enqueues taxon_id for the background batcher thread, which fetches each
@@ -918,8 +918,6 @@ def get_taxon_details(taxon_id: int | str, retries: int = 6) -> Optional[ObsData
 
     Args:
         taxon_id: iNaturalist taxon ID (int or coercible string).
-        retries: Accepted for API compatibility; the batcher uses the default
-            retry count from fetch_api_data regardless of this value.
 
     Returns:
         Taxon dict with 'ancestors' populated, or None on failure/not found.
@@ -1138,7 +1136,9 @@ def get_observation_data(
     if data and data.get("results"):
         observation = data["results"][0]
         taxon = observation.get("taxon", {})
-        iconic_taxon_name = taxon.get("iconic_taxon_name") if taxon else "Life"
+        iconic_taxon_name = (
+            (taxon.get("iconic_taxon_name") or "Life") if taxon else "Life"
+        )
 
         if taxon and "id" in taxon:
             taxon_id = taxon["id"]
@@ -3500,10 +3500,9 @@ def main() -> None:
             observation_id = extract_observation_id(input_value, debug=args.debug)
             if observation_id is None:
                 return ("err", (index, f"Invalid input '{input_value}'"))
-            result = get_observation_data(observation_id)
-            if result is None:
+            observation_data, iconic_taxon_name = get_observation_data(observation_id)
+            if observation_data is None:
                 return ("err", (index, f"Failed to fetch observation {observation_id}"))
-            observation_data, iconic_taxon_name = result
             if args.find_ca:
                 geo = observation_data.get("geojson")
                 if geo and geo.get("coordinates"):
