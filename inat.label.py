@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: March 9, 2026
-Version: 3.9.7
+Date: March 25, 2026
+Version: 3.9.8
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -589,9 +589,15 @@ def extract_observation_id(  # pylint: disable=unused-argument
 ) -> str | None:
     """Normalize a user-supplied input into an observation identifier.
 
-    Accepts iNaturalist numeric IDs or URLs, and Mushroom Observer IDs like "MO12345" or MO URLs.
-    Returns a string ID (possibly with "MO" prefix) or None if unrecognized.
+    Accepts iNaturalist numeric IDs or URLs, Mushroom Observer IDs like "MO12345" or MO URLs,
+    and BugGuide IDs like "BG12345" or "BugGuide 12345".
+    Returns a string ID (possibly with "MO" or "BG" prefix) or None if unrecognized.
     """
+    # Check if the input is a BugGuide ID (formats: BG12345, BG 12345, BugGuide12345, BugGuide 12345)
+    bg_match = re.match(r"^(?:bugguide|bg)\s*(\d+)$", input_string, re.IGNORECASE)
+    if bg_match:
+        return f"BG{bg_match.group(1)}"
+
     # Check if the input is a Mushroom Observer ID (format MO followed by any number of digits)
     mo_match = re.match(r"^MO(\d+)$", input_string)
     if mo_match:
@@ -2248,25 +2254,29 @@ def create_pdf_content(
 
 
 def _minilabel_source_abbr(label: LabelFields) -> str:
-    """Return 'MO' for Mushroom Observer labels, 'iNat' for iNaturalist labels."""
+    """Return 'MO', 'BugGuide', or 'iNat' based on label source."""
     for field, _ in label:
         if field == "Mushroom Observer Number":
             return "MO"
+        if field == "BugGuide Number":
+            return "BugGuide"
     return "iNat"
 
 
 def _minilabel_qr_url(label: LabelFields) -> Optional[str]:
     """Return the source-appropriate URL for a minilabel QR code.
 
-    Prefers the canonical URL for the detected source ('Mushroom Observer URL'
-    for MO labels, 'iNaturalist URL' for iNat labels).  Falls back to the first
-    field whose name contains 'URL' if the preferred field is absent.
+    Prefers the canonical URL for the detected source ('BugGuide URL' for BG,
+    'Mushroom Observer URL' for MO, 'iNaturalist URL' for iNat).
+    Falls back to the first field whose name contains 'URL' if absent.
     """
-    preferred = (
-        "Mushroom Observer URL"
-        if _minilabel_source_abbr(label) == "MO"
-        else "iNaturalist URL"
-    )
+    source = _minilabel_source_abbr(label)
+    if source == "BugGuide":
+        preferred = "BugGuide URL"
+    elif source == "MO":
+        preferred = "Mushroom Observer URL"
+    else:
+        preferred = "iNaturalist URL"
     url = next((v for f, v in label if f == preferred), None)
     if url is None:
         url = next((v for f, v in label if "URL" in f), None)
@@ -2357,7 +2367,9 @@ def create_minilabel_pdf_content(
             (
                 v
                 for f, v in label
-                if "Observation Number" in f or f == "Mushroom Observer Number"
+                if "Observation Number" in f
+                or f == "Mushroom Observer Number"
+                or f == "BugGuide Number"
             ),
             None,
         )
@@ -2380,7 +2392,8 @@ def create_minilabel_pdf_content(
         qr_image = ReportLabImage(qr_img_data, width=qr_size, height=qr_size)
 
         # right-hand stacked text
-        p_title = Paragraph(_minilabel_source_abbr(label), text_style)
+        source_abbr = _minilabel_source_abbr(label)
+        p_title = Paragraph(source_abbr, text_style)
         p_id = Paragraph(rl_safe(obs_number), text_style)
 
         text_width = col_width - qr_size
@@ -2777,6 +2790,7 @@ def create_minilabel_rtf_content(
                     for field, value in label
                     if "Observation Number" in field
                     or field == "Mushroom Observer Number"
+                    or field == "BugGuide Number"
                 ),
                 None,
             )
@@ -3459,6 +3473,25 @@ def main() -> None:
     # Remove empty entries
     observation_ids = [obs for obs in observation_ids if obs]
 
+    # Merge adjacent tokens that form a spaced BugGuide ID.
+    # Shell tokenization splits "BG 2520730" into ["BG", "2520730"];
+    # rejoin them so extract_observation_id() sees the full form.
+    _bg_prefix_re = re.compile(r"^(?:bugguide|bg)$", re.IGNORECASE)
+    merged: list[str] = []
+    i = 0
+    while i < len(observation_ids):
+        if (
+            _bg_prefix_re.match(observation_ids[i])
+            and i + 1 < len(observation_ids)
+            and observation_ids[i + 1].isdigit()
+        ):
+            merged.append(f"{observation_ids[i]} {observation_ids[i + 1]}")
+            i += 2
+        else:
+            merged.append(observation_ids[i])
+            i += 1
+    observation_ids = merged
+
     # labels list is already initialized above
 
     total_requested = len(observation_ids) + len(
@@ -3509,6 +3542,23 @@ def main() -> None:
             observation_id = extract_observation_id(input_value, debug=args.debug)
             if observation_id is None:
                 return ("err", (index, f"Invalid input '{input_value}'"))
+
+            # BugGuide IDs are only supported for minilabels
+            if isinstance(observation_id, str) and observation_id.startswith("BG"):
+                if not args.minilabel:
+                    print_error(
+                        f"Skipping {input_value}: BugGuide is only supported for minilabels (use --minilabel)"
+                    )
+                    return ("skip", None)
+                bg_number = observation_id[2:]  # strip "BG" prefix
+                bg_url = f"https://bugguide.net/node/view/{bg_number}"
+                synthetic_label: LabelFields = [
+                    ("BugGuide Number", bg_number),
+                    ("BugGuide URL", bg_url),
+                ]
+                print(f"Added BugGuide minilabel for {bg_number}", flush=True)
+                return ("ok", (index, synthetic_label, "BugGuide"))
+
             observation_data, iconic_taxon_name = get_observation_data(observation_id)
             if observation_data is None:
                 return ("err", (index, f"Failed to fetch observation {observation_id}"))

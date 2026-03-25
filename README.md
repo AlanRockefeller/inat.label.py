@@ -1,8 +1,8 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.9.7
+# iNaturalist Herbarium Label Generator version 3.9.8
 # By Alan Rockefeller
-# March 9, 2026
+# March 25, 2026
 
 
 ## Description
@@ -76,6 +76,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 - When generating PDF or RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white.   This will help you quickly notice if an observation number is mistyped.
 - You can use the --no-qr command line argument to omit QR codes.
 - You can use the --minilabel command line argument to make tiny labels that have only the observation # and QR code.
+- BugGuide observation IDs are supported for minilabels (e.g. `BG2520730`, `BugGuide 2520730`).
 - Per-label customization of which fields appear on the label via the `--custom` option (add/remove default or observation fields without editing the code).
 - **Fungus Fair Mode:** Create display signage for fungus fairs using `--fungusfair`. Uses a CSV file as input and puts edible/toxic images on the labels instead of a QR code.
 
