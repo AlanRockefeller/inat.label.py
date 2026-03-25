@@ -1,6 +1,13 @@
 # Changelog
 
-# 3.9.7 
+# 3.9.8
+March 25, 2026
+
+- Added BugGuide support for minilabels. Accepts flexible input forms like `BG2520730`, `BG 2520730`, `BugGuide 2520730`, etc.
+- BugGuide minilabels show a QR code linking to the BugGuide observation page and display `BugGuide <number>` as the label text.
+- BugGuide IDs in non-minilabel mode are skipped with a clear warning message.
+
+# 3.9.7
 March 9, 2026
 
 Douglas Smith's changes: 
