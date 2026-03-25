@@ -3473,6 +3473,25 @@ def main() -> None:
     # Remove empty entries
     observation_ids = [obs for obs in observation_ids if obs]
 
+    # Merge adjacent tokens that form a spaced BugGuide ID.
+    # Shell tokenization splits "BG 2520730" into ["BG", "2520730"];
+    # rejoin them so extract_observation_id() sees the full form.
+    _bg_prefix_re = re.compile(r"^(?:bugguide|bg)$", re.IGNORECASE)
+    merged: list[str] = []
+    i = 0
+    while i < len(observation_ids):
+        if (
+            _bg_prefix_re.match(observation_ids[i])
+            and i + 1 < len(observation_ids)
+            and observation_ids[i + 1].isdigit()
+        ):
+            merged.append(f"{observation_ids[i]} {observation_ids[i + 1]}")
+            i += 2
+        else:
+            merged.append(observation_ids[i])
+            i += 1
+    observation_ids = merged
+
     # labels list is already initialized above
 
     total_requested = len(observation_ids) + len(
