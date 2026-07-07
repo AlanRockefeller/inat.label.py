@@ -147,36 +147,30 @@ ObsData = dict[str, Any]
 ProcessResult = tuple[str, Any | None]
 
 # ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
 PDF_BASE_FONT = os.environ.get("PDF_BASE_FONT", "Times-Roman")
-_fonts_registered = False
-_fonts_lock = threading.Lock()
-
-# Global session with connection pooling
-_thread_local = threading.local()
-
-# Simple thread-safe rate limiter: max 60 requests per 60 seconds (configurable via env)
 RATE_LIMIT_RPM = int(os.environ.get("INAT_RATE_LIMIT_RPM", "60"))
-_rate_lock = threading.Lock()
-_request_times = deque()
+_DEFAULT_MAX_WORKERS = int(os.environ.get("INAT_MAX_WORKERS", "5"))
 
 # Even spacing control derived from RATE_LIMIT_RPM
 _MIN_INTERVAL = 0.0
 if RATE_LIMIT_RPM > 0:
     _MIN_INTERVAL = 60.0 / RATE_LIMIT_RPM
-_next_allowed_time = 0.0
+
 # Begin smoothing only after this many recent requests in the window (burst allowance for small jobs)
 _SMOOTH_THRESHOLD = int(
     os.environ.get("INAT_SMOOTH_THRESHOLD", str(max(1, RATE_LIMIT_RPM // 4)))
 )
 
-# Concurrency semaphore
-_request_semaphore = threading.BoundedSemaphore(
-    int(os.environ.get("INAT_MAX_WORKERS", "5"))
-)
-
 # Retry/quiet controls (tunable from CLI or env)
 _MAX_WAIT_SECONDS = float(os.environ.get("INAT_MAX_WAIT_SECONDS", "30"))
 _QUIET = bool(int(os.environ.get("INAT_QUIET", "0")))
+
+# Taxon batcher tuning
+_TAXON_BATCH_MAX = int(os.environ.get("INAT_TAXON_BATCH_MAX", "50"))
+_TAXON_BATCH_WINDOW = float(os.environ.get("INAT_TAXON_BATCH_WINDOW", "0.1"))
 
 # Minilabel size presets (1 = smallest/current, 10 = largest)
 # Each entry: (num_columns, qr_box_size, pdf_qr_inches, pdf_font_pt, rtf_qr_twips, rtf_font_half_pts)
@@ -193,6 +187,29 @@ MINILABEL_SIZES = {
     10: (3, 4, 1.10, 12.0, 1550, 30),
 }
 
+
+# ---------------------------------------------------------------------------
+# Runtime state
+# ---------------------------------------------------------------------------
+
+_fonts_registered = False
+_fonts_lock = threading.Lock()
+
+# Global session with connection pooling
+_thread_local = threading.local()
+
+# Simple thread-safe rate limiter: max 60 requests per 60 seconds (configurable via env)
+_rate_lock = threading.Lock()
+_request_times = deque()
+_next_allowed_time = 0.0
+
+# Concurrency semaphore
+_request_semaphore = threading.BoundedSemaphore(_DEFAULT_MAX_WORKERS)
+
+
+# ---------------------------------------------------------------------------
+# HTTP layer
+# ---------------------------------------------------------------------------
 
 def _rate_limit_wait() -> None:
     """Respect RPM window with smoothing only after a small burst threshold.
@@ -278,6 +295,10 @@ def get_session() -> requests.Session:
     return _thread_local.session
 
 
+# ---------------------------------------------------------------------------
+# Console utilities
+# ---------------------------------------------------------------------------
+
 def print_error(message: object) -> None:
     """Print an error message in red (cross-platform) to stderr.
 
@@ -292,6 +313,10 @@ def print_error(message: object) -> None:
         # Fallback if colorama not available for some reason
         print(f"\033[91m{message}\033[0m", file=sys.stderr)
 
+
+# ---------------------------------------------------------------------------
+# Rendering templates and shared setup
+# ---------------------------------------------------------------------------
 
 def register_fonts() -> None:
     """Register both a preferred font and a system Unicode font to be used conditionally."""
@@ -462,6 +487,10 @@ def generate_qr_code(
         return None, None
 
 
+# ---------------------------------------------------------------------------
+# Text and formatting utilities
+# ---------------------------------------------------------------------------
+
 def escape_rtf(text: object) -> str:
     """Escape special characters for RTF output.
 
@@ -622,6 +651,10 @@ def _format_rtf_text(text: str) -> str:
     return text
 
 
+# ---------------------------------------------------------------------------
+# HTTP fetch helpers
+# ---------------------------------------------------------------------------
+
 def _parse_retry_after(resp: requests.Response) -> float | None:
     """Parse HTTP Retry-After header as seconds, supporting both delta and HTTP-date."""
     ra = resp.headers.get("Retry-After")
@@ -634,57 +667,10 @@ def _parse_retry_after(resp: requests.Response) -> float | None:
             from email.utils import parsedate_to_datetime  # pylint: disable=import-outside-toplevel
 
             dt = parsedate_to_datetime(ra)
-            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            now_utc = datetime.datetime.now(datetime.timezone.utc)  # noqa: UP017
             return max(0.0, (dt - now_utc).total_seconds())
         except Exception:
             return None
-
-
-def extract_observation_id(  # pylint: disable=unused-argument
-    input_string: str, debug: bool = False
-) -> str | None:
-    """Normalize a user-supplied input into an observation identifier.
-
-    Accepts iNaturalist numeric IDs or URLs, Mushroom Observer IDs like "MO12345" or MO URLs,
-    and BugGuide IDs like "BG12345" or "BugGuide 12345".
-    Returns a string ID (possibly with "MO" or "BG" prefix) or None if unrecognized.
-    """
-    # Check if the input is a BugGuide ID (formats: BG12345, BG 12345, BugGuide12345, BugGuide 12345)
-    bg_match = re.match(r"^(?:bugguide|bg)\s*(\d+)$", input_string, re.IGNORECASE)
-    if bg_match:
-        return f"BG{bg_match.group(1)}"
-
-    # Check if the input is a Mushroom Observer ID (format MO followed by any number of digits)
-    mo_match = re.match(r"^MO(\d+)$", input_string)
-    if mo_match:
-        # Return the Mushroom Observer ID with the MO prefix
-        return input_string
-
-    # Check if the input is a Mushroom Observer URL - being tolerant of different ways to write it
-    # https://mushroomobserver.org/12345
-    # http://mushroomobserver.org/observations/12345
-    # https://mushroomobserver.org/obs/585855
-    # https://www.mushroomobserver.org/obs/585855?foo=bar
-    mo_url_match = re.search(
-        r"(?:https?://)?(?:www\.)?mushroomobserver\.org/(?:observations/|observer/show_observation/|obs/)?/?(\d+)(?=[/?#\s]|$)",
-        input_string,
-    )
-
-    if mo_url_match:
-        # Return the MO ID with the MO prefix
-        return f"MO{mo_url_match.group(1)}"
-
-    # Check if the input is an iNaturalist URL
-    url_match = re.search(r"observations/(\d+)", input_string)
-    if url_match:
-        return url_match.group(1)
-
-    # Check if the input is a number
-    if input_string.isdigit():
-        return input_string
-
-    # If neither, return None
-    return None
 
 
 def fetch_api_data(url: str, retries: int = 6) -> tuple[ObsData | None, str | None]:
@@ -832,7 +818,11 @@ def fetch_api_data(url: str, retries: int = 6) -> tuple[ObsData | None, str | No
     return None, "Exceeded maximum retries due to rate limiting or network errors"
 
 
-# Taxon-details: in-memory cache + batch-fetch + single-flight deduplication
+# ---------------------------------------------------------------------------
+# Taxon cache and batcher
+# ---------------------------------------------------------------------------
+
+# In-memory cache + batch-fetch + single-flight deduplication.
 # Only complete entries (those containing "ancestors") are stored in the cache.
 _taxon_cache: dict[int, ObsData] = {}
 _taxon_cache_lock = threading.Lock()
@@ -844,8 +834,6 @@ _taxon_batch_queue: deque = deque()  # deque[int]
 _taxon_batch_lock = threading.Lock()
 _taxon_batcher_thread: threading.Thread | None = None
 _taxon_batcher_stop = threading.Event()
-_TAXON_BATCH_MAX = int(os.environ.get("INAT_TAXON_BATCH_MAX", "50"))
-_TAXON_BATCH_WINDOW = float(os.environ.get("INAT_TAXON_BATCH_WINDOW", "0.1"))
 # How often (seconds) to check batcher liveness while waiting for a taxon event.
 # There is no upper time limit on the wait itself -- In normal operation, the batcher's
 # finally-block signals every dequeued ID, so indefinite waiting is safe.
@@ -951,6 +939,10 @@ def _wait_for_taxon_event(event: threading.Event, taxon_id_int: int) -> None:
                     _taxon_batch_queue.append(taxon_id_int)
             _start_taxon_batcher()
 
+
+# ---------------------------------------------------------------------------
+# API data fetchers
+# ---------------------------------------------------------------------------
 
 def get_taxon_details(taxon_id: int | str) -> ObsData | None:
     """Fetch taxon details (including ancestors) with caching and batching.
@@ -1220,6 +1212,11 @@ def get_field_value(observation_data: ObsData, field_name: str) -> str | None:
         if field["name"].lower() == field_name.lower():
             return field["value"]
     return None
+
+
+# ---------------------------------------------------------------------------
+# Observation parsing
+# ---------------------------------------------------------------------------
 
 
 def format_mushroom_observer_url(url: str | None) -> str | None:
@@ -1497,6 +1494,51 @@ def format_scientific_name(observation_data: ObsData) -> str:
     return f"__ITALIC_START__{genus}__ITALIC_END__ {rank_label[rank]} __ITALIC_START__{scientific_name}__ITALIC_END__"
 
 
+def normalize_edibility(s: str | None) -> str | None:
+    """Normalize edibility string to a canonical set of values."""
+    if not s:
+        return None
+    # Remove non-alpha characters and convert to lowercase
+    t = re.sub(r"[^a-z]", "", s.strip().lower())
+    return {
+        "edible": "edible",
+        "nonedible": "nonedible",
+        "inedible": "nonedible",
+        "poisonous": "poisonous",
+        "toxic": "poisonous",
+        "unknown": "unknown",
+    }.get(t)
+
+
+def get_pretty_edibility(edibility_value: str | None) -> str | None:
+    """Map normalized edibility values to human-friendly display strings."""
+    if not edibility_value:
+        return edibility_value
+    mapping = {
+        "edible": "Edible",
+        "nonedible": "Not edible",
+        "poisonous": "Poisonous",
+        "unknown": "Unknown",
+    }
+    return mapping.get(edibility_value.lower(), edibility_value)
+
+
+# Check to see if the observation is in California
+def is_within_california(latitude: float, longitude: float) -> bool:
+    """Return True if the point lies within an approximate California bounding box."""
+    # Approximate bounding box for California
+    CA_NORTH = 42.0
+    CA_SOUTH = 32.5
+    CA_WEST = -124.4
+    CA_EAST = -114.1
+
+    return (CA_SOUTH <= latitude <= CA_NORTH) and (CA_WEST <= longitude <= CA_EAST)
+
+
+# ---------------------------------------------------------------------------
+# Label construction
+# ---------------------------------------------------------------------------
+
 def _common_name_is_redundant(common_name: str, scientific_name_plain: str) -> bool:
     """Return True when the common name duplicates the scientific name or one of its parts."""
     scientific_name_parts = scientific_name_plain.lower().split()
@@ -1514,6 +1556,41 @@ def _common_name_is_redundant(common_name: str, scientific_name_plain: str) -> b
                     is_redundant = True
                     break
     return is_redundant
+
+
+INAT_FIELD_SPECS_BEFORE_COLLECTION: tuple[tuple[str, str], ...] = (
+    ("Microscopy Performed", "Microscopy Performed"),
+    ("Fungal Microscopy", "Fungal Microscopy"),
+    ("Mobile or Traditional Photography", "Mobile or Traditional Photography?"),
+    ("Collector's name", "Collector's name"),
+    ("Herbarium Catalog Number", "Herbarium Catalog Number"),
+    ("Fungarium Catalog Number", "Fungarium Catalog Number"),
+    (
+        "Herbarium Secondary Catalog Number",
+        "Herbarium Secondary Catalog Number",
+    ),
+    ("Habitat", "Habitat"),
+    ("Microhabitat", "Microhabitat"),
+)
+INAT_FIELD_SPECS_AFTER_COLLECTION: tuple[tuple[str, str], ...] = (
+    ("Associated Species", "Associated Species"),
+    ("Herbarium Name", "Herbarium Name"),
+    ("Mycoportal ID", "Mycoportal ID"),
+    ("Voucher Number", "Voucher Number"),
+    ("Voucher Number(s)", "Voucher Number(s)"),
+    ("Accession Number", "Accession Number"),
+)
+
+
+def _append_inat_field_specs(
+    label: LabelFields,
+    observation_data: ObsData,
+    field_specs: tuple[tuple[str, str], ...],
+) -> None:
+    for display_name, source_field in field_specs:
+        value = get_field_value(observation_data, source_field)
+        if value:
+            label.append((display_name, value))
 
 
 def create_inaturalist_label(
@@ -1698,51 +1775,11 @@ def create_inaturalist_label(
             f"__ITALIC_START__{species_name_override}__ITALIC_END__",
         )
 
-    microscopy = get_field_value(observation_data, "Microscopy Performed")
-    if microscopy:
-        label.append(("Microscopy Performed", microscopy))
-
-    fungal_microscopy = get_field_value(observation_data, "Fungal Microscopy")
-    if fungal_microscopy:
-        label.append(("Fungal Microscopy", fungal_microscopy))
-
-    photography_type = get_field_value(
-        observation_data, "Mobile or Traditional Photography?"
+    _append_inat_field_specs(
+        label,
+        observation_data,
+        INAT_FIELD_SPECS_BEFORE_COLLECTION,
     )
-    if photography_type:
-        label.append(("Mobile or Traditional Photography", photography_type))
-
-    collectors_name = get_field_value(observation_data, "Collector's name")
-    if collectors_name:
-        label.append(("Collector's name", collectors_name))
-
-    herbarium_catalog_number = get_field_value(
-        observation_data, "Herbarium Catalog Number"
-    )
-    if herbarium_catalog_number:
-        label.append(("Herbarium Catalog Number", herbarium_catalog_number))
-
-    fungarium_catalog_number = get_field_value(
-        observation_data, "Fungarium Catalog Number"
-    )
-    if fungarium_catalog_number:
-        label.append(("Fungarium Catalog Number", fungarium_catalog_number))
-
-    herbarium_secondary_catalog_number = get_field_value(
-        observation_data, "Herbarium Secondary Catalog Number"
-    )
-    if herbarium_secondary_catalog_number:
-        label.append(
-            ("Herbarium Secondary Catalog Number", herbarium_secondary_catalog_number)
-        )
-
-    habitat = get_field_value(observation_data, "Habitat")
-    if habitat:
-        label.append(("Habitat", habitat))
-
-    microhabitat = get_field_value(observation_data, "Microhabitat")
-    if microhabitat:
-        label.append(("Microhabitat", microhabitat))
 
     inat_cn = get_field_value(observation_data, "Collection Number")
     mo_cn = get_field_value(observation_data, "Collection #")
@@ -1753,29 +1790,11 @@ def create_inaturalist_label(
     elif inat_cn:
         label.append(("Collection #", inat_cn))
 
-    associated_species = get_field_value(observation_data, "Associated Species")
-    if associated_species:
-        label.append(("Associated Species", associated_species))
-
-    herbarium_name = get_field_value(observation_data, "Herbarium Name")
-    if herbarium_name:
-        label.append(("Herbarium Name", herbarium_name))
-
-    mycoportal_id = get_field_value(observation_data, "Mycoportal ID")
-    if mycoportal_id:
-        label.append(("Mycoportal ID", mycoportal_id))
-
-    voucher_number = get_field_value(observation_data, "Voucher Number")
-    if voucher_number:
-        label.append(("Voucher Number", voucher_number))
-
-    voucher_numbers = get_field_value(observation_data, "Voucher Number(s)")
-    if voucher_numbers:
-        label.append(("Voucher Number(s)", voucher_numbers))
-
-    accession_number = get_field_value(observation_data, "Accession Number")
-    if accession_number:
-        label.append(("Accession Number", accession_number))
+    _append_inat_field_specs(
+        label,
+        observation_data,
+        INAT_FIELD_SPECS_AFTER_COLLECTION,
+    )
 
     mushroom_observer_url = get_field_value(observation_data, "Mushroom Observer URL")
     # Avoid duplicating the MO URL if this is a Mushroom Observer observation
@@ -1876,6 +1895,10 @@ def create_fungus_fair_label(  # pylint: disable=unused-argument
     return label, iconic_taxon_name
 
 
+# ---------------------------------------------------------------------------
+# Rendering -- shared
+# ---------------------------------------------------------------------------
+
 def find_non_ascii_chars(labels: list[TaggedLabel]) -> set[str]:
     """Find all non-ASCII characters in the label data, ignoring certain common symbols."""
     non_ascii_chars = set()
@@ -1913,6 +1936,10 @@ def _select_pdf_font(labels: list[TaggedLabel]) -> tuple[str, float]:
             )
     return base_font, font_size_multiplier
 
+
+# ---------------------------------------------------------------------------
+# Rendering -- PDF
+# ---------------------------------------------------------------------------
 
 def create_pdf_content(
     labels: list[TaggedLabel],
@@ -2451,6 +2478,10 @@ def create_minilabel_pdf_content(
     doc.build(story)
 
 
+# ---------------------------------------------------------------------------
+# Rendering -- RTF
+# ---------------------------------------------------------------------------
+
 def create_rtf_content(
     labels: list[TaggedLabel], no_qr: bool = False, fungus_fair_mode: bool = False
 ) -> str:
@@ -2859,46 +2890,34 @@ def create_minilabel_rtf_content(
     return rtf_content
 
 
-def normalize_edibility(s: str | None) -> str | None:
-    """Normalize edibility string to a canonical set of values."""
-    if not s:
-        return None
-    # Remove non-alpha characters and convert to lowercase
-    t = re.sub(r"[^a-z]", "", s.strip().lower())
-    return {
-        "edible": "edible",
-        "nonedible": "nonedible",
-        "inedible": "nonedible",
-        "poisonous": "poisonous",
-        "toxic": "poisonous",
-        "unknown": "unknown",
-    }.get(t)
+# ---------------------------------------------------------------------------
+# Rendering -- stdout
+# ---------------------------------------------------------------------------
+
+def render_plaintext_labels(labels: list[TaggedLabel]) -> None:
+    """Print labels to stdout in the existing plaintext format."""
+    for label, _ in labels:
+        for field, value in label:
+            if field == "Notes":
+                value = remove_formatting_tags(value)
+                value = _remove_mo_import_text(value)
+                print(f"{field}: {value}", flush=True)
+            elif field in {"iNaturalist URL", "Mushroom Observer URL"}:
+                print(value, flush=True)
+            else:
+                if field == "Scientific Name":
+                    value = value.replace("__ITALIC_START__", "").replace(
+                        "__ITALIC_END__", ""
+                    )
+                if field == "Edibility":
+                    value = get_pretty_edibility(value)
+                print(f"{field}: {value}", flush=True)
+        print("\n", flush=True)  # Blank line between labels
 
 
-def get_pretty_edibility(edibility_value: str | None) -> str | None:
-    """Map normalized edibility values to human-friendly display strings."""
-    if not edibility_value:
-        return edibility_value
-    mapping = {
-        "edible": "Edible",
-        "nonedible": "Not edible",
-        "poisonous": "Poisonous",
-        "unknown": "Unknown",
-    }
-    return mapping.get(edibility_value.lower(), edibility_value)
-
-
-# Check to see if the observation is in California
-def is_within_california(latitude: float, longitude: float) -> bool:
-    """Return True if the point lies within an approximate California bounding box."""
-    # Approximate bounding box for California
-    CA_NORTH = 42.0
-    CA_SOUTH = 32.5
-    CA_WEST = -124.4
-    CA_EAST = -114.1
-
-    return (CA_SOUTH <= latitude <= CA_NORTH) and (CA_WEST <= longitude <= CA_EAST)
-
+# ---------------------------------------------------------------------------
+# Sorting
+# ---------------------------------------------------------------------------
 
 def label_get(label_fields: LabelFields | None, field_name: str) -> str | None:
     """Case-insensitive lookup for a field in a label list of (field, value)."""
@@ -3085,6 +3104,57 @@ def sort_labels(
 
     sorted_items = sorted(items, key=get_sort_key_legacy)
     return [x[1] for x in sorted_items]
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def extract_observation_id(  # pylint: disable=unused-argument
+    input_string: str, debug: bool = False
+) -> str | None:
+    """Normalize a user-supplied input into an observation identifier.
+
+    Accepts iNaturalist numeric IDs or URLs, Mushroom Observer IDs like "MO12345" or MO URLs,
+    and BugGuide IDs like "BG12345" or "BugGuide 12345".
+    Returns a string ID (possibly with "MO" or "BG" prefix) or None if unrecognized.
+    """
+    # Check if the input is a BugGuide ID (formats: BG12345, BG 12345, BugGuide12345, BugGuide 12345)
+    bg_match = re.match(r"^(?:bugguide|bg)\s*(\d+)$", input_string, re.IGNORECASE)
+    if bg_match:
+        return f"BG{bg_match.group(1)}"
+
+    # Check if the input is a Mushroom Observer ID (format MO followed by any number of digits)
+    mo_match = re.match(r"^MO(\d+)$", input_string)
+    if mo_match:
+        # Return the Mushroom Observer ID with the MO prefix
+        return input_string
+
+    # Check if the input is a Mushroom Observer URL - being tolerant of different ways to write it
+    # https://mushroomobserver.org/12345
+    # http://mushroomobserver.org/observations/12345
+    # https://mushroomobserver.org/obs/585855
+    # https://www.mushroomobserver.org/obs/585855?foo=bar
+    mo_url_match = re.search(
+        r"(?:https?://)?(?:www\.)?mushroomobserver\.org/(?:observations/|observer/show_observation/|obs/)?/?(\d+)(?=[/?#\s]|$)",
+        input_string,
+    )
+
+    if mo_url_match:
+        # Return the MO ID with the MO prefix
+        return f"MO{mo_url_match.group(1)}"
+
+    # Check if the input is an iNaturalist URL
+    url_match = re.search(r"observations/(\d+)", input_string)
+    if url_match:
+        return url_match.group(1)
+
+    # Check if the input is a number
+    if input_string.isdigit():
+        return input_string
+
+    # If neither, return None
+    return None
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -3283,27 +3353,6 @@ def _stack_order(labels: list[TaggedLabel], num_per_page: int) -> list[TaggedLab
             j = m - 1  # re-use last label as spacer to fill pages
         stacked_labels.append(labels[j])
     return stacked_labels
-
-
-def render_plaintext_labels(labels: list[TaggedLabel]) -> None:
-    """Print labels to stdout in the existing plaintext format."""
-    for label, _ in labels:
-        for field, value in label:
-            if field == "Notes":
-                value = remove_formatting_tags(value)
-                value = _remove_mo_import_text(value)
-                print(f"{field}: {value}", flush=True)
-            elif field in {"iNaturalist URL", "Mushroom Observer URL"}:
-                print(value, flush=True)
-            else:
-                if field == "Scientific Name":
-                    value = value.replace("__ITALIC_START__", "").replace(
-                        "__ITALIC_END__", ""
-                    )
-                if field == "Edibility":
-                    value = get_pretty_edibility(value)
-                print(f"{field}: {value}", flush=True)
-        print("\n", flush=True)  # Blank line between labels
 
 
 def _emit_output(
@@ -3749,9 +3798,7 @@ def main() -> None:
     start_time = time.time()
 
     # Respect API guidelines by limiting concurrency to a small number (<=5)
-    max_workers = (
-        args.workers if args.workers else int(os.environ.get("INAT_MAX_WORKERS", "5"))
-    )
+    max_workers = args.workers if args.workers else _DEFAULT_MAX_WORKERS
 
     # Update semaphore to match the selected worker count
     global _request_semaphore
