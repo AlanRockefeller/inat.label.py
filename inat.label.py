@@ -222,6 +222,7 @@ _request_semaphore = threading.BoundedSemaphore(_DEFAULT_MAX_WORKERS)
 # HTTP layer
 # ---------------------------------------------------------------------------
 
+
 def _rate_limit_wait() -> None:
     """Respect RPM window with smoothing only after a small burst threshold.
 
@@ -310,6 +311,7 @@ def get_session() -> requests.Session:
 # Console utilities
 # ---------------------------------------------------------------------------
 
+
 def print_error(message: object) -> None:
     """Print an error message in red (cross-platform) to stderr.
 
@@ -328,6 +330,7 @@ def print_error(message: object) -> None:
 # ---------------------------------------------------------------------------
 # Rendering templates and shared setup
 # ---------------------------------------------------------------------------
+
 
 def register_fonts() -> None:
     """Register both a preferred font and a system Unicode font to be used conditionally."""
@@ -502,6 +505,7 @@ def generate_qr_code(
 # Text and formatting utilities
 # ---------------------------------------------------------------------------
 
+
 def escape_rtf(text: object) -> str:
     """Escape special characters for RTF output.
 
@@ -666,6 +670,7 @@ def _format_rtf_text(text: str) -> str:
 # HTTP fetch helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_retry_after(resp: requests.Response) -> float | None:
     """Parse HTTP Retry-After header as seconds, supporting both delta and HTTP-date."""
     ra = resp.headers.get("Retry-After")
@@ -675,7 +680,9 @@ def _parse_retry_after(resp: requests.Response) -> float | None:
         return float(ra)
     except ValueError:
         try:
-            from email.utils import parsedate_to_datetime  # pylint: disable=import-outside-toplevel
+            from email.utils import (
+                parsedate_to_datetime,
+            )  # pylint: disable=import-outside-toplevel
 
             dt = parsedate_to_datetime(ra)
             now_utc = datetime.datetime.now(datetime.timezone.utc)  # noqa: UP017
@@ -954,6 +961,7 @@ def _wait_for_taxon_event(event: threading.Event, taxon_id_int: int) -> None:
 # ---------------------------------------------------------------------------
 # API data fetchers
 # ---------------------------------------------------------------------------
+
 
 def get_taxon_details(taxon_id: int | str) -> ObsData | None:
     """Fetch taxon details (including ancestors) with caching and batching.
@@ -1478,9 +1486,7 @@ def observation_sort_datetime(observation_data: ObsData) -> ObservationSortDateT
         try:
             # The standard-library parser reliably handles iNaturalist's ISO
             # 8601 timestamps, including ``Z`` and explicit UTC offsets.
-            parsed = datetime.datetime.fromisoformat(
-                parse_value.replace("Z", "+00:00")
-            )
+            parsed = datetime.datetime.fromisoformat(parse_value.replace("Z", "+00:00"))
         except (OverflowError, TypeError, ValueError):
             try:
                 parsed = dateutil_parser.parse(parse_value)
@@ -1508,9 +1514,7 @@ def observation_sort_datetime(observation_data: ObsData) -> ObservationSortDateT
                     # No zone to resolve.  Keep the clock time and read it as
                     # UTC so observations from the same collecting day still
                     # sort chronologically instead of tying at midnight.
-                    parsed = parsed.replace(
-                        tzinfo=datetime.timezone.utc  # noqa: UP017
-                    )
+                    parsed = parsed.replace(tzinfo=datetime.timezone.utc)  # noqa: UP017
                 else:
                     # A clock time without a zone is not a comparable instant.
                     # Try the next, less precise API date field instead.
@@ -1686,6 +1690,7 @@ def is_within_california(latitude: float, longitude: float) -> bool:
 # ---------------------------------------------------------------------------
 # Label construction
 # ---------------------------------------------------------------------------
+
 
 def _common_name_is_redundant(common_name: str, scientific_name_plain: str) -> bool:
     """Return True when the common name duplicates the scientific name or one of its parts."""
@@ -2047,6 +2052,7 @@ def create_fungus_fair_label(  # pylint: disable=unused-argument
 # Rendering -- shared
 # ---------------------------------------------------------------------------
 
+
 def find_non_ascii_chars(labels: list[TaggedLabel]) -> set[str]:
     """Find all non-ASCII characters in the label data, ignoring certain common symbols."""
     non_ascii_chars = set()
@@ -2088,6 +2094,7 @@ def _select_pdf_font(labels: list[TaggedLabel]) -> tuple[str, float]:
 # ---------------------------------------------------------------------------
 # Rendering -- PDF
 # ---------------------------------------------------------------------------
+
 
 def create_pdf_content(
     labels: list[TaggedLabel],
@@ -2630,6 +2637,7 @@ def create_minilabel_pdf_content(
 # Rendering -- RTF
 # ---------------------------------------------------------------------------
 
+
 def create_rtf_content(
     labels: list[TaggedLabel], no_qr: bool = False, fungus_fair_mode: bool = False
 ) -> str:
@@ -3042,6 +3050,7 @@ def create_minilabel_rtf_content(
 # Rendering -- stdout
 # ---------------------------------------------------------------------------
 
+
 def render_plaintext_labels(labels: list[TaggedLabel]) -> None:
     """Print labels to stdout in the existing plaintext format."""
     for label, _ in labels:
@@ -3066,6 +3075,7 @@ def render_plaintext_labels(labels: list[TaggedLabel]) -> None:
 # ---------------------------------------------------------------------------
 # Sorting
 # ---------------------------------------------------------------------------
+
 
 def label_get(label_fields: LabelFields | None, field_name: str) -> str | None:
     """Case-insensitive lookup for a field in a label list of (field, value)."""
@@ -3144,16 +3154,16 @@ def cmp_alpha_then_trailing_num(val_a: str | None, val_b: str | None) -> int:
         2. Primary sort: Alphabetical.
         3. Tie-break: Trailing number value, ONLY if prefixes match.
     """
-    (miss_a, s_a) = normalize(val_a)
-    (miss_b, s_b) = normalize(val_b)
+    miss_a, s_a = normalize(val_a)
+    miss_b, s_b = normalize(val_b)
 
     if miss_a != miss_b:
         return miss_a - miss_b
 
     # Both present.
     # Check for trailing number match.
-    (pref_a, num_a) = split_trailing_number(s_a)
-    (pref_b, num_b) = split_trailing_number(s_b)
+    pref_a, num_a = split_trailing_number(s_a)
+    pref_b, num_b = split_trailing_number(s_b)
 
     if pref_a is not None and pref_b is not None and pref_a == pref_b:
         # Both have trailing numbers and prefixes match. Compare numbers.
@@ -3223,9 +3233,7 @@ def sort_labels(
         def warn_unparsed_date(label: LabelFields) -> None:
             date_str = label_get(label, "Date Observed")
             if date_str:
-                print_error(
-                    f"Warning: Could not parse date '{date_str}', sorting last"
-                )
+                print_error(f"Warning: Could not parse date '{date_str}', sorting last")
 
         def get_sort_key_date(
             item: SortableLabel,
@@ -3281,9 +3289,7 @@ def sort_labels(
         index, (label, _), _ = item
 
         # Default behavior (Observation Number or Title)
-        target_field = (
-            title_field if title_field else "iNaturalist Observation Number"
-        )
+        target_field = title_field if title_field else "iNaturalist Observation Number"
 
         raw_val = label_get(label, target_field)
         if not raw_val and not title_field:
@@ -3308,6 +3314,7 @@ def sort_labels(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def extract_observation_id(  # pylint: disable=unused-argument
     input_string: str, debug: bool = False
@@ -3743,7 +3750,9 @@ def _csv_get_val(
     return None
 
 
-def _validate_cli_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+def _validate_cli_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
     # Validation for --sort and --sort-field
     if args.sort == "custom" and not args.sort_field:
         parser.error("--sort=custom requires --sort-field to be specified.")
@@ -3757,7 +3766,9 @@ def _validate_cli_args(parser: argparse.ArgumentParser, args: argparse.Namespace
 
     # --num-per-page is only meaningful with --stack-order; validate only then
     if args.stack_order and (args.num_per_page <= 1 or args.num_per_page % 2 != 0):
-        parser.error("argument --num-per-page: must be a positive even integer greater than 1")
+        parser.error(
+            "argument --num-per-page: must be a positive even integer greater than 1"
+        )
 
     if args.num_per_page != 6 and not args.stack_order:
         print_error("Warning: --num-per-page has no effect without --stack-order.")
@@ -3896,9 +3907,13 @@ def _read_fungusfair_csv_files(
                             ["scientificname", "scientific_name", "name"],
                             header_map,
                         )
-                        common_name = _csv_get_val(row, ["commonname", "common_name"], header_map)
+                        common_name = _csv_get_val(
+                            row, ["commonname", "common_name"], header_map
+                        )
                         habitat = _csv_get_val(row, ["habitat"], header_map)
-                        spore_print = _csv_get_val(row, ["sporeprint", "spore_print"], header_map)
+                        spore_print = _csv_get_val(
+                            row, ["sporeprint", "spore_print"], header_map
+                        )
                         edibility = _csv_get_val(row, ["edibility"], header_map)
 
                         if sci_name:
@@ -3921,7 +3936,9 @@ def _read_fungusfair_csv_files(
                         if spore_print:
                             manual_label.append(("Spore Print", spore_print))
 
-                        normalized_edibility = normalize_edibility(edibility) if edibility else None
+                        normalized_edibility = (
+                            normalize_edibility(edibility) if edibility else None
+                        )
                         if normalized_edibility:
                             manual_label.append(("Edibility", normalized_edibility))
                         else:
@@ -4038,7 +4055,9 @@ def _process_observation_ids(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
-            executor.submit(_process_one, i, input_value, args, fields_to_add, fields_to_remove)
+            executor.submit(
+                _process_one, i, input_value, args, fields_to_add, fields_to_remove
+            )
             for i, input_value in enumerate(observation_ids)
         ]
         for fut in futures:
@@ -4126,7 +4145,9 @@ def main() -> None:
     _add_manual_fungusfair_label(args, parser, observation_ids, labels)
     observation_ids = _prepare_observation_ids(observation_ids)
 
-    total_requested = len(observation_ids) + len(labels)  # Count pre-generated labels too
+    total_requested = len(observation_ids) + len(
+        labels
+    )  # Count pre-generated labels too
 
     _print_generation_estimate(total_requested)
 
