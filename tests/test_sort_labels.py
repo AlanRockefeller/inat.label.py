@@ -218,7 +218,10 @@ def test_naive_observed_on_string_uses_named_observation_timezone(inat_module):
     )
 
 
-def test_unresolved_observed_on_string_timezone_uses_calendar_date(inat_module):
+def test_unresolved_observed_on_string_timezone_keeps_clock_time_as_utc(inat_module):
+    # An unrecognized zone is still stripped so parsing stays host-independent,
+    # but the clock time is kept (read as UTC) rather than flattened to
+    # midnight, which would tie every observation from the same day.
     result = inat_module.observation_sort_datetime(
         {'observed_on_string': '2025-11-14 03:25 PM XYZ'}
     )
@@ -227,6 +230,8 @@ def test_unresolved_observed_on_string_timezone_uses_calendar_date(inat_module):
         2025,
         11,
         14,
+        15,
+        25,
         tzinfo=datetime.timezone.utc,  # noqa: UP017
     )
 
@@ -345,6 +350,97 @@ def test_equal_timestamps_use_original_index(inat_module):
     ]
 
     result = inat_module.sort_labels(items, 'date')
+
+    assert [_value(label, 'ID') for label in result] == ['first', 'second', 'third']
+
+
+def test_date_desc_sort_orders_newest_first(inat_module):
+    items = [
+        _item(
+            0,
+            [('ID', 'oldest')],
+            observation_datetime=inat_module.observation_sort_datetime(
+                {'observed_on': '2026-07-29'}
+            ),
+        ),
+        _item(
+            1,
+            [('ID', 'newest')],
+            observation_datetime=inat_module.observation_sort_datetime(
+                {'time_observed_at': '2026-08-01T18:00:00Z'}
+            ),
+        ),
+        _item(
+            2,
+            [('ID', 'middle')],
+            observation_datetime=inat_module.observation_sort_datetime(
+                {'time_observed_at': '2026-08-01T08:00:00Z'}
+            ),
+        ),
+        _item(
+            3,
+            [('ID', 'older')],
+            observation_datetime=inat_module.observation_sort_datetime(
+                {'observed_on': '2026-07-31'}
+            ),
+        ),
+    ]
+
+    result = inat_module.sort_labels(items, 'date-desc')
+
+    assert [_value(label, 'ID') for label in result] == [
+        'newest',
+        'middle',
+        'older',
+        'oldest',
+    ]
+
+
+def test_date_desc_sort_keeps_missing_and_invalid_dates_last(inat_module):
+    items = [
+        _item(0, [('ID', 'missing')]),
+        _item(
+            1,
+            [('ID', 'invalid')],
+            observation_datetime=inat_module.observation_sort_datetime(
+                {'time_observed_at': 'not-a-date', 'observed_on': ''}
+            ),
+        ),
+        _item(
+            2,
+            [('ID', 'older')],
+            observation_datetime=inat_module.observation_sort_datetime(
+                {'observed_on': '2026-07-29'}
+            ),
+        ),
+        _item(
+            3,
+            [('ID', 'newer')],
+            observation_datetime=inat_module.observation_sort_datetime(
+                {'observed_on': '2026-07-31'}
+            ),
+        ),
+    ]
+
+    result = inat_module.sort_labels(items, 'date-desc')
+
+    assert [_value(label, 'ID') for label in result] == [
+        'newer',
+        'older',
+        'missing',
+        'invalid',
+    ]
+
+
+def test_date_desc_equal_timestamps_use_original_index(inat_module):
+    timestamp = inat_module.observation_sort_datetime({'time_observed_at': '2026-07-31T12:00:00Z'})
+    items = [
+        _item(2, [('ID', 'third')], observation_datetime=timestamp),
+        _item(0, [('ID', 'first')], observation_datetime=timestamp),
+        _item(1, [('ID', 'second')], observation_datetime=timestamp),
+    ]
+
+    result = inat_module.sort_labels(items, 'date-desc')
 
     assert [_value(label, 'ID') for label in result] == ['first', 'second', 'third']
 

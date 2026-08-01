@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: March 25, 2026
-Version: 3.9.8
+Date: August 1, 2026
+Version: 3.9.9
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -1440,8 +1440,11 @@ def observation_sort_datetime(observation_data: ObsData) -> ObservationSortDateT
     absent or invalid, the calendar date from ``observed_on`` is used, followed
     by ``observed_on_string`` (which also supports Mushroom Observer data).
     Date-only values use midnight UTC.  Naive clock times use the observation's
-    named time zone or a recognized abbreviation; if neither can be resolved,
-    only their calendar date is used.  Every returned value is timezone-aware,
+    named time zone or a recognized abbreviation.  If neither can be resolved,
+    an ``observed_on_string`` clock time is kept and read as UTC, so same-day
+    collections still sort chronologically instead of tying at midnight, while
+    a zoneless API timestamp falls through to the next, less precise field.
+    Every returned value is timezone-aware,
     so instants remain directly comparable across zones, while ``.date()`` still
     gives the local calendar date printed on the label.
     """
@@ -1502,10 +1505,11 @@ def observation_sort_datetime(observation_data: ObsData) -> ObservationSortDateT
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             if timezone is None:
                 if field_name == "observed_on_string":
-                    parsed = datetime.datetime.combine(
-                        parsed.date(),
-                        datetime.time.min,
-                        tzinfo=datetime.timezone.utc,  # noqa: UP017
+                    # No zone to resolve.  Keep the clock time and read it as
+                    # UTC so observations from the same collecting day still
+                    # sort chronologically instead of tying at midnight.
+                    parsed = parsed.replace(
+                        tzinfo=datetime.timezone.utc  # noqa: UP017
                     )
                 else:
                     # A clock time without a zone is not a comparable instant.
@@ -3174,8 +3178,9 @@ def sort_labels(
     Args:
         items: Labels with ``(original_index, tagged_label, observation_datetime)``.
             The datetime is internal metadata and is not part of the rendered label.
-        sort_mode: One of ``'none'``, ``'date'``, ``'voucher'``, ``'custom'``
-            (or ``None`` for default numeric sort by observation number).
+        sort_mode: One of ``'none'``, ``'date'`` (oldest first), ``'date-desc'``
+            (newest first), ``'voucher'``, ``'custom'`` (or ``None`` for default
+            numeric sort by observation number).
         title_field: Optional title field name override for the default sort.
         sort_field_name: Custom field name used when *sort_mode* is ``'custom'``.
 
@@ -3213,18 +3218,21 @@ def sort_labels(
         sorted_items = sorted(items, key=cmp_to_key(cmp_items))
         return [x[1] for x in sorted_items]
 
-    if sort_mode == "date":
+    if sort_mode in ("date", "date-desc"):
+
+        def warn_unparsed_date(label: LabelFields) -> None:
+            date_str = label_get(label, "Date Observed")
+            if date_str:
+                print_error(
+                    f"Warning: Could not parse date '{date_str}', sorting last"
+                )
 
         def get_sort_key_date(
             item: SortableLabel,
         ) -> tuple[int, datetime.date, datetime.datetime, int]:
             index, (label, _), observed = item
             if observed is None:
-                date_str = label_get(label, "Date Observed")
-                if date_str:
-                    print_error(
-                        f"Warning: Could not parse date '{date_str}', sorting last"
-                    )
+                warn_unparsed_date(label)
                 return (
                     1,
                     datetime.date.max,
@@ -3238,7 +3246,34 @@ def sort_labels(
             # only breaks ties within a single displayed date.
             return (0, observed.date(), observed, index)
 
-        sorted_items = sorted(items, key=get_sort_key_date)
+        def get_sort_key_date_desc(
+            item: SortableLabel,
+        ) -> tuple[int, float, float, int]:
+            index, (label, _), observed = item
+            if observed is None:
+                warn_unparsed_date(label)
+                # Undated labels still sort last, so the leading flag stays
+                # ascending; the sentinels below are constant within that group
+                # and only the index decides the order inside it.
+                return (1, 0.0, 0.0, index)
+            # Only the date components are reversed -- negating them keeps the
+            # missing-date flag and the index tiebreaker ascending, which
+            # ``reverse=True`` on the whole key would not.
+            return (
+                0,
+                -float(observed.date().toordinal()),
+                -observed.timestamp(),
+                index,
+            )
+
+        sorted_items = sorted(
+            items,
+            key=(
+                get_sort_key_date_desc
+                if sort_mode == "date-desc"
+                else get_sort_key_date
+            ),
+        )
         return [item[1] for item in sorted_items]
 
     # Legacy key-based sorting for the default observation-number behavior.
@@ -3428,8 +3463,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--habitat", type=str, help="Habitat (fungus fair mode)")
     parser.add_argument(
         "--sort",
-        choices=["none", "date", "voucher", "custom"],
-        help="Sort order for labels (default: observation number)",
+        choices=["none", "date", "date-desc", "voucher", "custom"],
+        help=(
+            "Sort order for labels: date (oldest first), date-desc "
+            "(newest first), none, voucher, custom "
+            "(default: observation number)"
+        ),
     )
     parser.add_argument(
         "--sort-field",

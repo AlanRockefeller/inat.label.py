@@ -20,16 +20,59 @@ import re
 import json
 import traceback
 import sys
+from collections import defaultdict, OrderedDict
+from datetime import date
 from uuid import uuid4
 from functools import partial
 
 import threading
 from logging.handlers import RotatingFileHandler
 
+from date_windows import build_date_windows
+
 INAT_HEADERS = {
     "Accept": "application/json",
     "User-Agent": "flask-labels (inat.label.py frontend)",
 }
+
+ICONIC_TAXON_COLOR_GROUPS = {
+    "Fungi": "fungi",
+    "Plantae": "plantae",
+    "Protozoa": "protozoa",
+    "Chromista": "chromista",
+    "Mollusca": "orange-animal",
+    "Arachnida": "orange-animal",
+    "Insecta": "orange-animal",
+    "Amphibia": "blue-animal",
+    "Reptilia": "blue-animal",
+    "Aves": "blue-animal",
+    "Mammalia": "blue-animal",
+    "Actinopterygii": "blue-animal",
+    "Animalia": "blue-animal",
+}
+
+LEGACY_COLORS_BY_TAXON_GROUP = {
+    "fungi": "magenta",
+    "plantae": "green",
+    "protozoa": "purple",
+    "chromista": "brown",
+    "orange-animal": "red",
+    "blue-animal": "blue",
+    "unknown": "black",
+}
+
+
+def taxon_color_group(iconic_taxon_name):
+    """Return the UI color group for an iNaturalist iconic taxon."""
+    if not isinstance(iconic_taxon_name, str):
+        return "unknown"
+    return ICONIC_TAXON_COLOR_GROUPS.get(iconic_taxon_name, "unknown")
+
+
+def legacy_color_for_taxon_group(color_group):
+    """Retain the pre-existing color response field for API compatibility."""
+    return LEGACY_COLORS_BY_TAXON_GROUP.get(color_group, "black")
+
 
 # Rate limiting for iNaturalist API
 api_lock = threading.Lock()
@@ -38,10 +81,23 @@ next_api_call_time = 0.0
 # Hardening settings
 MAX_OBS_PER_REQUEST = int(os.environ.get("MAX_OBS_PER_REQUEST", "500"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
+# Mushroom Observer has no histogram endpoint, so per-day counts for the date
+# windows can only come from walking result pages.  Each page is ~1000 records
+# and a few seconds upstream, and this app runs on a single Gunicorn worker, so
+# the walk is bounded; past the budget the counts are marked incomplete and the
+# window chips are skipped rather than tying up the worker.
+MO_MAX_WINDOW_PAGES = int(os.environ.get("MO_MAX_WINDOW_PAGES", "5"))
+# The daily counts behind the date windows are identical for identical filters,
+# so a short-lived cache keeps debounced keystrokes off the rate-limited,
+# lock-serialized iNaturalist client.
+INAT_HISTOGRAM_CACHE_TTL = int(os.environ.get("INAT_HISTOGRAM_CACHE_TTL", "300"))
+INAT_HISTOGRAM_CACHE_MAX_ENTRIES = 64
 FINISHED_JOB_TTL = int(
     os.environ.get("FINISHED_JOB_TTL", "300")
 )  # Time in seconds to keep finished jobs
 ENABLE_MO_DEBUG = bool(int(os.environ.get("ENABLE_MO_DEBUG", "0")))
+# Label sort orders accepted by inat.label.py's --sort option
+SORT_MODES = ("none", "date", "date-desc", "voucher", "custom")
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS"
 )  # comma-separated list of allowed origins
@@ -126,43 +182,75 @@ def inat_api_get(url, **kwargs):
             raise
 
 
-app = Flask(__name__)
+app = Flask(__name__, static_url_path="/labels/static")
 
-# Configure logging
-log_dir = os.path.join(app.root_path, "logs")
-os.makedirs(log_dir, exist_ok=True)
-error_log_path = os.path.join(log_dir, "error.log")
-file_handler = RotatingFileHandler(error_log_path, maxBytes=1024 * 1024, backupCount=10)
-file_handler.setFormatter(
-    logging.Formatter(
-        "%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]"
-    )
-)
-file_handler.setLevel(logging.WARNING)
-app.logger.addHandler(file_handler)
-app.logger.setLevel(logging.WARNING)
-
-# Command logger
-cmd_log_path = os.path.join(log_dir, "app.log")
-cmd_handler = RotatingFileHandler(cmd_log_path, maxBytes=1024 * 1024, backupCount=5)
-cmd_handler.setFormatter(logging.Formatter("%(asctime)s: %(message)s"))
 cmd_logger = logging.getLogger("cmd_logger")
-cmd_logger.setLevel(logging.INFO)
-cmd_logger.addHandler(cmd_handler)
+api_error_logger = logging.getLogger("api_error_logger")
 
-# API Error logger
-api_err_log_path = os.path.join(log_dir, "api_error.log")
-api_err_handler = RotatingFileHandler(
-    api_err_log_path, maxBytes=1024 * 1024, backupCount=5
-)
-api_err_handler.setFormatter(
-    logging.Formatter(
+
+def _env_flag_enabled(name):
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _has_handler(logger, handler_name):
+    return any(
+        getattr(handler, "_labels_handler_name", None) == handler_name
+        for handler in logger.handlers
+    )
+
+
+def _add_rotating_file_handler(
+    logger, handler_name, path, max_bytes, backup_count, formatter, level
+):
+    if _has_handler(logger, handler_name):
+        return
+
+    handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backup_count)
+    handler._labels_handler_name = handler_name
+    handler.setFormatter(formatter)
+    handler.setLevel(level)
+    logger.addHandler(handler)
+
+
+def configure_file_logging(flask_app):
+    flask_app.logger.setLevel(logging.WARNING)
+    cmd_logger.setLevel(logging.INFO)
+    api_error_logger.setLevel(logging.WARNING)
+
+    if _env_flag_enabled("LABELS_DISABLE_FILE_LOGGING"):
+        # Skip file handlers only. Records still propagate to the root logger
+        # (and thus to stderr / the systemd journal). This flag disables file
+        # logging, not all logging.
+        return
+
+    log_dir = os.environ.get("LABELS_LOG_DIR") or os.path.join(
+        flask_app.root_path, "logs"
+    )
+    os.makedirs(log_dir, exist_ok=True)
+
+    warning_formatter = logging.Formatter(
         "%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]"
     )
-)
-api_error_logger = logging.getLogger("api_error_logger")
-api_error_logger.setLevel(logging.WARNING)
-api_error_logger.addHandler(api_err_handler)
+    command_formatter = logging.Formatter("%(asctime)s: %(message)s")
+
+    handler_specs = (
+        (flask_app.logger, "app_error_log", "error.log", 10, warning_formatter, logging.WARNING),
+        (cmd_logger, "cmd_log", "app.log", 5, command_formatter, logging.INFO),
+        (api_error_logger, "api_error_log", "api_error.log", 5, warning_formatter, logging.WARNING),
+    )
+    for logger, handler_name, filename, backup_count, formatter, level in handler_specs:
+        _add_rotating_file_handler(
+            logger,
+            handler_name,
+            os.path.join(log_dir, filename),
+            1024 * 1024,
+            backup_count,
+            formatter,
+            level,
+        )
+
+
+configure_file_logging(app)
 
 # Only enable CORS when explicitly configured; same-origin requests do not need CORS
 if ALLOWED_ORIGINS:
@@ -207,6 +295,10 @@ def extract_obs_id(obs_input):
             mo_number = re.search(r"\d+", obs_input)
             if mo_number:
                 return "mo_direct", mo_number.group(0)
+        elif input_lower.startswith("bg") or input_lower.startswith("bugguide"):
+            bg_match = re.match(r"^(bg|bugguide)\s*(\d+)$", input_lower)
+            if bg_match:
+                return "bg", bg_match.group(2)
         elif obs_input.isdigit():
             return "inat", obs_input
     raise ValueError(f"Invalid observation input: {obs_input}")
@@ -219,6 +311,9 @@ def get_inat_id(obs_input):
     # Direct MO observation - return with MO prefix (uppercase) for generator compatibility
     if obs_type == "mo_direct":
         return f"MO{obs_id}"
+
+    if obs_type == "bg":
+        return f"BG{obs_id}"
 
     # Convert MO to iNat (motoinat)
     if obs_type == "mo":
@@ -280,6 +375,20 @@ def lookup_batch_internal(obs_inputs):
             mo_num = resolved[2:]
             mo_numbers.append(mo_num)
             mo_map_indices.setdefault(mo_num, []).append(idx)
+        elif isinstance(resolved, str) and resolved.upper().startswith("BG"):
+            bg_num = resolved[2:]
+            results[idx].update(
+                {
+                    "original_input": obs_input,
+                    "inat_id": f"BG{bg_num}",
+                    "scientific_name": "BugGuide",
+                    "user_login": "",
+                    "color": "black",
+                    "iconic_taxon_name": "",
+                    "taxon_color_group": "unknown",
+                    "ofvs": [{"name": "BugGuide URL", "value": f"https://bugguide.net/node/view/{bg_num}"}],
+                }
+            )
         else:
             # iNat numeric ID
             inat_ids.append(str(resolved))
@@ -333,17 +442,8 @@ def lookup_batch_internal(obs_inputs):
             scientific_name = taxon.get("name", "Unknown")
             user_login = user.get("login", "Unknown")
             iconic = taxon.get("iconic_taxon_name", "")
-            color = "black"
-            if iconic == "Fungi":
-                color = "magenta"
-            elif iconic == "Plantae":
-                color = "green"
-            elif iconic == "Protozoa":
-                color = "purple"
-            elif iconic == "Insecta":
-                color = "red"
-            elif iconic in ("Aves", "Reptilia", "Mammalia"):
-                color = "blue"
+            color_group = taxon_color_group(iconic)
+            color = legacy_color_for_taxon_group(color_group)
             for idx in indices:
                 results[idx].update(
                     {
@@ -352,6 +452,8 @@ def lookup_batch_internal(obs_inputs):
                         "scientific_name": scientific_name,
                         "user_login": user_login,
                         "color": color,
+                        "iconic_taxon_name": iconic,
+                        "taxon_color_group": color_group,
                         "ofvs": r.get("ofvs", []),
                     }
                 )
@@ -434,6 +536,8 @@ def lookup_batch_internal(obs_inputs):
                         "scientific_name": scientific_name,
                         "user_login": user_login,
                         "color": "magenta",
+                        "iconic_taxon_name": "Fungi",
+                        "taxon_color_group": "fungi",
                         "ofvs": ofvs,
                     }
                 )
@@ -464,6 +568,8 @@ def lookup_batch_internal(obs_inputs):
                     "scientific_name": base.get("scientific_name", "Unknown"),
                     "user_login": base.get("user_login", "Unknown"),
                     "color": base.get("color", "black"),
+                    "iconic_taxon_name": base.get("iconic_taxon_name", ""),
+                    "taxon_color_group": base.get("taxon_color_group", "unknown"),
                     "ofvs": base.get("ofvs", []),
                 }
             )
@@ -666,6 +772,20 @@ def print_start():
         return jsonify({"error": "Invalid format"}), 400
 
     omit_qr_codes = request.form.get("omit_qr_codes")
+    print_duplicate_labels = bool(request.form.get("print_duplicate_labels"))
+
+    # Label sort order.  An empty value keeps inat.label.py's default
+    # observation-number sort, so no --sort flag is passed in that case.
+    sort_mode = (request.form.get("sort") or "").strip().lower()
+    sort_field = (request.form.get("sort_field") or "").strip()
+    if sort_mode and sort_mode not in SORT_MODES:
+        app.logger.warning(f"print_start: Invalid sort mode requested: {sort_mode}")
+        return jsonify({"error": "Invalid sort order"}), 400
+    if sort_mode == "custom" and not sort_field:
+        app.logger.warning("print_start: Custom sort requested without a field name")
+        return jsonify({"error": "Sorting by field requires a field name"}), 400
+    if sort_mode != "custom":
+        sort_field = ""
     raw_observations = request.form.getlist("observations[]")
     if not raw_observations:
         app.logger.warning("print_start: No observations provided")
@@ -697,10 +817,19 @@ def print_start():
             return jsonify({"error": error_message}), 429
 
     inat_ids = []
+    bg_omitted = False
+    is_minilabel = bool(request.form.get("minilabel"))
+
     for obs in raw_observations:
         try:
-            inat_id = get_inat_id(obs)
+            inat_id = str(get_inat_id(obs))
+            if inat_id.upper().startswith("BG"):
+                if not is_minilabel:
+                    bg_omitted = True
+                    continue
             inat_ids.append(inat_id)
+            if print_duplicate_labels:
+                inat_ids.append(inat_id)
         except ValueError as e:
             app.logger.warning(str(e))
             continue
@@ -709,6 +838,8 @@ def print_start():
         app.logger.warning(
             "print_start: No valid observations found after processing raw input."
         )
+        if bg_omitted:
+            return jsonify({"error": "No labels were generated because all provided observations were BugGuide entries, which are only supported when minilabels are enabled."}), 400
         return jsonify({"error": "No valid observations provided"}), 400
 
     script_path = os.path.join(app.root_path, "inat.label.py")
@@ -744,6 +875,10 @@ def print_start():
         command.append("--common-names")
     if request.form.get("omit_notes"):
         command.append("--omit-notes")
+    if sort_mode:
+        command.extend(["--sort", sort_mode])
+        if sort_mode == "custom":
+            command.extend(["--sort-field", sort_field])
     if request.form.get("use_custom"):
         custom_args = request.form.getlist("custom_args[]")
         if custom_args:
@@ -771,7 +906,10 @@ def print_start():
             "filename": filename,
         }
 
-    return jsonify({"job_id": job_id})
+    return jsonify({
+        "job_id": job_id,
+        "warning": "BugGuide observations were omitted because minilabels are not enabled." if bg_omitted else None
+    })
 
 
 @app.route("/labels/print_stream")
@@ -873,28 +1011,240 @@ def print_stream():
     )
 
 
+def _clean_locality_text(value):
+    """Apply only low-risk cleanup to an upstream locality label."""
+    if not isinstance(value, str):
+        return ""
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    while len(parts) >= 3 and parts[-1].casefold() == parts[-2].casefold():
+        parts.pop()
+    return ", ".join(parts)
+
+
+_COORDINATE_PAIR_RE = re.compile(
+    r"^[-+]?\d{1,3}(?:\.\d+)?\s*,\s*[-+]?\d{1,3}(?:\.\d+)?$"
+)
+
+
+def _looks_like_coordinates(value):
+    """True for a bare "lat, lng" pair, which is not a place name."""
+    return bool(_COORDINATE_PAIR_RE.match(value.strip())) if value else False
+
+
+def _concise_locality(observation):
+    """Prefer an existing human-readable locality without another API lookup."""
+    for key in ("locality", "location_name", "where"):
+        cleaned = _clean_locality_text(observation.get(key))
+        if cleaned:
+            return cleaned
+
+    location = observation.get("location")
+    if isinstance(location, dict):
+        for nested_key in ("display_name", "name", "text"):
+            cleaned = _clean_locality_text(location.get(nested_key))
+            if cleaned:
+                return cleaned
+
+    cleaned_place_guess = _clean_locality_text(observation.get("place_guess"))
+    if cleaned_place_guess:
+        return cleaned_place_guess
+
+    if isinstance(location, dict):
+        return _clean_locality_text(location.get("location"))
+
+    # iNaturalist's ``location`` is the "lat,lng" pair.  A coordinate string is
+    # not a locality, so report nothing rather than something that reads like a
+    # place name.
+    cleaned_location = _clean_locality_text(location)
+    if _looks_like_coordinates(cleaned_location):
+        return ""
+    return cleaned_location
+
+
+def _thumbnail_url(observation, *, allow_photo_url=False):
+    """Return only an upstream thumbnail/square image URL, if one is available."""
+    candidates = []
+    for key in ("photos", "images"):
+        value = observation.get(key)
+        if isinstance(value, list):
+            candidates.extend(value[:1])
+    for key in ("primary_image", "photo", "image"):
+        value = observation.get(key)
+        if value:
+            candidates.append(value)
+
+    thumbnail_keys = ("square_url", "thumbnail_url", "thumb_url", "small_url")
+    if allow_photo_url:
+        thumbnail_keys += ("url",)
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in thumbnail_keys:
+            url = candidate.get(key)
+            if isinstance(url, str) and url.strip():
+                return url.strip()
+    return None
+
+
+def _mushroom_observer_thumbnail_url(observation):
+    """Return Mushroom Observer's 160px thumbnail for the primary image."""
+    direct_url = _thumbnail_url(observation)
+    if direct_url:
+        return direct_url
+
+    image_id = observation.get("primary_image_id")
+    if isinstance(image_id, bool):
+        return None
+    if isinstance(image_id, int):
+        normalized_id = str(image_id) if image_id > 0 else ""
+    elif isinstance(image_id, str):
+        normalized_id = image_id.strip()
+        if not normalized_id.isdigit() or int(normalized_id) < 1:
+            normalized_id = ""
+    else:
+        normalized_id = ""
+
+    if not normalized_id:
+        return None
+    return f"https://mushroomobserver.org/images/thumb/{normalized_id}.jpg"
+
+
+def _date_key(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10]).isoformat()
+    except ValueError:
+        return None
+
+
+def _daily_counts_from_histogram(payload):
+    """Normalize the iNaturalist histogram response into ISO-date counts."""
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, dict):
+        return {}
+
+    mappings = [results] if any(isinstance(value, int) for value in results.values()) else [
+        value for value in results.values() if isinstance(value, dict)
+    ]
+    daily_counts = defaultdict(int)
+    for mapping in mappings:
+        for raw_date, raw_count in mapping.items():
+            date_key = _date_key(raw_date)
+            if date_key is None or not isinstance(raw_count, int) or raw_count < 1:
+                continue
+            daily_counts[date_key] += raw_count
+    return dict(daily_counts)
+
+
+_histogram_cache = OrderedDict()
+_histogram_cache_lock = threading.Lock()
+
+
+def _inat_daily_counts(histogram_params):
+    """Fetch per-day counts, reusing a recent result for identical filters.
+
+    The Add Observations search re-fires on every debounced keystroke while the
+    filters are being typed, and ``inat_api_get`` serializes all iNaturalist
+    traffic behind one lock, so an uncached histogram would hold that lock for
+    an extra round trip per edit and stall unrelated lookups.
+    """
+    key = tuple(sorted((str(k), str(v)) for k, v in histogram_params.items()))
+    now = time.time()
+
+    with _histogram_cache_lock:
+        entry = _histogram_cache.get(key)
+        if entry is not None:
+            expires_at, cached_counts = entry
+            if expires_at > now:
+                _histogram_cache.move_to_end(key)
+                return cached_counts
+            del _histogram_cache[key]
+
+    response = inat_api_get(
+        "https://api.inaturalist.org/v1/observations/histogram",
+        params=histogram_params,
+        timeout=30,
+    )
+    daily_counts = _daily_counts_from_histogram(response.json())
+
+    with _histogram_cache_lock:
+        _histogram_cache[key] = (
+            time.time() + INAT_HISTOGRAM_CACHE_TTL,
+            daily_counts,
+        )
+        _histogram_cache.move_to_end(key)
+        while len(_histogram_cache) > INAT_HISTOGRAM_CACHE_MAX_ENTRIES:
+            _histogram_cache.popitem(last=False)
+
+    return daily_counts
+
+
+def _windows_for_complete_daily_counts(
+    daily_counts, total_count, requested_start, requested_end
+):
+    """Build windows only when every upstream match has a usable selected date."""
+    if total_count <= MAX_OBS_PER_REQUEST:
+        return []
+    dated_total = sum(daily_counts.values())
+    if dated_total != total_count:
+        app.logger.warning(
+            "Skipping date windows because dated count %s did not match total %s",
+            dated_total,
+            total_count,
+        )
+        return []
+    try:
+        return build_date_windows(
+            daily_counts,
+            requested_start,
+            requested_end,
+            cap=MAX_OBS_PER_REQUEST,
+            newest_first=True,
+        )
+    except ValueError:
+        app.logger.warning(
+            "Skipping date windows because the requested range was invalid",
+            exc_info=True,
+        )
+        return []
+
+
 @app.route("/labels/find_observations", methods=["POST"])
 def find_observations():
-    """Find iNaturalist observation IDs by date range, username, and taxon (including descendants)."""
+    """Find observation IDs by date range, username, and taxon (including descendants)."""
     d1_str = (request.form.get("d1") or "").strip()
     d2_str = (request.form.get("d2") or "").strip()
-    username = (request.form.get("username") or "").strip().replace(" ", "_")
+    username_raw = (request.form.get("username") or "").strip()
+    username_inat = username_raw.replace(" ", "_")
+    username_mo = username_raw
     taxon_input = (request.form.get("taxon") or "").strip()
+    source = request.form.get("source", "inat").strip().lower()
+    date_mode = request.form.get("date_mode", "observed").strip().lower()
 
-    if not d1_str or not d2_str or not username or not taxon_input:
+    if source not in ("inat", "mo"):
+        return jsonify({"error": "Unsupported source"}), 400
+
+    if date_mode not in ("observed", "created"):
+        return jsonify({"error": "Unsupported date_mode. Use 'observed' or 'created'."}), 400
+
+    if not d1_str or not d2_str or not username_raw:
         missing_fields = []
         if not d1_str:
             missing_fields.append("Start Date")
         if not d2_str:
             missing_fields.append("End Date")
-        if not username:
+        if not username_raw:
             missing_fields.append("Username")
-        if not taxon_input:
-            missing_fields.append("Taxon")
         return (
             jsonify({"error": f'Missing required fields: {", ".join(missing_fields)}'}),
             400,
         )
+
+    # Default taxon by source when left blank
+    if not taxon_input:
+        taxon_input = "Fungi" if source == "mo" else "Life"
 
     # Validate dates YYYY-MM-DD
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", d1_str) or not re.match(
@@ -902,106 +1252,298 @@ def find_observations():
     ):
         return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
 
-    # Resolve taxon_id (accept numeric id or search by name)
-    taxon_id = None
-    if taxon_input.isdigit():
-        taxon_id = int(taxon_input)
-    else:
-        try:
-            resp = inat_api_get(
-                "https://api.inaturalist.org/v1/taxa",
-                params={"q": taxon_input, "per_page": 1},
-                timeout=15,
-            )
-            tdata = resp.json()
-            if tdata.get("results"):
-                taxon_id = tdata["results"][0].get("id")
-            else:
-                return jsonify({"error": f"Taxon not found: {taxon_input}"}), 404
-        except requests.RequestException as e:
-            api_error_logger.warning(f"Taxon lookup failed: {str(e)}", exc_info=True)
-            return jsonify({"error": f"Error looking up taxon: {str(e)}"}), 500
-
     # Query observations
     found = []
     cap = MAX_OBS_PER_REQUEST + 1
-    last_id = 0
     current_batch = []
+    total_count = 0
+    windows = []
 
-    try:
-        while len(current_batch) < cap:
-            params = {
-                "user_login": username,
-                "d1": d1_str,
-                "d2": d2_str,
-                "taxon_id": taxon_id,
-                "per_page": 200,
-                "order": "asc",
-                "order_by": "id",
-            }
-            if last_id > 0:
-                params["id_above"] = last_id
-
-            resp = inat_api_get(
-                "https://api.inaturalist.org/v1/observations", params=params, timeout=30
-            )
-            data = resp.json()
-            results = data.get("results", [])
-            if not results:
-                break
-
-            for r in results:
-                if len(current_batch) >= cap:
-                    break
-                oid = r.get("id")
-                if oid:
-                    last_id = oid
-                taxon = r.get("taxon") or {}
-
-                iconic = taxon.get("iconic_taxon_name", "")
-                color = "black"
-                if iconic == "Fungi":
-                    color = "magenta"
-                elif iconic == "Plantae":
-                    color = "green"
-                elif iconic == "Protozoa":
-                    color = "purple"
-                elif iconic == "Insecta":
-                    color = "red"
-                elif iconic in ("Aves", "Reptilia", "Mammalia"):
-                    color = "blue"
-
-                user_login = (r.get("user") or {}).get("login") or username
-                current_batch.append(
-                    {
-                        "id": oid,
-                        "inat_id": str(oid),
-                        "scientific_name": taxon.get("name", ""),
-                        "user_login": user_login,
-                        "iconic_taxon_name": iconic,
-                        "observed_on": r.get("observed_on"),
-                        "color": color,
-                    }
+    if source == "inat":
+        # Resolve taxon_id (accept numeric id or search by name)
+        taxon_id = None
+        if taxon_input.isdigit():
+            taxon_id = int(taxon_input)
+        else:
+            try:
+                resp = inat_api_get(
+                    "https://api.inaturalist.org/v1/taxa",
+                    params={"q": taxon_input, "per_page": 1},
+                    timeout=15,
                 )
-        found = current_batch
-    except requests.RequestException as e:
-        api_error_logger.warning(
-            f"Observation fetch for user '{username}' failed: {str(e)}", exc_info=True
-        )
-        error_message = f"Error fetching observations: {str(e)}"
+                tdata = resp.json()
+                if tdata.get("results"):
+                    taxon_id = tdata["results"][0].get("id")
+                else:
+                    return jsonify({"error": f"Taxon not found: {taxon_input}"}), 404
+            except requests.RequestException as e:
+                api_error_logger.warning(
+                    f"Taxon lookup failed: {str(e)}", exc_info=True
+                )
+                return jsonify({"error": f"Error looking up taxon: {str(e)}"}), 500
+
+        inat_search_params = {
+            "user_login": username_inat,
+            "taxon_id": taxon_id,
+        }
+        if date_mode == "created":
+            inat_search_params["created_d1"] = d1_str
+            inat_search_params["created_d2"] = d2_str
+        else:
+            inat_search_params["d1"] = d1_str
+            inat_search_params["d2"] = d2_str
+
+        last_id = 0
+        first_page = True
         try:
-            if e.response:
-                error_details = e.response.json()
-                if "error" in error_details:
-                    error_message = (
-                        f"Error fetching observations: {error_details['error']}"
+            while len(current_batch) < cap:
+                params = {
+                    **inat_search_params,
+                    "per_page": 200,
+                    "order": "asc",
+                    "order_by": "id",
+                }
+                if last_id > 0:
+                    params["id_above"] = last_id
+
+                resp = inat_api_get(
+                    "https://api.inaturalist.org/v1/observations",
+                    params=params,
+                    timeout=30,
+                )
+                data = resp.json()
+                if first_page:
+                    # Only the first page reports the true match count.
+                    # ``id_above`` is a filter, so every later page reports the
+                    # matches still ahead of the cursor, not the full total.
+                    upstream_total = data.get("total_results")
+                    if isinstance(upstream_total, int) and upstream_total >= 0:
+                        total_count = upstream_total
+                    first_page = False
+                results = data.get("results", [])
+                if not results:
+                    break
+
+                for r in results:
+                    if len(current_batch) >= cap:
+                        break
+                    oid = r.get("id")
+                    if oid:
+                        last_id = oid
+                    taxon = r.get("taxon") or {}
+
+                    iconic = taxon.get("iconic_taxon_name", "")
+                    color_group = taxon_color_group(iconic)
+                    color = legacy_color_for_taxon_group(color_group)
+
+                    user_login = (r.get("user") or {}).get("login") or username_inat
+                    current_batch.append(
+                        {
+                            "id": oid,
+                            "inat_id": str(oid),
+                            "scientific_name": taxon.get("name", ""),
+                            "user_login": user_login,
+                            "iconic_taxon_name": iconic,
+                            "taxon_color_group": color_group,
+                            "observed_on": r.get("observed_on"),
+                            "place_guess": _concise_locality(r),
+                            "photo_url": _thumbnail_url(r, allow_photo_url=True),
+                            "color": color,
+                        }
                     )
-        except ValueError:
-            pass
-        return jsonify({"error": error_message}), 500
+            found = current_batch
+            total_count = max(total_count, len(current_batch))
+
+            if total_count > MAX_OBS_PER_REQUEST:
+                histogram_params = {
+                    **inat_search_params,
+                    "interval": "day",
+                    "date_field": date_mode,
+                }
+                try:
+                    daily_counts = _inat_daily_counts(histogram_params)
+                    windows = _windows_for_complete_daily_counts(
+                        daily_counts,
+                        total_count,
+                        d1_str,
+                        d2_str,
+                    )
+                except (requests.RequestException, ValueError) as e:
+                    api_error_logger.warning(
+                        "iNaturalist date-window histogram failed: %s",
+                        str(e),
+                        exc_info=True,
+                    )
+        except requests.RequestException as e:
+            api_error_logger.warning(
+                f"Observation fetch for user '{username_inat}' failed: {str(e)}",
+                exc_info=True,
+            )
+            error_message = f"Error fetching observations: {str(e)}"
+            try:
+                if e.response:
+                    error_details = e.response.json()
+                    if "error" in error_details:
+                        error_message = (
+                            f"Error fetching observations: {error_details['error']}"
+                        )
+            except ValueError:
+                pass
+            return jsonify({"error": error_message}), 500
+    else:
+        # source == "mo"
+        try:
+            mo_params = {
+                "user": username_mo,
+                "detail": "low",
+                "format": "json",
+            }
+            if date_mode == "created":
+                mo_params["created_at"] = f"{d1_str}-{d2_str}"
+            else:
+                mo_params["date"] = f"{d1_str}-{d2_str}"
+            if not taxon_input.isdigit():
+                mo_params["children_of"] = taxon_input
+            else:
+                return (
+                    jsonify(
+                        {
+                            "error": "Mushroom Observer taxon lookup in this modal expects a taxon name, not a numeric ID."
+                        }
+                    ),
+                    400,
+                )
+
+            daily_counts = defaultdict(int)
+            mo_result_count = 0
+            mo_dates_complete = True
+            page = 1
+            while True:
+                try:
+                    resp = requests.get(
+                        "https://mushroomobserver.org/api2/observations",
+                        params={**mo_params, "page": page},
+                        timeout=30,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                except requests.RequestException as e:
+                    if len(current_batch) < cap:
+                        raise
+                    mo_dates_complete = False
+                    api_error_logger.warning(
+                        "Mushroom Observer date-window page %s failed: %s",
+                        page,
+                        str(e),
+                        exc_info=True,
+                    )
+                    break
+                upstream_total = next(
+                    (
+                        data.get(key)
+                        for key in (
+                            # api2's own key; the rest are defensive fallbacks.
+                            "number_of_records",
+                            "number_of_results",
+                            "total_results",
+                            "total",
+                        )
+                        if isinstance(data.get(key), int) and data.get(key) >= 0
+                    ),
+                    None,
+                )
+                if upstream_total is not None:
+                    total_count = upstream_total
+                results = data.get("results", [])
+                if not results:
+                    break
+                mo_result_count += len(results)
+
+                for r in results:
+                    selected_date = (
+                        r.get("created_at")
+                        if date_mode == "created"
+                        else r.get("date") or r.get("when")
+                    )
+                    date_key = _date_key(selected_date)
+                    if date_key:
+                        daily_counts[date_key] += 1
+
+                    if len(current_batch) >= cap:
+                        continue
+
+                    obs_date = r.get("date") or r.get("when") or ""
+                    oid = r.get("id")
+                    if not oid:
+                        continue
+
+                    sci_name = r.get("consensus_name") or r.get("name") or ""
+                    u_login = username_mo
+
+                    current_batch.append(
+                        {
+                            "id": oid,
+                            "inat_id": f"MO{oid}",
+                            "scientific_name": sci_name,
+                            "user_login": u_login,
+                            "iconic_taxon_name": "Fungi",
+                            "taxon_color_group": "fungi",
+                            "observed_on": obs_date,
+                            "place_guess": _concise_locality(r),
+                            "photo_url": _mushroom_observer_thumbnail_url(r),
+                            "color": "magenta",
+                        }
+                    )
+
+                if data.get("number_of_pages", 1) <= page:
+                    break
+                if page >= MO_MAX_WINDOW_PAGES and len(current_batch) >= cap:
+                    # The preview rows are already filled; the remaining pages
+                    # would be fetched only to tally dates.  Give up on the
+                    # window chips rather than hold the worker any longer.
+                    mo_dates_complete = False
+                    api_error_logger.info(
+                        "Stopped Mushroom Observer date-window paging for '%s' "
+                        "after %s pages (budget MO_MAX_WINDOW_PAGES)",
+                        username_mo,
+                        page,
+                    )
+                    break
+                page += 1
+
+            found = current_batch
+            total_count = max(total_count, mo_result_count)
+            if mo_dates_complete:
+                windows = _windows_for_complete_daily_counts(
+                    daily_counts,
+                    total_count,
+                    d1_str,
+                    d2_str,
+                )
+        except requests.RequestException as e:
+            api_error_logger.warning(
+                f"Mushroom Observer fetch for user '{username_mo}' failed: {str(e)}",
+                exc_info=True,
+            )
+            return (
+                jsonify(
+                    {
+                        "error": f"Error fetching Mushroom Observer observations: {str(e)}"
+                    }
+                ),
+                500,
+            )
 
     found.reverse()
-    return jsonify({"count": len(found), "items": found}), 200
+    total_count = max(total_count, len(found))
+    response_payload = {
+        "count": len(found),
+        "total_count": total_count,
+        "items": found,
+    }
+    if windows:
+        response_payload["windows"] = windows
+    return jsonify(response_payload), 200
 
 
 @app.route("/labels/help")
@@ -1022,7 +1564,8 @@ def todo():
 
         if name and suggestion:
             with open(todo_file, "a") as f:
-                f.write(f"{name}: {suggestion}\n")
+                submitted_on = time.strftime("%Y-%m-%d", time.gmtime())
+                f.write(f"[{submitted_on}] {name}: {suggestion}\n")
         return redirect(url_for("todo"))
 
     todos = []

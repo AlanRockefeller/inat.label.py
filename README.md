@@ -1,6 +1,6 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.9.8
+# iNaturalist Herbarium Label Generator version 3.9.9
 # By Alan Rockefeller
 # March 25, 2026
 
@@ -65,6 +65,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
     DNA Barcode RPB2
     DNA Barcode TEF1
 - Automatically sorts labels by observation number (or title field) for consistent ordering.
+- Optional sort orders with `--sort`: `date` (oldest first), `date-desc` (newest first), `voucher`, `custom` (with `--sort-field FIELD`), or `none` to keep input order. Date sorting uses the observation's API timestamp, including time of day, in the observation's own time zone.
 - Support for "stack order" printing with `--stack-order`, which reorders labels so they remain in order when the printed pages are cut and stacked (assumes 2 columns per page). The number of labels per page defaults to 6 and can be changed with `--num-per-page` (must be a positive even integer greater than 1).
 - Optimized PDF layout with narrow top/bottom margins and a wider center gap to simplify cutting and ensure uniform label sizes.
 - By default outputs labels to console for quick viewing / testing

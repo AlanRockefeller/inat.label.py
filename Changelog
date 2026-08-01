@@ -1,5 +1,28 @@
 # Changelog
 
+# 3.9.9
+August 1, 2026
+
+Date sorting:
+
+- `--sort date` now sorts by the observation's actual timestamp from the API (`time_observed_at`, falling back to `observed_on` and then `observed_on_string`) instead of re-parsing the printed "Date Observed" text. Observations made on the same day now sort by time of day rather than tying.
+- Added `--sort date-desc` for newest-first order. Labels with no usable date still sort last, and observations sharing a timestamp keep their input order.
+- Fixed a bug where a trailing "PM" or "AM" in a Mushroom Observer `observed_on_string` was mistaken for a time zone abbreviation and stripped. `2019-05-23 01:20 PM` was parsed as 01:20, sorting an afternoon collection ahead of the morning ones.
+- Trailing time zone abbreviations (UTC, GMT, EST/EDT, CST/CDT, MST/MDT, PST/PDT, AKST/AKDT, HST) are now resolved to fixed offsets, and the observation's `observed_time_zone` is used when the API supplies one.
+- Time zone abbreviations are stripped before parsing, so results no longer depend on the time zone of the machine running the script and no longer emit UnknownTimezoneWarning.
+- When no time zone can be determined, an `observed_on_string` clock time is kept and read as UTC so same-day collections still sort chronologically instead of collapsing to midnight. A zoneless API timestamp instead falls through to the next, less precise date field.
+- Date-only values continue to use midnight UTC, and labels still sort by the local calendar date that is printed on them, so sheets stay in order when observations come from different time zones.
+
+Other fixes:
+
+- Fixed observation IDs from `--file` being silently dropped in some cases. The IDs read from the file are now returned to the caller explicitly instead of being appended to a list that was later reassigned.
+
+Internal:
+
+- Large internal refactor: `main()` was split into focused helper functions, and type hints were modernized throughout. No change to output or behavior.
+- Expanded the automated test suite, including new regression tests for observation timestamps and time zone handling that pass under any host time zone.
+- The script now requires Python 3.10 or higher.
+
 # 3.9.8
 March 25, 2026
 
