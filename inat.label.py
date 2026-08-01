@@ -68,7 +68,7 @@ The dependencies can be installed with the following command:
 
     pip install requests python-dateutil beautifulsoup4 qrcode[pil] colorama replace-accents pillow reportlab
 
-Python version 3.7 or higher is required (uses ``from __future__ import annotations``).
+Python version 3.10 or higher is required.
 
 """
 
@@ -93,7 +93,8 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from functools import cmp_to_key
 from io import BytesIO
-from typing import Any
+from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import colorama
 import qrcode
@@ -137,14 +138,24 @@ LabelFields = list[LabelField]
 # Both elements are always present; functions return Optional[TaggedLabel] on error.
 TaggedLabel = tuple[LabelFields, str]
 
-# A TaggedLabel tagged with its original input index, used during sorting.
-IndexedLabel = tuple[int, TaggedLabel]
+# Timezone-aware observation time used only for chronological sorting.
+ObservationSortDateTime = datetime.datetime | None
+
+# A rendered label plus internal metadata used during sorting.  The observation
+# datetime is deliberately kept outside LabelFields so it is never displayed.
+SortableLabel = tuple[int, TaggedLabel, ObservationSortDateTime]
 
 # A single observation dict returned by the iNat or MO API.
 ObsData = dict[str, Any]
 
-# Return type of the per-observation worker function in main().
-ProcessResult = tuple[str, Any | None]
+# Payloads returned by the per-observation worker function in main().
+ProcessSuccess = tuple[int, LabelFields, str, ObservationSortDateTime]
+ProcessError = tuple[int, str]
+ProcessResult = (
+    tuple[Literal["ok"], ProcessSuccess]
+    | tuple[Literal["err"], ProcessError]
+    | tuple[Literal["skip"], None]
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -1375,6 +1386,139 @@ def parse_date(date_string: str | None) -> datetime.date | None:
             return parsed_date.date()
     except (ValueError, TypeError):
         return None
+
+    return None
+
+
+_TZ_ABBREVIATION_OFFSETS = {
+    "UTC": 0,
+    "GMT": 0,
+    "EST": -5,
+    "EDT": -4,
+    "CST": -6,
+    "CDT": -5,
+    "MST": -7,
+    "MDT": -6,
+    "PST": -8,
+    "PDT": -7,
+    "AKST": -9,
+    "AKDT": -8,
+    "HST": -10,
+}
+
+# Meridiem markers look like time-zone abbreviations to the trailing-token
+# regex below, but stripping one silently turns an afternoon into a morning.
+_MERIDIEM_TOKENS = {"AM", "PM"}
+
+
+def _observation_timezone(
+    observation_data: ObsData, abbreviation: str | None = None
+) -> datetime.tzinfo | None:
+    """Resolve an API time-zone name or a known fixed-offset abbreviation."""
+    zone_name = observation_data.get("observed_time_zone")
+    if zone_name:
+        try:
+            return ZoneInfo(str(zone_name))
+        except (ValueError, ZoneInfoNotFoundError):
+            pass
+
+    if abbreviation:
+        offset_hours = _TZ_ABBREVIATION_OFFSETS.get(abbreviation.upper())
+        if offset_hours is not None:
+            if offset_hours == 0:
+                return datetime.timezone.utc  # noqa: UP017
+            return datetime.timezone(
+                datetime.timedelta(hours=offset_hours), abbreviation.upper()
+            )
+    return None
+
+
+def observation_sort_datetime(observation_data: ObsData) -> ObservationSortDateTime:
+    """Return the best observation datetime, in the observation's own time zone.
+
+    ``time_observed_at`` is the authoritative iNaturalist timestamp.  If it is
+    absent or invalid, the calendar date from ``observed_on`` is used, followed
+    by ``observed_on_string`` (which also supports Mushroom Observer data).
+    Date-only values use midnight UTC.  Naive clock times use the observation's
+    named time zone or a recognized abbreviation; if neither can be resolved,
+    only their calendar date is used.  Every returned value is timezone-aware,
+    so instants remain directly comparable across zones, while ``.date()`` still
+    gives the local calendar date printed on the label.
+    """
+
+    candidates = (
+        ("time_observed_at", False),
+        ("observed_on", True),
+        ("observed_on_string", False),
+    )
+    for field_name, force_date_only in candidates:
+        raw_value = observation_data.get(field_name)
+        if raw_value is None:
+            continue
+        value = str(raw_value).strip()
+        if not value or value.lower() in {"not available", "none", "null"}:
+            continue
+
+        abbreviation = None
+        parse_value = value
+        if field_name == "observed_on_string":
+            abbreviation_match = re.search(r"\s+([A-Za-z]{2,5})\s*$", value)
+            if (
+                abbreviation_match
+                and abbreviation_match.group(1).upper() not in _MERIDIEM_TOKENS
+            ):
+                abbreviation = abbreviation_match.group(1)
+                # Strip the token before calling dateutil so parsing never
+                # depends on the host timezone or emits UnknownTimezoneWarning.
+                parse_value = value[: abbreviation_match.start()].rstrip()
+
+        try:
+            # The standard-library parser reliably handles iNaturalist's ISO
+            # 8601 timestamps, including ``Z`` and explicit UTC offsets.
+            parsed = datetime.datetime.fromisoformat(
+                parse_value.replace("Z", "+00:00")
+            )
+        except (OverflowError, TypeError, ValueError):
+            try:
+                parsed = dateutil_parser.parse(parse_value)
+            except (OverflowError, TypeError, ValueError):
+                continue
+
+        # observed_on is a calendar-date API field.  Other date-only strings
+        # also receive a deterministic beginning-of-day value.
+        # ``parse_value`` (not ``value``) is what was parsed, so a trailing zone
+        # abbreviation cannot make an otherwise date-only string look timed.
+        is_date_only = force_date_only or bool(
+            re.fullmatch(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", parse_value)
+        )
+        if is_date_only:
+            parsed = datetime.datetime.combine(
+                parsed.date(),
+                datetime.time.min,
+                tzinfo=datetime.timezone.utc,  # noqa: UP017
+            )
+
+        timezone = _observation_timezone(observation_data, abbreviation)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            if timezone is None:
+                if field_name == "observed_on_string":
+                    parsed = datetime.datetime.combine(
+                        parsed.date(),
+                        datetime.time.min,
+                        tzinfo=datetime.timezone.utc,  # noqa: UP017
+                    )
+                else:
+                    # A clock time without a zone is not a comparable instant.
+                    # Try the next, less precise API date field instead.
+                    continue
+            else:
+                parsed = parsed.replace(tzinfo=timezone)
+        elif timezone is not None and not is_date_only:
+            # The API may report the instant in any offset, but labels print the
+            # observer's local date.  Express it in the observation's own zone so
+            # ``.date()`` matches what the label shows.
+            parsed = parsed.astimezone(timezone)
+        return parsed
 
     return None
 
@@ -3020,7 +3164,7 @@ def cmp_alpha_then_trailing_num(val_a: str | None, val_b: str | None) -> int:
 
 
 def sort_labels(
-    items: list[IndexedLabel],
+    items: list[SortableLabel],
     sort_mode: str | None,
     title_field: str | None = None,
     sort_field_name: str | None = None,
@@ -3028,7 +3172,8 @@ def sort_labels(
     """Sort a list of tagged items.
 
     Args:
-        items: List of tuples ``(original_index, (label_fields, taxon_name))``.
+        items: Labels with ``(original_index, tagged_label, observation_datetime)``.
+            The datetime is internal metadata and is not part of the rendered label.
         sort_mode: One of ``'none'``, ``'date'``, ``'voucher'``, ``'custom'``
             (or ``None`` for default numeric sort by observation number).
         title_field: Optional title field name override for the default sort.
@@ -3043,8 +3188,8 @@ def sort_labels(
         sorted_items = sorted(items, key=lambda x: x[0])
         return [x[1] for x in sorted_items]
 
-    def get_raw_value(item: IndexedLabel) -> str | None:
-        _, (label, _) = item
+    def get_raw_value(item: SortableLabel) -> str | None:
+        _, (label, _), _ = item
         if sort_mode == "voucher":
             return get_voucher_value(label)
         if sort_mode == "custom":
@@ -3054,7 +3199,7 @@ def sort_labels(
 
     if sort_mode in ("voucher", "custom"):
 
-        def cmp_items(item_a: IndexedLabel, item_b: IndexedLabel) -> int:
+        def cmp_items(item_a: SortableLabel, item_b: SortableLabel) -> int:
             val_a = get_raw_value(item_a)
             val_b = get_raw_value(item_b)
 
@@ -3068,25 +3213,37 @@ def sort_labels(
         sorted_items = sorted(items, key=cmp_to_key(cmp_items))
         return [x[1] for x in sorted_items]
 
-    # Legacy key-based sorting for default and date (unchanged logic)
-    def get_sort_key_legacy(item: IndexedLabel) -> tuple:
-        index, (label, _) = item
+    if sort_mode == "date":
 
-        if sort_mode == "date":
-            # Special case for date: parse to comparable or None
-            date_str = label_get(label, "Date Observed")
-            if date_str:
-                try:
-                    # Parse to datetime, then normalize to date object to avoid naive/aware mismatch
-                    d = dateutil_parser.parse(date_str).date()
-                except (ValueError, TypeError):
+        def get_sort_key_date(
+            item: SortableLabel,
+        ) -> tuple[int, datetime.date, datetime.datetime, int]:
+            index, (label, _), observed = item
+            if observed is None:
+                date_str = label_get(label, "Date Observed")
+                if date_str:
                     print_error(
                         f"Warning: Could not parse date '{date_str}', sorting last"
                     )
-                else:
-                    return (0, d, index)
-            # Missing or unparseable: sort last using datetime.date.max
-            return (1, datetime.date.max, index)
+                return (
+                    1,
+                    datetime.date.max,
+                    datetime.datetime.max.replace(
+                        tzinfo=datetime.timezone.utc  # noqa: UP017
+                    ),
+                    index,
+                )
+            # The local calendar date leads so the printed dates stay in order
+            # even when observations come from different time zones; the instant
+            # only breaks ties within a single displayed date.
+            return (0, observed.date(), observed, index)
+
+        sorted_items = sorted(items, key=get_sort_key_date)
+        return [item[1] for item in sorted_items]
+
+    # Legacy key-based sorting for the default observation-number behavior.
+    def get_sort_key_default(item: SortableLabel) -> tuple[int, int]:
+        index, (label, _), _ = item
 
         # Default behavior (Observation Number or Title)
         target_field = (
@@ -3095,14 +3252,21 @@ def sort_labels(
 
         raw_val = label_get(label, target_field)
         if not raw_val and not title_field:
-            # Fallback for default sort if iNat num missing
-            raw_val = label_get(label, "Mushroom Observer Number")
+            # Fallbacks for default sort if the iNat number is missing, so
+            # non-iNat labels sort by their own identifier instead of key 0.
+            for fallback_field in (
+                "Mushroom Observer Number",
+                "BugGuide Number",
+            ):
+                raw_val = label_get(label, fallback_field)
+                if raw_val:
+                    break
 
         # Default key uses strictly numeric logic (backward compatibility)
         numeric_sort_val = parse_key_default(raw_val)
         return (numeric_sort_val, index)
 
-    sorted_items = sorted(items, key=get_sort_key_legacy)
+    sorted_items = sorted(items, key=get_sort_key_default)
     return [x[1] for x in sorted_items]
 
 
@@ -3446,7 +3610,7 @@ def _process_one(
                 ("BugGuide URL", bg_url),
             ]
             print(f"Added BugGuide minilabel for {bg_number}", flush=True)
-            return ("ok", (index, synthetic_label, "BugGuide"))
+            return ("ok", (index, synthetic_label, "BugGuide", None))
 
         observation_data, iconic_taxon_name = get_observation_data(observation_id)
         if observation_data is None:
@@ -3506,7 +3670,15 @@ def _process_one(
                     f"Added label for {updated_iconic_taxon} {scientific_name_plain}",
                     flush=True,
                 )
-            return ("ok", (index, label, updated_iconic_taxon))
+            return (
+                "ok",
+                (
+                    index,
+                    label,
+                    updated_iconic_taxon,
+                    observation_sort_datetime(observation_data),
+                ),
+            )
         return ("err", (index, f"Could not create label for {observation_id}"))
     except Exception as e:
         return ("err", (index, f"Unexpected error for {input_value}: {e!s}"))
@@ -3532,29 +3704,12 @@ def _csv_get_val(
     return None
 
 
-def main() -> None:
-    """
-    Command-line entry point that builds herbarium labels from iNaturalist or Mushroom Observer observation identifiers and writes them to stdout, an RTF file, or a PDF file.
-
-    Parses command-line arguments to accept observation numbers or URLs (or a file of them), fetches observation data in parallel, and generates formatted labels. Supported behaviors include:
-    - Writing labels to an RTF file (--rtf) or a PDF file (--pdf), or printing human-readable labels to stdout when no output file is specified. When writing files, prints the created filename and its size in kilobytes when available.
-    - A discovery mode (--find-ca) that prints iNaturalist observation URLs for observations located within California instead of generating labels.
-    - Reading observation identifiers from a file via --file; accepts space-, comma-, or newline-separated entries.
-    - Concurrency tuning via --workers (or INAT_MAX_WORKERS env var) and global retry timeout adjustment via --max-wait-seconds (or INAT_MAX_WAIT_SECONDS env var).
-    - Minimal verbosity control (--quiet) and a debug flag (--debug).
-
-    Updates module-global controls used by API calls (e.g., max wait time and quiet mode), enforces filename extensions for RTF/PDF outputs, and respects API rate/concurrency constraints while fetching data. Prints a final summary of requested, generated, and failed counts with elapsed time; prints per-failure messages to stderr. Exits with an error if no CLI arguments are supplied or if the provided input file cannot be read.
-    """
-    parser = build_arg_parser()
-    args = parser.parse_args()
-
+def _validate_cli_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     # Validation for --sort and --sort-field
     if args.sort == "custom" and not args.sort_field:
         parser.error("--sort=custom requires --sort-field to be specified.")
     if args.sort != "custom" and args.sort_field:
         parser.error("--sort-field can only be used with --sort=custom.")
-
-    fields_to_add, fields_to_remove = _parse_custom_fields(args)
 
     # If no arguments are provided, show help and exit
     if len(sys.argv) == 1:
@@ -3563,9 +3718,7 @@ def main() -> None:
 
     # --num-per-page is only meaningful with --stack-order; validate only then
     if args.stack_order and (args.num_per_page <= 1 or args.num_per_page % 2 != 0):
-        parser.error(
-            "argument --num-per-page: must be a positive even integer greater than 1"
-        )
+        parser.error("argument --num-per-page: must be a positive even integer greater than 1")
 
     if args.num_per_page != 6 and not args.stack_order:
         print_error("Warning: --num-per-page has no effect without --stack-order.")
@@ -3586,16 +3739,21 @@ def main() -> None:
     if args.minilabel and args.stack_order:
         parser.error("argument --stack-order: can not be used with --minilabel")
 
-    # Define rtf_mode and pdf_mode based on whether --rtf or --pdf argument is provided
-    rtf_mode = bool(args.rtf)
-    pdf_mode = bool(args.pdf)
 
+def _get_output_modes(args: argparse.Namespace) -> tuple[bool, bool]:
+    # Define rtf_mode and pdf_mode based on whether --rtf or --pdf argument is provided
+    return bool(args.rtf), bool(args.pdf)
+
+
+def _reset_rate_limiter_state() -> None:
     # Reset rate limiter state to ensure monotonic time consistency
     global _next_allowed_time
     with _rate_lock:
         _request_times.clear()
         _next_allowed_time = 0.0
 
+
+def _apply_cli_controls(args: argparse.Namespace) -> None:
     # Apply global controls from CLI
     global _MAX_WAIT_SECONDS, _QUIET
     if args.max_wait_seconds is not None:
@@ -3603,17 +3761,25 @@ def main() -> None:
     if args.quiet:
         _QUIET = True
 
+
+def _validate_output_filenames(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    rtf_mode: bool,
+    pdf_mode: bool,
+) -> None:
     if rtf_mode and not args.rtf.lower().endswith(".rtf"):
         parser.error("argument --rtf: filename must end with .rtf")
 
     if pdf_mode and not args.pdf.lower().endswith(".pdf"):
         parser.error("argument --pdf: filename must end with .pdf")
 
-    inputs = args.observation_ids or []
 
-    # Initialize labels list
-    labels = []
-    failed = []
+def _split_cli_inputs(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> tuple[list[str], list[str]]:
+    inputs = list(args.observation_ids or [])
 
     if args.fungusfair:
         # Fungus fair mode: positional args must be CSV files only (or none for manual mode)
@@ -3638,18 +3804,33 @@ def main() -> None:
         csv_files = []
         observation_ids = inputs
 
-    # Read observation IDs from file if --file is provided
+    return observation_ids, csv_files
+
+
+def _read_observation_id_file(
+    args: argparse.Namespace, observation_ids: list[str]
+) -> list[str]:
+    """Return positional observation IDs plus any IDs read from ``--file``."""
+    combined_ids = list(observation_ids)
     if args.file:
         try:
             with open(args.file, encoding="utf-8") as file:
                 file_contents = file.read()
                 # Split file contents by whitespace, commas, or newlines
                 file_observation_ids = re.split(r"[,\s]+", file_contents.strip())
-                observation_ids.extend(file_observation_ids)
+                combined_ids.extend(file_observation_ids)
         except (OSError, ValueError) as e:
             print(f"Error reading file {args.file}: {e}")
             sys.exit(1)
+    return combined_ids
 
+
+def _read_fungusfair_csv_files(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    csv_files: list[str],
+    labels: list[SortableLabel],
+) -> None:
     if args.fungusfair:
         for csv_file in csv_files:
             if not os.path.exists(csv_file):
@@ -3672,7 +3853,9 @@ def main() -> None:
 
                         manual_label = []
                         sci_name = _csv_get_val(
-                            row, ["scientificname", "scientific_name", "name"], header_map
+                            row,
+                            ["scientificname", "scientific_name", "name"],
+                            header_map,
                         )
                         common_name = _csv_get_val(row, ["commonname", "common_name"], header_map)
                         habitat = _csv_get_val(row, ["habitat"], header_map)
@@ -3699,9 +3882,7 @@ def main() -> None:
                         if spore_print:
                             manual_label.append(("Spore Print", spore_print))
 
-                        normalized_edibility = (
-                            normalize_edibility(edibility) if edibility else None
-                        )
+                        normalized_edibility = normalize_edibility(edibility) if edibility else None
                         if normalized_edibility:
                             manual_label.append(("Edibility", normalized_edibility))
                         else:
@@ -3711,7 +3892,7 @@ def main() -> None:
                                 )
                             manual_label.append(("Edibility", "unknown"))
 
-                        labels.append((len(labels), (manual_label, "Fungus")))
+                        labels.append((len(labels), (manual_label, "Fungus"), None))
             except Exception as e:
                 print_error(f"Error reading CSV file {csv_file}: {e}")
 
@@ -3720,6 +3901,13 @@ def main() -> None:
                 "--fungusfair requires at least one CSV file or --scientificname for a manual label."
             )
 
+
+def _add_manual_fungusfair_label(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    observation_ids: list[str],
+    labels: list[SortableLabel],
+) -> None:
     # Logic for manual label (no IDs, but fungus fair args)
     if not observation_ids and args.fungusfair and args.scientificname:
         # Create a manual label
@@ -3738,27 +3926,25 @@ def main() -> None:
         manual_label.append(("Edibility", args.edibility or "unknown"))
 
         # Add to labels list
-        labels.append((len(labels), (manual_label, "Fungus")))
+        labels.append((len(labels), (manual_label, "Fungus"), None))
 
     elif not observation_ids and not labels:
         # Standard behavior: show help if no IDs, no manual label, and no CSV labels
         parser.print_help()
         sys.exit(1)
 
+
+def _prepare_observation_ids(observation_ids: list[str]) -> list[str]:
     # Remove empty entries
     observation_ids = [obs for obs in observation_ids if obs]
 
     # Merge adjacent tokens that form a spaced BugGuide ID.
     # Shell tokenization splits "BG 2520730" into ["BG", "2520730"];
     # rejoin them so extract_observation_id() sees the full form.
-    observation_ids = _merge_bugguide_tokens(observation_ids)
+    return _merge_bugguide_tokens(observation_ids)
 
-    # labels list is already initialized above
 
-    total_requested = len(observation_ids) + len(
-        labels
-    )  # Count pre-generated labels too
-
+def _print_generation_estimate(total_requested: int) -> None:
     if total_requested > 25:
         # The rate limiter smooths requests to one per second when busy.
         # Add 5% for the API call itself and other small delays.
@@ -3795,8 +3981,15 @@ def main() -> None:
             flush=True,
         )
 
-    start_time = time.time()
 
+def _process_observation_ids(
+    observation_ids: list[str],
+    args: argparse.Namespace,
+    fields_to_add: list[str],
+    fields_to_remove: list[str],
+    labels: list[SortableLabel],
+    failed: list[str],
+) -> None:
     # Respect API guidelines by limiting concurrency to a small number (<=5)
     max_workers = args.workers if args.workers else _DEFAULT_MAX_WORKERS
 
@@ -3806,52 +3999,113 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
-            executor.submit(
-                _process_one, i, input_value, args, fields_to_add, fields_to_remove
-            )
+            executor.submit(_process_one, i, input_value, args, fields_to_add, fields_to_remove)
             for i, input_value in enumerate(observation_ids)
         ]
         for fut in futures:
-            status, payload = fut.result()
-            if status == "ok" and payload:
-                # payload is (index, label, taxon)
-                index, label, taxon = payload
-                labels.append((index, (label, taxon)))
-            elif status == "err" and payload:
+            result = fut.result()
+            if result[0] == "ok":
+                # payload carries the observation datetime outside rendered fields.
+                payload = result[1]
+                index, label, taxon, observation_datetime = payload
+                labels.append((index, (label, taxon), observation_datetime))
+            elif result[0] == "err":
                 # Payload is (index, msg)
+                payload = result[1]
                 index, msg = payload
                 failed.append(f"[{index}] {msg}")
 
-    # Sort labels using the centralized helper
-    # labels contains tuples of (index, (label, taxon))
-    sorted_labels = sort_labels(labels, args.sort, args.title, args.sort_field)
-    labels = sorted_labels
 
-    original_count = len(labels)
+def _sort_and_stack_labels(
+    args: argparse.Namespace, labels: list[SortableLabel]
+) -> tuple[list[TaggedLabel], int]:
+    # Sort labels using the centralized helper
+    # labels contains (index, (label, taxon), internal observation datetime).
+    sorted_labels = sort_labels(labels, args.sort, args.title, args.sort_field)
+    original_count = len(sorted_labels)
 
     if args.stack_order:
-        labels = _stack_order(labels, args.num_per_page)
+        sorted_labels = _stack_order(sorted_labels, args.num_per_page)
+
+    return sorted_labels, original_count
+
+
+def _print_summary(
+    total_requested: int,
+    original_count: int,
+    failed: list[str],
+    start_time: float,
+) -> None:
+    # Print summary last so it appears at the very end
+    elapsed = time.time() - start_time
+    failed_count_text = (
+        (Fore.RED + str(len(failed)) + Style.RESET_ALL) if failed else str(len(failed))
+    )
+    generated_word = "generated"
+    if total_requested != original_count:
+        generated_word = Fore.RED + "generated" + Style.RESET_ALL
+    print(
+        f"Summary: requested {total_requested}, {generated_word} {original_count}, failed {failed_count_text}, time {elapsed:.2f}s",
+        flush=True,
+    )
+    if failed:
+        for msg in failed:
+            print_error(f" - {msg}")
+
+
+def main() -> None:
+    """
+    Command-line entry point that builds herbarium labels from iNaturalist or Mushroom Observer observation identifiers and writes them to stdout, an RTF file, or a PDF file.
+
+    Parses command-line arguments to accept observation numbers or URLs (or a file of them), fetches observation data in parallel, and generates formatted labels. Supported behaviors include:
+    - Writing labels to an RTF file (--rtf) or a PDF file (--pdf), or printing human-readable labels to stdout when no output file is specified. When writing files, prints the created filename and its size in kilobytes when available.
+    - A discovery mode (--find-ca) that prints iNaturalist observation URLs for observations located within California instead of generating labels.
+    - Reading observation identifiers from a file via --file; accepts space-, comma-, or newline-separated entries.
+    - Concurrency tuning via --workers (or INAT_MAX_WORKERS env var) and global retry timeout adjustment via --max-wait-seconds (or INAT_MAX_WAIT_SECONDS env var).
+    - Minimal verbosity control (--quiet) and a debug flag (--debug).
+
+    Updates module-global controls used by API calls (e.g., max wait time and quiet mode), enforces filename extensions for RTF/PDF outputs, and respects API rate/concurrency constraints while fetching data. Prints a final summary of requested, generated, and failed counts with elapsed time; prints per-failure messages to stderr. Exits with an error if no CLI arguments are supplied or if the provided input file cannot be read.
+    """
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
+    fields_to_add, fields_to_remove = _parse_custom_fields(args)
+
+    _validate_cli_args(parser, args)
+    rtf_mode, pdf_mode = _get_output_modes(args)
+    _reset_rate_limiter_state()
+    _apply_cli_controls(args)
+    _validate_output_filenames(parser, args, rtf_mode, pdf_mode)
+
+    # Initialize labels list
+    labels: list[SortableLabel] = []
+    failed: list[str] = []
+
+    observation_ids, csv_files = _split_cli_inputs(args, parser)
+    observation_ids = _read_observation_id_file(args, observation_ids)
+    _read_fungusfair_csv_files(args, parser, csv_files, labels)
+    _add_manual_fungusfair_label(args, parser, observation_ids, labels)
+    observation_ids = _prepare_observation_ids(observation_ids)
+
+    total_requested = len(observation_ids) + len(labels)  # Count pre-generated labels too
+
+    _print_generation_estimate(total_requested)
+
+    start_time = time.time()
+
+    _process_observation_ids(
+        observation_ids,
+        args,
+        fields_to_add,
+        fields_to_remove,
+        labels,
+        failed,
+    )
+    sorted_labels, original_count = _sort_and_stack_labels(args, labels)
 
     if not args.find_ca:
-        _emit_output(args, labels, rtf_mode, pdf_mode)
-
-        # Print summary last so it appears at the very end
-        elapsed = time.time() - start_time
-        failed_count_text = (
-            (Fore.RED + str(len(failed)) + Style.RESET_ALL)
-            if failed
-            else str(len(failed))
-        )
-        generated_word = "generated"
-        if total_requested != original_count:
-            generated_word = Fore.RED + "generated" + Style.RESET_ALL
-        print(
-            f"Summary: requested {total_requested}, {generated_word} {original_count}, failed {failed_count_text}, time {elapsed:.2f}s",
-            flush=True,
-        )
-        if failed:
-            for msg in failed:
-                print_error(f" - {msg}")
+        _emit_output(args, sorted_labels, rtf_mode, pdf_mode)
+        _print_summary(total_requested, original_count, failed, start_time)
 
 
 if __name__ == "__main__":

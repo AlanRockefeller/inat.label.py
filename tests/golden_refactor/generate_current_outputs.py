@@ -80,7 +80,7 @@ def _standard_labels(inat: ModuleType, fixtures: ModuleType) -> list:
         ),
     ]
     labels = [label for label in labels if label is not None]
-    return inat.sort_labels([(i, label) for i, label in enumerate(labels)], None, None, None)
+    return inat.sort_labels([(i, label, None) for i, label in enumerate(labels)], None, None, None)
 
 
 def _minilabel_labels(standard_labels: list) -> list:

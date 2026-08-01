@@ -119,7 +119,15 @@ def _install_import_stubs():
         def _parse(value, fuzzy=False):
             del fuzzy
             text = str(value)
-            for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%B %d, %Y', '%b %d, %Y'):
+            for fmt in (
+                '%Y-%m-%d',
+                '%Y/%m/%d',
+                '%B %d, %Y',
+                '%b %d, %Y',
+                '%Y-%m-%d %I:%M %p',
+                '%Y-%m-%d %H:%M:%S',
+                '%B %d, %Y %I:%M %p',
+            ):
                 try:
                     return datetime.datetime.strptime(text, fmt)
                 except ValueError:
