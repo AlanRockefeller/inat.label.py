@@ -63,7 +63,18 @@ def _patch_observation_fetcher(inat: ModuleType, fixtures: ModuleType) -> None:
     def fake_get_observation_data(observation_id: object) -> tuple[dict, str]:
         return copy.deepcopy(observations[str(observation_id)])
 
+    taxon_details = {
+        observation[0]['taxon']['id']: observation[0]['taxon_details']
+        for observation in observations.values()
+        if observation[0].get('taxon', {}).get('id')
+        and observation[0].get('taxon_details')
+    }
+
+    def fake_get_taxon_details(taxon_id: object) -> dict | None:
+        return copy.deepcopy(taxon_details.get(taxon_id))
+
     inat.get_observation_data = fake_get_observation_data
+    inat.get_taxon_details = fake_get_taxon_details
 
 
 def _standard_labels(inat: ModuleType, fixtures: ModuleType) -> list:

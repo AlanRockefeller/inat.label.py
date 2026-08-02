@@ -2210,7 +2210,8 @@
                         </div>
                     </div>
 
-                    <div id="warningMessage" class="warning" style="display: none">
+                    <div id="warningMessage" class="warning" style="display: none" role="alert"
+                        aria-live="assertive" aria-atomic="true">
                         <span id="warningText"></span>
                     </div>
 
@@ -2296,9 +2297,10 @@
             </section>
         </main>
     </div>
-    <div id="toast"><span id="toastMessage"></span></div>
+    <div id="toast" role="alert" aria-live="assertive" aria-atomic="true"><span id="toastMessage"></span></div>
     <!-- Log Modal -->
-    <div id="logModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
+    <div id="logModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="logModalTitle"
+        tabindex="-1">
         <div class="modal">
             <div class="modal-header">
                 <div class="modal-title" id="logModalTitle">
@@ -2315,7 +2317,8 @@
         </div>
     </div>
     <!-- Add Observations Modal -->
-    <div id="addObsModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="addObsTitle">
+    <div id="addObsModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="addObsTitle"
+        tabindex="-1">
         <div class="modal addobs-modal">
             <div class="modal-header addobs-modal-header">
                 <div class="modal-title" id="addObsTitle">Add Observations</div>
@@ -2503,7 +2506,7 @@
     </div>
     <!-- Conditional Print Preflight Modal -->
     <div id="printPreflightModal" class="modal-overlay" role="dialog" aria-modal="true"
-        aria-labelledby="printPreflightTitle">
+        aria-labelledby="printPreflightTitle" tabindex="-1">
         <div class="modal">
             <div class="modal-header">
                 <div class="modal-title" id="printPreflightTitle">Review label job</div>
@@ -2794,7 +2797,7 @@
                 const repeatsCanonicalInatId = /^\d+$/.test(canonicalId) && typedValue === canonicalId;
                 let displayHtml = escapeHtml(repeatsCanonicalInatId ? "iNat" : displayText);
                 const externalObservationLink = (url, label) =>
-                    `<a href="${url}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
+                    `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
                 const convertedMatch = displayText.match(/^MO (\d+) → iNat (\d+)$/);
 
                 if (
@@ -3242,6 +3245,41 @@
             $("#logModal").css("display", "flex");
         }
 
+        const modalOverlayIds = ["logModal", "addObsModal", "printPreflightModal"];
+
+        function trapFocusInOpenModal(event) {
+            if (event.key !== "Tab") return;
+            const openModals = modalOverlayIds
+                .map((id) => document.getElementById(id))
+                .filter((modal) => modal && getComputedStyle(modal).display !== "none");
+            const modal = openModals[openModals.length - 1];
+            if (!modal) return;
+
+            const focusable = Array.from(
+                modal.querySelectorAll(
+                    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+                ),
+            ).filter((element) => element.getClientRects().length > 0);
+            if (!focusable.length) {
+                event.preventDefault();
+                modal.focus();
+                return;
+            }
+
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (!modal.contains(document.activeElement)) {
+                event.preventDefault();
+                (event.shiftKey ? last : first).focus();
+            } else if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        }
+
         $("#logModalOk, #logModalCloseX").on("click", function () {
             $("#logModal").hide();
         });
@@ -3251,8 +3289,9 @@
             if (e.target === this) $(this).hide();
         });
 
-        // ESC key closes modal
+        // Keep keyboard focus inside the active modal and preserve ESC closing.
         $(document).on("keydown", function (e) {
+            trapFocusInOpenModal(e);
             if (e.key !== "Escape") return;
             if ($("#printPreflightModal").css("display") === "flex") {
                 closePrintPreflight();
@@ -3681,21 +3720,15 @@
                     method: "POST",
                     body: formData,
                 });
+                const data = await startResp.json();
 
                 if (!startResp.ok) {
-                    const errorData = await startResp.json();
-
-                    if (
-                        startResp.status === 429 &&
-                        errorData.error.includes("Too many concurrent jobs")
-                    ) {
-                        showTooManyJobsModal(errorData.error);
-                    } else {
-                        throw new Error(errorData.error || "Failed to start print job");
-                    }
+                    const startError = new Error(data.error || "Failed to start print job");
+                    startError.status = startResp.status;
+                    throw startError;
                 }
 
-                const { job_id, warning } = await startResp.json();
+                const { job_id, warning } = data;
                 if (!job_id) throw new Error("No job id returned");
 
                 if (warning) {
@@ -3856,9 +3889,15 @@
                 };
             } catch (err) {
                 btn.html(originalText).removeClass("is-busy").prop("disabled", false);
-                showErrorModal(
-                    "Failed to start label generation. Please try again.",
-                );
+                const message = escapeHtml(err.message || "Failed to start print job");
+                if (
+                    err.status === 429 &&
+                    err.message.includes("Too many concurrent jobs")
+                ) {
+                    showTooManyJobsModal(message);
+                } else {
+                    showErrorModal(message);
+                }
             }
         }
 
@@ -4350,9 +4389,10 @@
 
         function renderAddObsResults(items) {
             const onSheetKeys = buildOnSheetObservationKeys();
+            const filterSource = getAddObsFilters().source;
             addObsResultItems = items.map((item, originalIndex) => {
                 const displayId = String(item.inat_id || item.id || "");
-                const canonicalKey = canonicalObservationKey(displayId, getAddObsFilters().source);
+                const canonicalKey = canonicalObservationKey(displayId, filterSource);
                 return {
                     ...item,
                     display_id: displayId,
@@ -4369,7 +4409,7 @@
                 previewCache[String(item.id)] = item;
             });
 
-            const resultSource = getAddObsFilters().source;
+            const resultSource = filterSource;
             let remainingSelectionSlots = addObsRemainingRunCapacity();
             const rows = addObsResultItems.map((item) => {
                 const dataId = escapeHtml(item.id);

@@ -172,6 +172,7 @@ def test_observed_on_string_is_mushroom_observer_fallback(inat_module):
 
 def test_observed_on_string_timezone_abbreviation_is_host_independent(inat_module):
     with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
         pst_datetime = inat_module.observation_sort_datetime(
             {'observed_on_string': '2025-11-14 03:25 PM PST'}
         )

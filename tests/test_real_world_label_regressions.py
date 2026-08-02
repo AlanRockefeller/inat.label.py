@@ -2,7 +2,6 @@ import copy
 import re
 import sys
 import textwrap
-import warnings
 
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
@@ -95,20 +94,7 @@ def _label_dict(label_fields):
 def _assert_user_visible_text(actual, expected):
     actual = actual.strip()
     expected = textwrap.dedent(expected).strip()
-    if actual == expected:
-        return
-    if _normalize_spacing(actual) == _normalize_spacing(expected):
-        warnings.warn(
-            'Only user-visible spacing changed in label output; review whether it is OK.',
-            UserWarning,
-            stacklevel=2,
-        )
-        return
     assert actual == expected
-
-
-def _normalize_spacing(text):
-    return '\n'.join(' '.join(line.split()) for line in text.strip().splitlines())
 
 
 def _strip_runtime_lines(stdout):

@@ -62,6 +62,17 @@ def test_known_abbreviation_after_a_meridiem_still_resolves(inat_module):
     assert result == _at(2019, 5, 23, 20, 20)
 
 
+def test_known_abbreviation_takes_precedence_over_named_observation_zone(inat_module):
+    result = inat_module.observation_sort_datetime(
+        {
+            'observed_on_string': '2019-05-23 01:20 PM UTC',
+            'observed_time_zone': 'America/Los_Angeles',
+        }
+    )
+
+    assert result == _at(2019, 5, 23, 13, 20)
+
+
 def test_afternoon_sorts_after_morning_on_the_same_day(inat_module):
     afternoon = inat_module.observation_sort_datetime(
         {'observed_on_string': '2019-05-23 01:20 PM'}

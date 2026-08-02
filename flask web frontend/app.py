@@ -87,6 +87,9 @@ MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
 # the walk is bounded; past the budget the counts are marked incomplete and the
 # window chips are skipped rather than tying up the worker.
 MO_MAX_WINDOW_PAGES = int(os.environ.get("MO_MAX_WINDOW_PAGES", "5"))
+# Bound cursor-based iNaturalist searches even when local filtering prevents the
+# preview batch from filling.
+INAT_MAX_SEARCH_PAGES = int(os.environ.get("INAT_MAX_SEARCH_PAGES", "10"))
 # The daily counts behind the date windows are identical for identical filters,
 # so a short-lived cache keeps debounced keystrokes off the rate-limited,
 # lock-serialized iNaturalist client.
@@ -438,7 +441,7 @@ def lookup_batch_internal(obs_inputs):
                         id_to_result[str(r["id"])] = r
             except requests.exceptions.RequestException as e:
                 # Apply a generic error to all inat IDs in the failed chunk
-                msg = f"Error fetching iNaturalist data: {str(e)}"
+                msg = f"Error fetching iNaturalist data: {e!s}"
                 for inat_id in chunk:
                     for idx in inat_map_indices.get(inat_id, []):
                         if (
@@ -571,7 +574,7 @@ def lookup_batch_internal(obs_inputs):
             for idx in mo_map_indices.get(mo_num, []):
                 results[idx][
                     "error"
-                ] = f"Error processing Mushroom Observer #{mo_num}: {str(e)}"
+                ] = f"Error processing Mushroom Observer #{mo_num}: {e!s}"
                 results[idx]["status"] = 500
 
     # Normalize output: ensure items list of dicts with either error or data
@@ -747,7 +750,7 @@ def submit():
                             ]
                         )
                 except Exception as e:
-                    app.logger.warning(f"Error fetching MO data: {str(e)}")
+                    app.logger.warning(f"Error fetching MO data: {e!s}")
                     csv_data.append(
                         [valid_counter, rid_str, "Unknown (API Error)", "Unknown"]
                     )
@@ -809,6 +812,9 @@ def print_start():
     if sort_mode == "custom" and not sort_field:
         app.logger.warning("print_start: Custom sort requested without a field name")
         return jsonify({"error": "Sorting by field requires a field name"}), 400
+    if sort_field.startswith("-"):
+        app.logger.warning("print_start: Sort field must not start with '-'")
+        return jsonify({"error": "Invalid sort field"}), 400
     if sort_mode != "custom":
         sort_field = ""
     raw_observations = request.form.getlist("observations[]")
@@ -1477,9 +1483,9 @@ def find_observations():
                     return jsonify({"error": f"Taxon not found: {taxon_input}"}), 404
             except requests.RequestException as e:
                 api_error_logger.warning(
-                    f"Taxon lookup failed: {str(e)}", exc_info=True
+                    f"Taxon lookup failed: {e!s}", exc_info=True
                 )
-                return jsonify({"error": f"Error looking up taxon: {str(e)}"}), 500
+                return jsonify({"error": f"Error looking up taxon: {e!s}"}), 500
 
         inat_search_params = {
             "user_login": username_inat,
@@ -1513,8 +1519,12 @@ def find_observations():
         last_id = 0
         first_page = True
         exhausted_results = False
+        fetched_pages = 0
         try:
-            while len(current_batch) < cap:
+            while (
+                len(current_batch) < cap
+                and fetched_pages < INAT_MAX_SEARCH_PAGES
+            ):
                 params = {
                     **inat_search_params,
                     "per_page": 200,
@@ -1529,6 +1539,7 @@ def find_observations():
                     params=params,
                     timeout=30,
                 )
+                fetched_pages += 1
                 data = resp.json()
                 if first_page:
                     # Only the first page reports the true match count.
@@ -1543,12 +1554,23 @@ def find_observations():
                     exhausted_results = True
                     break
 
+                previous_last_id = last_id
                 for r in results:
                     if len(current_batch) >= cap:
                         break
-                    oid = r.get("id")
-                    if oid:
-                        last_id = oid
+                    if not isinstance(r, dict):
+                        continue
+                    raw_oid = r.get("id")
+                    if (
+                        isinstance(raw_oid, bool)
+                        or not str(raw_oid).isdigit()
+                        or int(raw_oid) < 1
+                    ):
+                        continue
+                    oid = int(raw_oid)
+                    if oid <= last_id:
+                        continue
+                    last_id = oid
                     if obs_field_name and not _observation_has_required_field(
                         r, obs_field_id, obs_field_name
                     ):
@@ -1575,6 +1597,25 @@ def find_observations():
                             "color": color,
                         }
                     )
+                if last_id <= previous_last_id:
+                    api_error_logger.warning(
+                        "Stopped iNaturalist paging for '%s' because page %s "
+                        "had no usable observation IDs",
+                        username_inat,
+                        fetched_pages,
+                    )
+                    break
+            if (
+                fetched_pages >= INAT_MAX_SEARCH_PAGES
+                and len(current_batch) < cap
+                and not exhausted_results
+            ):
+                api_error_logger.info(
+                    "Stopped iNaturalist paging for '%s' after %s pages "
+                    "(budget INAT_MAX_SEARCH_PAGES)",
+                    username_inat,
+                    fetched_pages,
+                )
             found = current_batch
             if obs_field_name and exhausted_results:
                 total_count = len(current_batch)
@@ -1602,10 +1643,10 @@ def find_observations():
                     )
         except requests.RequestException as e:
             api_error_logger.warning(
-                f"Observation fetch for user '{username_inat}' failed: {str(e)}",
+                f"Observation fetch for user '{username_inat}' failed: {e!s}",
                 exc_info=True,
             )
-            error_message = f"Error fetching observations: {str(e)}"
+            error_message = f"Error fetching observations: {e!s}"
             try:
                 if e.response:
                     error_details = e.response.json()
@@ -1686,6 +1727,9 @@ def find_observations():
                 mo_result_count += len(results)
 
                 for r in results:
+                    if not isinstance(r, dict):
+                        mo_dates_complete = False
+                        continue
                     selected_date = (
                         r.get("created_at")
                         if date_mode == "created"
@@ -1749,13 +1793,13 @@ def find_observations():
                 )
         except requests.RequestException as e:
             api_error_logger.warning(
-                f"Mushroom Observer fetch for user '{username_mo}' failed: {str(e)}",
+                f"Mushroom Observer fetch for user '{username_mo}' failed: {e!s}",
                 exc_info=True,
             )
             return (
                 jsonify(
                     {
-                        "error": f"Error fetching Mushroom Observer observations: {str(e)}"
+                        "error": f"Error fetching Mushroom Observer observations: {e!s}"
                     }
                 ),
                 500,

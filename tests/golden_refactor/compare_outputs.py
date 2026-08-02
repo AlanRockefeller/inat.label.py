@@ -61,17 +61,39 @@ def _normalize_qdf(data: bytes) -> bytes:
 
 
 def _same_file(left: Path, right: Path) -> bool:
+    if not left.is_file() or not right.is_file():
+        return False
     return filecmp.cmp(left, right, shallow=False)
+
+
+def _missing_artifact_failure(name: str, left: Path, right: Path) -> str | None:
+    missing = []
+    if not left.is_file():
+        missing.append("before")
+    if not right.is_file():
+        missing.append("after")
+    if not missing:
+        return None
+    return f"{name}: missing {' and '.join(missing)} artifact{'s' if len(missing) > 1 else ''}"
 
 
 def _compare_byte_artifacts(before: Path, after: Path) -> list[str]:
     failures = []
     for name in BYTE_ARTIFACTS:
-        if not _same_file(before / name, after / name):
+        left = before / name
+        right = after / name
+        if missing := _missing_artifact_failure(name, left, right):
+            failures.append(missing)
+        elif not _same_file(left, right):
             failures.append(f"{name}: byte mismatch")
     for name in STDOUT_ARTIFACTS:
-        left = _read_bytes(before / name)
-        right = _read_bytes(after / name)
+        left_path = before / name
+        right_path = after / name
+        if missing := _missing_artifact_failure(name, left_path, right_path):
+            failures.append(missing)
+            continue
+        left = _read_bytes(left_path)
+        right = _read_bytes(right_path)
         if _normalize_stdout(left) != _normalize_stdout(right):
             failures.append(f"{name}: normalized stdout mismatch")
     return failures
@@ -141,7 +163,14 @@ def _compare_pngs(stem: str, work_dir: Path) -> list[str]:
 
 
 def _compare_pdf_artifacts(before: Path, after: Path) -> list[str]:
-    failures = []
+    failures = [
+        missing
+        for name in PDF_ARTIFACTS
+        if (missing := _missing_artifact_failure(name, before / name, after / name))
+    ]
+    if failures:
+        return failures
+
     raw_matches = []
     with tempfile.TemporaryDirectory(prefix="inat-golden-compare-") as tmp:
         work_dir = Path(tmp)

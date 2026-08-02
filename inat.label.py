@@ -687,7 +687,7 @@ def _parse_retry_after(resp: requests.Response) -> float | None:
             dt = parsedate_to_datetime(ra)
             now_utc = datetime.datetime.now(datetime.timezone.utc)  # noqa: UP017
             return max(0.0, (dt - now_utc).total_seconds())
-        except Exception:
+        except (TypeError, ValueError):
             return None
 
 
@@ -1423,13 +1423,6 @@ def _observation_timezone(
     observation_data: ObsData, abbreviation: str | None = None
 ) -> datetime.tzinfo | None:
     """Resolve an API time-zone name or a known fixed-offset abbreviation."""
-    zone_name = observation_data.get("observed_time_zone")
-    if zone_name:
-        try:
-            return ZoneInfo(str(zone_name))
-        except (ValueError, ZoneInfoNotFoundError):
-            pass
-
     if abbreviation:
         offset_hours = _TZ_ABBREVIATION_OFFSETS.get(abbreviation.upper())
         if offset_hours is not None:
@@ -1438,6 +1431,13 @@ def _observation_timezone(
             return datetime.timezone(
                 datetime.timedelta(hours=offset_hours), abbreviation.upper()
             )
+
+    zone_name = observation_data.get("observed_time_zone")
+    if zone_name:
+        try:
+            return ZoneInfo(str(zone_name))
+        except (ValueError, ZoneInfoNotFoundError):
+            pass
     return None
 
 
