@@ -691,10 +691,20 @@
         .field-actions {
             display: flex;
             flex-wrap: wrap;
+            align-items: center;
             gap: 22px;
             margin-top: 16px;
             padding-top: 14px;
             border-top: 1px solid var(--rule);
+        }
+
+        /* Sort rides along on the button row: the options row above is already
+           full, so putting it there added a line to the fieldset. */
+        .sort-controls {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-left: auto;
         }
 
         .warning {
@@ -728,6 +738,22 @@
         .tally b {
             color: var(--ink-hi);
             font-weight: 500;
+        }
+
+        .tally-clear {
+            border: 0;
+            background: transparent;
+            color: var(--ink-mute);
+            font: inherit;
+            letter-spacing: inherit;
+            text-transform: inherit;
+            padding: 0 0 0 10px;
+            cursor: pointer;
+        }
+
+        .tally-clear:hover,
+        .tally-clear:focus-visible {
+            color: var(--stamp);
         }
 
         .tally nav {
@@ -856,6 +882,11 @@
         }
 
         @media screen and (max-width: 720px) {
+            /* Once the button row wraps, right-aligning Sort just strands it. */
+            .sort-controls {
+                margin-left: 0;
+            }
+
             .masthead h1 {
                 font-size: 34px;
             }
@@ -1132,7 +1163,62 @@
             grid-column: auto;
         }
 
+        .addobs-observation-field {
+            grid-column: 1 / 3;
+            position: relative;
+        }
+
+        .observation-field-suggestions {
+            position: absolute;
+            z-index: 5;
+            inset: calc(100% - 1px) 0 auto;
+            max-height: 15rem;
+            overflow-y: auto;
+            border: 1px solid var(--rule-hi);
+            border-radius: 0 0 var(--r) var(--r);
+            background: var(--slip-hi);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.25);
+        }
+
+        .observation-field-suggestions[hidden] {
+            display: none;
+        }
+
+        .observation-field-option {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            width: 100%;
+            border: 0;
+            border-bottom: 1px solid var(--rule);
+            background: transparent;
+            color: var(--ink);
+            padding: 0.55rem 0.65rem;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .observation-field-option:last-child {
+            border-bottom: 0;
+        }
+
+        .observation-field-option[aria-selected="true"],
+        .observation-field-option:hover {
+            background: var(--slip);
+        }
+
+        .observation-field-option-meta {
+            flex: 0 0 auto;
+            color: var(--ink-mute);
+            font-family: var(--mono);
+            font-size: 0.72rem;
+        }
+
         .addobs-presets-group {
+            grid-column: 3 / 5;
+        }
+
+        #addObsModal.is-mo-source .addobs-presets-group {
             grid-column: 1 / 5;
         }
 
@@ -1151,6 +1237,24 @@
 
         .addobs-search-status.is-error {
             color: var(--stamp);
+        }
+
+        .print-preflight-summary {
+            display: grid;
+            grid-template-columns: minmax(10rem, auto) minmax(0, 1fr);
+            gap: 0.45rem 1rem;
+            margin: 0;
+        }
+
+        .print-preflight-summary dt {
+            color: var(--ink-mute);
+            font-family: var(--mono);
+            font-size: 0.78rem;
+        }
+
+        .print-preflight-summary dd {
+            margin: 0;
+            overflow-wrap: anywhere;
         }
 
         .field-group {
@@ -1807,7 +1911,15 @@
                 grid-column: 1;
             }
 
+            .addobs-observation-field {
+                grid-column: 1 / 3;
+            }
+
             .addobs-presets-group {
+                grid-column: 3 / -1;
+            }
+
+            #addObsModal.is-mo-source .addobs-presets-group {
                 grid-column: 2 / -1;
             }
 
@@ -1819,6 +1931,10 @@
         @media screen and (max-width: 900px) {
             .addobs-filter-bar {
                 grid-template-columns: minmax(250px, 1.35fr) minmax(200px, 1fr);
+            }
+
+            .addobs-observation-field {
+                grid-column: 1 / -1;
             }
 
             .addobs-presets-group {
@@ -1855,8 +1971,13 @@
             }
 
             .addobs-date-mode,
+            .addobs-observation-field,
             .addobs-presets-group,
             .addobs-search-status {
+                grid-column: 1;
+            }
+
+            #addObsModal.is-mo-source .addobs-presets-group {
                 grid-column: 1;
             }
 
@@ -2081,7 +2202,7 @@
                             <span class="slip-edge"></span>
                             <span class="observation-number slip-no">1</span>
                             <input type="text" id="obs1" name="observations[]"
-                                class="obs-input obs-id-input slip-input" placeholder="Enter observation number(s)"
+                                class="obs-input obs-id-input slip-input" placeholder="Enter observation number"
                                 aria-label="Observation 1" autocomplete="off" />
                             <div class="result slip-det"></div>
                             <button type="button" class="removeButton slip-strike"
@@ -2121,34 +2242,37 @@
                                     <option value="10">10 — largest</option>
                                 </select>
                             </label>
-                            <label class="opt">Sort
-                                <select id="sortMode" name="sort">
-                                    <option value="">Observation #</option>
-                                    <option value="date">Date — oldest first</option>
-                                    <option value="date-desc">Date — newest first</option>
-                                    <option value="voucher">Voucher number</option>
-                                    <option value="custom">Field…</option>
-                                    <option value="none">As entered</option>
-                                </select>
-                            </label>
-                            <label class="opt" id="sortFieldOpt" hidden>Sort field
-                                <input type="text" id="sortField" name="sort_field" class="field-input"
-                                    placeholder="Field name" aria-label="Field name to sort by"
-                                    autocomplete="off" />
-                            </label>
                         </div>
                         <div class="field-actions">
                             <button type="button" id="editFieldsButton" class="btn btn-quiet">+ Observation fields</button>
                             <button type="button" id="customFieldsButton" class="btn btn-quiet">− Suppress fields</button>
                             <button type="button" id="downloadCsvButton" class="btn btn-quiet">↓ CSV</button>
+                            <div class="sort-controls">
+                                <label class="opt">Sort
+                                    <select id="sortMode" name="sort">
+                                        <option value="">Observation #</option>
+                                        <option value="date">Date — oldest first</option>
+                                        <option value="date-desc">Date — newest first</option>
+                                        <option value="voucher">Voucher number</option>
+                                        <option value="custom">Field…</option>
+                                        <option value="none">As entered</option>
+                                    </select>
+                                </label>
+                                <label class="opt" id="sortFieldOpt" hidden>Field
+                                    <input type="text" id="sortField" name="sort_field" class="field-input"
+                                        placeholder="Field name" aria-label="Field name to sort by"
+                                        autocomplete="off" />
+                                </label>
+                            </div>
                         </div>
                     </fieldset>
                 </form>
 
                 <div class="tally">
-                    <div><b id="tallyCount">0</b> <span id="tallySlipWord">slips</span><span
+                    <div><b id="tallyCount">0</b> <span id="tallyLabelWord">labels</span><span
                             id="tallySheetSummary"> &nbsp;·&nbsp; <b id="tallySheets">1</b>
-                            <span id="tallySheetWord">sheet</span> at 8 per page</span></div>
+                            <span id="tallySheetWord">sheet</span> at 8 per page</span><button type="button"
+                            id="clearQueueButton" class="tally-clear">Clear queue</button></div>
                     <nav>
                         <a href="/labels/todo">To-do</a>
                         <a href="https://dikarya.us/voucher-labels" target="_blank">Voucher Labels</a>
@@ -2249,6 +2373,16 @@
                         </div>
                         <div id="addObsDateModeHelper" class="modal-helper-text">Filtering by observation date</div>
                     </div>
+                    <div class="field-group addobs-observation-field" id="addObsObservationFieldGroup">
+                        <label for="addObsObservationField" class="field-label">Require observation field</label>
+                        <input type="text" id="addObsObservationField" class="field-input" autocomplete="off"
+                            role="combobox" aria-autocomplete="list" aria-expanded="false"
+                            aria-controls="addObsObservationFieldList" aria-activedescendant=""
+                            placeholder="Type a field name" />
+                        <input type="hidden" id="addObsObservationFieldId" />
+                        <div class="modal-helper-text">Only include observations where this field has a nonempty value.</div>
+                        <div id="addObsObservationFieldList" class="observation-field-suggestions" role="listbox" hidden></div>
+                    </div>
                     <div class="field-group addobs-presets-group">
                         <div class="field-label">Date Presets</div>
                         <div class="addobs-pills">
@@ -2306,7 +2440,7 @@
                 </div>
             </div>
             <div class="modal-footer addobs-modal-footer">
-                <div id="addObsRunSummary" class="addobs-run-summary" aria-live="polite">0 slips already entered · 0 observations selected · 0 slips after adding</div>
+                <div id="addObsRunSummary" class="addobs-run-summary" aria-live="polite">0 observations already entered · 0 observations selected · 0 observations after adding</div>
                 <div class="addobs-footer-actions">
                     <button type="button" id="addObsCancel" class="btn btn-outline">
                         Cancel</button><button type="button" id="addObsConfirm" class="btn btn-primary" disabled>
@@ -2367,6 +2501,22 @@
             </div>
         </div>
     </div>
+    <!-- Conditional Print Preflight Modal -->
+    <div id="printPreflightModal" class="modal-overlay" role="dialog" aria-modal="true"
+        aria-labelledby="printPreflightTitle">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title" id="printPreflightTitle">Review label job</div>
+                <button type="button" id="printPreflightCloseX" class="btn btn-outline btn-icon"
+                    aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" id="printPreflightBody"></div>
+            <div class="modal-footer">
+                <button type="button" id="printPreflightCancel" class="btn btn-outline">Cancel</button>
+                <button type="button" id="printPreflightConfirm" class="btn btn-primary">Print RTF</button>
+            </div>
+        </div>
+    </div>
     <script>
         window.__labels_js_ran = (window.__labels_js_ran || 0) + 1;
 
@@ -2377,6 +2527,11 @@
             let previewCache = {};
             let allObservationData = {};
             let customFields = [];
+            const LARGE_PRINTED_LABEL_JOB = 100;
+            let rowLookupSerial = 0;
+            const pendingRowLookups = new Set();
+            let pendingPrintRequest = null;
+            let printPreflightOrigin = null;
 
             function setTheme(theme) {
                 const nextTheme = theme === "light" ? "light" : "dark";
@@ -2429,83 +2584,75 @@
             });
         }
 
-        function countTotalObservations() {
-            let total = 0;
-
-            $(".obs-id-input").each(function () {
-                const inputValue = $(this).val().trim();
-
-                if (inputValue !== "") {
-                    const obsIds = parseObservationInput(inputValue);
-                    total += obsIds.length;
-                }
-            });
-            return total;
+        function getQueuedObservationIds() {
+            return LabelsAddObsHelpers.queuedObservationIds(
+                $("#observationInputs .obs-id-input")
+                    .map(function () { return $(this).val(); })
+                    .get(),
+            );
         }
 
-        function nonEmptySlips() {
+        function countQueuedObservations() {
+            return getQueuedObservationIds().length;
+        }
+
+        function countPrintedLabels() {
+            return LabelsAddObsHelpers.printedLabelCount(
+                countQueuedObservations(),
+                $("#printDuplicateLabels").is(":checked"),
+            );
+        }
+
+        function populatedObservationRows() {
             return $("#observationInputs .observation-input").filter(function () {
-                return $(this).find(".obs-id-input").val().trim() !== "";
+                return parseObservationInput($(this).find(".obs-id-input").val()).length === 1;
             });
         }
 
-        function countEffectiveSlips() {
-            const duplicateMultiplier = $("#printDuplicateLabels").is(":checked") ? 2 : 1;
-            return nonEmptySlips().length * duplicateMultiplier;
-        }
-
-        function updateSheetBreaks(total) {
+        function updateSheetBreaks() {
             $("#observationInputs .sheet-break").remove();
-            if ($("#minilabelSize").val() !== "" || total <= 8) return;
-
-            const duplicateMultiplier = $("#printDuplicateLabels").is(":checked") ? 2 : 1;
-            let effectiveCount = 0;
-            let nextBreak = 8;
-            let sheetNumber = 2;
-
-            nonEmptySlips().each(function () {
-                const $slip = $(this);
-                effectiveCount += duplicateMultiplier;
-
-                while (effectiveCount >= nextBreak && nextBreak < total) {
-                    $("<div>", {
-                        class: "sheet-break",
-                        role: "separator",
-                        "aria-label": `Sheet ${sheetNumber}`,
-                    })
-                        .text(`sheet ${sheetNumber}`)
-                        .insertAfter($slip);
-                    nextBreak += 8;
-                    sheetNumber += 1;
-                }
+            const $rows = populatedObservationRows();
+            const breakRows = LabelsAddObsHelpers.sheetBreakAfterRows(
+                $rows.length,
+                $("#printDuplicateLabels").is(":checked"),
+                $("#minilabelSize").val() !== "",
+            );
+            breakRows.forEach(function (rowCount, index) {
+                $("<div>", {
+                    class: "sheet-break",
+                    role: "separator",
+                    "aria-label": `Sheet ${index + 2}`,
+                })
+                    .text(`sheet ${index + 2}`)
+                    .insertAfter($rows.eq(rowCount - 1));
             });
         }
 
         function updateTally(total) {
             $("#tallyCount").text(total);
-            $("#tallySlipWord").text(total === 1 ? "slip" : "slips");
+            $("#tallyLabelWord").text(total === 1 ? "label" : "labels");
 
             const miniLabelsOn = $("#minilabelSize").val() !== "";
             $("#tallySheetSummary").toggle(!miniLabelsOn);
             if (miniLabelsOn) return;
 
-            const sheets = Math.max(1, Math.ceil(total / 8));
+            const sheets = LabelsAddObsHelpers.standardSheetCount(total);
             $("#tallySheets").text(sheets);
             $("#tallySheetWord").text(sheets === 1 ? "sheet" : "sheets");
         }
 
         function updateWarningMessage() {
-            const observationTotal = countTotalObservations();
-            const effectiveSlipTotal = countEffectiveSlips();
+            const observationTotal = countQueuedObservations();
+            const printedLabelTotal = countPrintedLabels();
             const warningDiv = $("#warningMessage");
             const warningText = $("#warningText");
 
-            updateTally(effectiveSlipTotal);
-            updateSheetBreaks(effectiveSlipTotal);
+            updateTally(printedLabelTotal);
+            updateSheetBreaks();
 
             if (observationTotal > maxObservations) {
                 warningText.text(
-                    `You have entered ${observationTotal} observations. If you need to make more than ${maxObservations} labels, please contact Alan Rockefeller to raise the limit.`,
+                    `You have queued ${observationTotal} observations. A run can contain at most ${maxObservations} observations.`,
                 );
                 warningDiv.show();
             } else {
@@ -2513,7 +2660,7 @@
             }
         }
 
-        function addObservationField() {
+        function addObservationField($afterRow = null) {
             observationCount++;
 
             const newField = `
@@ -2524,14 +2671,37 @@
                        id="obs${observationCount}"
                        name="observations[]"
                        class="obs-input obs-id-input slip-input"
-                       placeholder="Enter observation number(s)"
+                       placeholder="Enter observation number"
                        aria-label="Observation ${observationCount}"
                        autocomplete="off">
                 <div class="result slip-det"></div>
                 <button type="button" class="removeButton slip-strike"
                         aria-label="Remove row ${observationCount}">&times;</button>
             </div>`;
-            $("#observationInputs").append(newField);
+            const $newField = $(newField);
+            if ($afterRow && $afterRow.length) {
+                $newField.insertAfter($afterRow);
+            } else {
+                $("#observationInputs").append($newField);
+            }
+            return $newField;
+        }
+
+        function ensureSingleTrailingEmptyRow() {
+            const $rows = $("#observationInputs .observation-input");
+            $rows.each(function () {
+                const $row = $(this);
+                if (!$row.find(".obs-id-input").val().trim() && !$row.is(":last-child")) {
+                    const inputId = $row.find(".obs-id-input").attr("id");
+                    delete allObservationData[inputId];
+                    $row.remove();
+                }
+            });
+            const $last = $("#observationInputs .observation-input").last();
+            if (!$last.length || $last.find(".obs-id-input").val().trim()) {
+                addObservationField();
+            }
+            updateObservationNumbers();
         }
 
         function canonicalObservationKey(value, sourceHint = "") {
@@ -2564,15 +2734,10 @@
                     });
                 }
 
-                const rawInput = $slip.find(".obs-id-input").val() || "";
-                rawInput.split(/[\s,]+/).forEach((value) => {
-                    const key = canonicalObservationKey(value);
-                    if (key) keys.add(key);
-                });
-                parseObservationInput(rawInput).forEach((value) => {
-                    const key = canonicalObservationKey(value);
-                    if (key) keys.add(key);
-                });
+            });
+            getQueuedObservationIds().forEach((value) => {
+                const key = canonicalObservationKey(value);
+                if (key) keys.add(key);
             });
             return keys;
         }
@@ -2720,131 +2885,131 @@
             });
         }
 
-        // 2. Actually look up an observation and render the result
-        function lookupObservation($input) {
-            const resultSpan = $input.siblings(".result");
-            const $slip = $input.closest(".slip");
-            const raw = $input.val().trim();
-            const inputId = $input.attr("id");
+        function parseObservationInput(input) {
+            return LabelsAddObsHelpers.parseObservationInput(input);
+        }
 
-            resultSpan.empty();
-            $slip.removeAttr("data-taxon");
-            delete allObservationData[inputId];
-            updateDuplicateFlags();
+        function expandObservationInput($input, obsIds) {
+            const $rows = [];
+            let $row = $input.closest(".observation-input");
+            obsIds.forEach(function (obsId, index) {
+                if (index > 0) {
+                    const $next = $row.nextAll(".observation-input").first();
+                    if ($next.length && !$next.find(".obs-id-input").val().trim()) {
+                        $row = $next;
+                    } else {
+                        $row = addObservationField($row);
+                    }
+                }
+                const $rowInput = $row.find(".obs-id-input");
+                const inputId = $rowInput.attr("id");
+                delete allObservationData[inputId];
+                $row.removeAttr("data-taxon");
+                $row.find(".result").empty();
+                $rowInput.val(obsId);
+                $rows.push($rowInput);
+            });
+            ensureSingleTrailingEmptyRow();
+            return $rows;
+        }
 
-            if (!raw) return;
+        function lookupObservationRows($inputs, obsIds) {
+            if (!$inputs.length || !obsIds.length) return;
 
-            const obsIds = parseObservationInput(raw);
-            if (!obsIds.length) return;
-
-            // Auto-clean the input field
-            $input.val(obsIds.join(", "));
-
-            // Auto-enable minilabels for BugGuide (unless explicitly disabled via URL)
-            if (!suppressBugGuideMinilabelAutoEnable && obsIds.some(id => /^bg\d+$/i.test(id))) {
+            if (!suppressBugGuideMinilabelAutoEnable && obsIds.some((id) => /^bg\d+$/i.test(id))) {
                 if ($("#minilabelSize").val() === "") {
                     $("#minilabelSize").val("1");
-                    updateWarningMessage();
                 }
             }
 
-            resultSpan.html('<span class="is-busy">Loading</span>');
+            const rowStates = $inputs.map(function ($input, index) {
+                const token = ++rowLookupSerial;
+                const inputId = $input.attr("id");
+                $input
+                    .data("lookupToken", token)
+                    .data("lookupKey", obsIds[index])
+                    .data("lookupStatus", "loading");
+                $input.siblings(".result").html('<span class="is-busy">Loading</span>');
+                return { $input, inputId, token, obsId: obsIds[index] };
+            });
 
-            $.ajax({
+            const request = $.ajax({
                 url: "/labels/lookup_batch",
                 type: "POST",
                 data: $.param({ "obs_ids[]": obsIds }),
                 success: function (resp) {
-                    const items = resp && resp.items ? resp.items : [];
-                    allObservationData[inputId] = items;
-                    const resultsDiv = $('<div class="multiple-results"></div>');
-
-                    items.forEach(function (data, index) {
-                        const original = obsIds.length === 1
-                            ? raw
-                            : data.original_input || data.input || obsIds[index];
-                        const resultItem = renderObservationResult(data, original);
-                        resultsDiv.append(resultItem);
+                    const items = resp && Array.isArray(resp.items) ? resp.items : [];
+                    rowStates.forEach(function (state, index) {
+                        if (
+                            state.$input.data("lookupToken") !== state.token ||
+                            state.$input.val().trim() !== state.obsId
+                        ) return;
+                        const item = items[index] || {
+                            error: "No lookup result returned",
+                            original_input: state.obsId,
+                        };
+                        allObservationData[state.inputId] = [item];
+                        state.$input.data("lookupStatus", "complete");
+                        state.$input.siblings(".result").empty().append(
+                            renderObservationResult(item, state.obsId),
+                        );
+                        applyTaxonToSlip(state.$input.closest(".slip"), [item]);
                     });
-
-                    applyTaxonToSlip($slip, items);
-                    resultSpan.empty().append(resultsDiv);
                     updateDuplicateFlags();
                 },
-
-                error: function () {
-                    resultSpan.html(
-                        '<div class="slip-meta err">Error fetching details</div>',
-                    );
+                error: function (_xhr, status) {
+                    if (status === "abort") return;
+                    rowStates.forEach(function (state) {
+                        if (state.$input.data("lookupToken") !== state.token) return;
+                        const item = { error: "Error fetching details", original_input: state.obsId };
+                        allObservationData[state.inputId] = [item];
+                        state.$input.data("lookupStatus", "error");
+                        state.$input.siblings(".result").empty().append(
+                            renderObservationResult(item, state.obsId),
+                        );
+                    });
+                },
+                complete: function () {
+                    pendingRowLookups.delete(request);
+                    updateWarningMessage();
                 },
             });
+            pendingRowLookups.add(request);
         }
 
-        // split the user input into IDs
-        function parseObservationInput(input) {
-            // First normalize bugguide prefixes so they aren't split by space
-            const normalizedInput = input.replace(/\b(bg|bugguide)\s+(\d+)/gi, 'BG$2');
+        function normalizeAndLookupObservationInput($input) {
+            const raw = $input.val().trim();
+            const obsIds = parseObservationInput(raw);
+            if (!obsIds.length) return [];
 
-            const results = [];
-            const parts = normalizedInput
-                .split(/[\s,]+/)
-                .filter((part) => part.trim() !== "");
+            if (
+                obsIds.length === 1 &&
+                $input.data("lookupKey") === obsIds[0] &&
+                ["loading", "complete"].includes($input.data("lookupStatus"))
+            ) {
+                return [$input];
+            }
 
-            parts.forEach((part) => {
-                const p = part.trim();
+            const $inputs = expandObservationInput($input, obsIds);
+            lookupObservationRows($inputs, obsIds);
+            updateDuplicateFlags();
+            updateWarningMessage();
+            return $inputs;
+        }
 
-                if (
-                    /^motoinat\d+$/i.test(p) ||
-                    /^moinat\d+$/i.test(p) ||
-                    /^inatmo\d+$/i.test(p)
-                ) {
-                    results.push(p.toLowerCase());
-                    return;
-                }
-
-                if (/^mo\d+$/i.test(p)) {
-                    const digits = p.replace(/^[^0-9]+/, "");
-
-                    results.push(`MO${digits}`);
-                    return;
-                }
-
-                if (/^(bg|bugguide)\d+$/i.test(p)) {
-                    const digits = p.replace(/^[^0-9]+/, "");
-
-                    results.push(`BG${digits}`);
-                    return;
-                }
-
-                if (p.includes("mushroomobserver.org")) {
-                    const match = p.match(/\/(\d+)$/);
-
-                    if (match && match[1]) {
-                        results.push(`MO${match[1]}`);
-                        return;
-                    }
-                }
-
-                if (p.includes("inaturalist.org/observations/")) {
-                    const match = p.match(/\/observations\/(\d+)/);
-
-                    if (match && match[1]) {
-                        results.push(match[1]);
-                        return;
-                    }
-                }
-
-                const digitMatch = p.match(/(\d+)/);
-                if (digitMatch) {
-                    results.push(digitMatch[1]);
-                }
-            });
-
-            return results;
+        function lookupObservation($input) {
+            return normalizeAndLookupObservationInput($input);
         }
 
         $("#observationInputs").on("input", ".obs-id-input", function () {
             const $this = $(this);
+            const inputId = $this.attr("id");
+            delete allObservationData[inputId];
+            $this
+                .removeData("lookupKey lookupStatus")
+                .data("lookupToken", ++rowLookupSerial)
+                .siblings(".result").empty();
+            $this.closest(".observation-input").removeAttr("data-taxon");
 
             if (
                 $this.val().trim() !== "" &&
@@ -2854,6 +3019,14 @@
             }
 
             updateWarningMessage();
+            updateDuplicateFlags();
+        });
+
+        $("#observationInputs").on("paste", ".obs-id-input", function () {
+            const $input = $(this);
+            setTimeout(function () {
+                normalizeAndLookupObservationInput($input);
+            }, 0);
         });
 
         $("#printDuplicateLabels, #minilabelSize").on("change", updateWarningMessage);
@@ -2880,7 +3053,10 @@
 
         $("#observationInputs").on("blur", ".obs-id-input", function () {
             if ($(this).val().trim() !== "") {
-                lookupObservation($(this));
+                normalizeAndLookupObservationInput($(this));
+            } else {
+                ensureSingleTrailingEmptyRow();
+                updateWarningMessage();
             }
         });
 
@@ -2888,49 +3064,32 @@
             if (e.key === "Enter" && $(e.target).is("input.obs-id-input")) {
                 e.preventDefault(); // Prevent default form submission
                 const $currentInput = $(e.target);
-                const $nextInput = $currentInput
-                    .closest(".observation-input")
-                    .nextAll(".observation-input")
-                    .first()
-                    .find(".obs-id-input");
-
-                if ($nextInput.length) {
-                    $nextInput.focus();
-                } else {
-                    // If it's the last input, add a new one and focus it
-                    addObservationField();
-                    $(".obs-id-input").last().focus();
-                }
+                normalizeAndLookupObservationInput($currentInput);
+                ensureSingleTrailingEmptyRow();
+                $("#observationInputs .obs-id-input").filter(function () {
+                    return !$(this).val().trim();
+                }).last().focus();
             }
         });
 
         $("#downloadCsvButton").click(function (e) {
             e.preventDefault();
-            const totalObservations = countTotalObservations();
+            const totalObservations = countQueuedObservations();
 
             if (totalObservations === 0) {
                 showToast("Please enter at least one observation number", false);
                 return;
             }
 
-            if (
-                totalObservations > maxObservations &&
-                !confirm(
-                    `Warning: You are attempting to process ${totalObservations} observations. If you need to make more than ${maxObservations} labels, please contact Alan Rockefeller to raise the limit. Do you want to continue?`,
-                )
-            ) {
+            if (totalObservations > maxObservations) {
+                showToast(`A run can contain at most ${maxObservations} observations`, false);
                 return;
             }
 
             var formData = new FormData();
 
-            $(".obs-id-input").each(function () {
-                const inputValue = $(this).val().trim();
-
-                if (inputValue !== "") {
-                    const obsIds = parseObservationInput(inputValue);
-                    obsIds.forEach((id) => formData.append("observations[]", id));
-                }
+            getQueuedObservationIds().forEach(function (id) {
+                formData.append("observations[]", id);
             });
 
             const submitBtn = $(this);
@@ -2985,13 +3144,8 @@
         function collectObservationsFormData() {
             var formData = new FormData();
 
-            $(".obs-id-input").each(function () {
-                const inputValue = $(this).val().trim();
-
-                if (inputValue !== "") {
-                    const obsIds = parseObservationInput(inputValue);
-                    obsIds.forEach((id) => formData.append("observations[]", id));
-                }
+            getQueuedObservationIds().forEach(function (id) {
+                formData.append("observations[]", id);
             });
             return formData;
         }
@@ -3100,6 +3254,10 @@
         // ESC key closes modal
         $(document).on("keydown", function (e) {
             if (e.key !== "Escape") return;
+            if ($("#printPreflightModal").css("display") === "flex") {
+                closePrintPreflight();
+                return;
+            }
             $("#logModal").hide();
             if (isAddObsModalOpen()) closeAddObsModal();
         });
@@ -3315,6 +3473,10 @@
                 const obsIdentifier = String(obsData.inat_id || obsData.id);
                 // put this id in the row
                 $empty.val(obsIdentifier);
+                $empty
+                    .data("lookupKey", obsIdentifier)
+                    .data("lookupStatus", "complete")
+                    .data("lookupToken", ++rowLookupSerial);
                 allObservationData[$empty.attr("id")] = [obsData];
 
                 // Render the result directly from cached data
@@ -3326,10 +3488,9 @@
                 resultSpan.empty().append(resultItem);
                 applyTaxonToSlip($empty.closest(".slip"), [obsData]);
 
-                // IMPORTANT: pretend the user typed, so the "if last field filled, add another" logic runs
-                $empty.trigger("input");
             });
 
+            ensureSingleTrailingEmptyRow();
             updateObservationNumbers();
             updateDuplicateFlags();
             updateWarningMessage();
@@ -3337,72 +3498,168 @@
             showToast(`Added ${observations.length} observations`);
         }
 
-        async function handlePrintStream(
-            btn,
-            format,
-            downloadName,
-            successMsg,
-        ) {
-            const totalObservations = countTotalObservations();
-
-            if (totalObservations === 0) {
+        function validatePrintRequest(request) {
+            const queuedObservationCount = countQueuedObservations();
+            if (queuedObservationCount === 0) {
                 showToast("Please enter at least one observation number", false);
-                return;
+                return null;
             }
 
-            if ($("#sortMode").val() === "custom" && !$("#sortField").val().trim()) {
+            const sortMode = $("#sortMode").val();
+            const sortField = $("#sortField").val().trim();
+            if (sortMode === "custom" && !sortField) {
                 $("#sortField").addClass("input-error").focus();
                 showToast("Enter a field name to sort by, or choose another sort order", false);
-                return;
+                return null;
             }
 
-            if (
-                totalObservations > maxObservations &&
-                !confirm(
-                    `Warning: You are attempting to print ${totalObservations} labels. This may cause a timeout. Do you want to continue?`,
-                )
-            ) {
+            if (queuedObservationCount > maxObservations) {
+                showToast(`A run can contain at most ${maxObservations} observations`, false);
+                return null;
+            }
+
+            const printDuplicates = $("#printDuplicateLabels").is(":checked");
+            const printedLabelCount = countPrintedLabels();
+            return {
+                ...request,
+                queuedObservationCount,
+                printedLabelCount,
+                printDuplicates,
+                miniLabelSize: $("#minilabelSize").val(),
+                sortMode,
+                sortField,
+                addedFields: [...addFields],
+                suppressedFields: [...removeFields],
+                omitQrCodes: $("#omitQrCodes").is(":checked"),
+                commonNames: $("#common_names").is(":checked"),
+                omitNotes: $("#omit_notes").is(":checked"),
+            };
+        }
+
+        function shouldShowPrintPreflight(printState) {
+            return LabelsAddObsHelpers.shouldShowPrintPreflight(
+                printState,
+                LARGE_PRINTED_LABEL_JOB,
+            );
+        }
+
+        function printSortSummary(printState) {
+            const labels = {
+                "": "Observation number",
+                none: "As entered",
+                date: "Date — oldest first",
+                "date-desc": "Date — newest first",
+                voucher: "Voucher number",
+                custom: "Custom field",
+            };
+            const base = labels[printState.sortMode] || printState.sortMode;
+            return printState.sortMode === "custom"
+                ? `${base}: ${printState.sortField}`
+                : base;
+        }
+
+        function openPrintPreflight(printState) {
+            pendingPrintRequest = {
+                btn: printState.btn,
+                format: printState.format,
+                downloadName: printState.downloadName,
+                successMsg: printState.successMsg,
+            };
+            printPreflightOrigin = printState.btn && printState.btn[0];
+            const options = [];
+            if (printState.printDuplicates) options.push("Print duplicates");
+            if (printState.miniLabelSize) options.push(`Mini-label size ${printState.miniLabelSize}`);
+            if (printState.commonNames) options.push("Common names");
+            if (printState.omitNotes) options.push("Omit notes");
+            if (printState.omitQrCodes) options.push("Omit QR codes");
+
+            const rows = [
+                ["Queued observations", printState.queuedObservationCount.toLocaleString()],
+                ["Generated labels", printState.printedLabelCount.toLocaleString()],
+                ["Format", printState.format.toUpperCase()],
+                ["Sort", printSortSummary(printState)],
+                ["Added fields", printState.addedFields.length ? printState.addedFields.join(", ") : "None"],
+                ["Suppressed fields", printState.suppressedFields.length ? printState.suppressedFields.join(", ") : "None"],
+                ["Other options", options.length ? options.join(", ") : "None"],
+            ];
+            if (!printState.miniLabelSize) {
+                rows.push([
+                    "Approximate sheets",
+                    `${LabelsAddObsHelpers.standardSheetCount(printState.printedLabelCount).toLocaleString()} at 8 labels per page`,
+                ]);
+            }
+            $("#printPreflightBody").html(
+                `<dl class="print-preflight-summary">${rows.map(([term, value]) =>
+                    `<dt>${escapeHtml(term)}</dt><dd>${escapeHtml(value)}</dd>`
+                ).join("")}</dl>`,
+            );
+            $("#printPreflightConfirm").text(`Print ${printState.format.toUpperCase()}`);
+            $("#printPreflightModal").css("display", "flex");
+            setTimeout(() => $("#printPreflightCancel").focus(), 0);
+        }
+
+        function closePrintPreflight({ restoreFocus = true } = {}) {
+            $("#printPreflightModal").hide();
+            pendingPrintRequest = null;
+            if (restoreFocus && printPreflightOrigin) printPreflightOrigin.focus();
+            printPreflightOrigin = null;
+        }
+
+        function requestPrint(request) {
+            const printState = validatePrintRequest(request);
+            if (!printState) return;
+            if (shouldShowPrintPreflight(printState)) {
+                openPrintPreflight(printState);
                 return;
             }
+            startPrintJob(printState);
+        }
+
+        async function startPrintJob(printState) {
+            const { btn, format, downloadName, successMsg } = printState;
 
             const formData = collectObservationsFormData();
             formData.append("format", format);
 
-            if ($("#omitQrCodes").is(":checked")) {
+            if (printState.omitQrCodes) {
                 formData.append("omit_qr_codes", "on");
             }
 
-            if ($("#printDuplicateLabels").is(":checked")) {
+            if (printState.printDuplicates) {
                 formData.append("print_duplicate_labels", "on");
             }
 
             // Add minilabel size, common_names, and omit_notes to formData
-            const minilabelSize = $("#minilabelSize").val();
+            const minilabelSize = printState.miniLabelSize;
             if (minilabelSize) {
                 formData.append("minilabel", "on");
                 formData.append("minilabel_size", minilabelSize);
             }
 
-            if ($("#common_names").is(":checked")) {
+            if (printState.commonNames) {
                 formData.append("common_names", "on");
             }
 
-            if ($("#omit_notes").is(":checked")) {
+            if (printState.omitNotes) {
                 formData.append("omit_notes", "on");
             }
 
-            const sortMode = $("#sortMode").val();
+            const sortMode = printState.sortMode;
             if (sortMode) {
                 formData.append("sort", sortMode);
             }
             if (sortMode === "custom") {
-                formData.append("sort_field", $("#sortField").val().trim());
+                formData.append("sort_field", printState.sortField);
             }
 
-            if (customFields.length > 0) {
+            const printCustomFields = [
+                ...printState.addedFields.map((field) => `+${field}`),
+                ...printState.suppressedFields.map((field) => `-${field}`),
+            ];
+            if (printCustomFields.length > 0) {
                 formData.append("use_custom", "on");
 
-                customFields.forEach((field) => {
+                printCustomFields.forEach((field) => {
                     formData.append("custom_args[]", field);
                 });
             }
@@ -3606,21 +3863,38 @@
         }
 
         $("#printRtfButton").click(function () {
-            handlePrintStream(
-                $(this),
-                "rtf",
-                "labels.rtf",
-                "RTF labels downloaded",
-            );
+            requestPrint({
+                btn: $(this),
+                format: "rtf",
+                downloadName: "labels.rtf",
+                successMsg: "RTF labels downloaded",
+            });
         });
 
         $("#printPdfButton").click(function () {
-            handlePrintStream(
-                $(this),
-                "pdf",
-                "labels.pdf",
-                "PDF labels downloaded",
-            );
+            requestPrint({
+                btn: $(this),
+                format: "pdf",
+                downloadName: "labels.pdf",
+                successMsg: "PDF labels downloaded",
+            });
+        });
+
+        $("#printPreflightCloseX, #printPreflightCancel").on("click", function () {
+            closePrintPreflight();
+        });
+
+        $("#printPreflightModal").on("click", function (event) {
+            if (event.target === this) closePrintPreflight();
+        });
+
+        $("#printPreflightConfirm").on("click", function () {
+            if (!pendingPrintRequest) return;
+            const request = pendingPrintRequest;
+            const validatedState = validatePrintRequest(request);
+            if (!validatedState) return;
+            closePrintPreflight({ restoreFocus: false });
+            startPrintJob(validatedState);
         });
 
         // Add Observations automatic-search workflow
@@ -3633,6 +3907,11 @@
         let addObsResultItems = [];
         let addObsFilterTimer = null;
         let addObsObserverSource = "inat";
+        let addObsFieldTimer = null;
+        let addObsFieldController = null;
+        let addObsFieldGeneration = 0;
+        let addObsFieldSuggestions = [];
+        let addObsFieldActiveIndex = -1;
 
         const addObsObserverStorageKeys = {
             inat: {
@@ -3714,16 +3993,16 @@
         }
 
         function updateAddObsRunSummary(selectedCount = 0) {
-            const existingSlips = countTotalObservations();
-            const slipsAfterAdding = existingSlips + selectedCount;
+            const existingObservations = countQueuedObservations();
+            const observationsAfterAdding = existingObservations + selectedCount;
             $("#addObsRunSummary").text(
-                `${addObsCountText(existingSlips, "slip")} already entered · ${addObsCountText(selectedCount)} selected · ${addObsCountText(slipsAfterAdding, "slip")} after adding`,
+                `${addObsCountText(existingObservations)} already entered · ${addObsCountText(selectedCount)} selected · ${addObsCountText(observationsAfterAdding)} after adding`,
             );
         }
 
         function addObsRemainingRunCapacity() {
             return LabelsAddObsHelpers.remainingRunCapacity(
-                countTotalObservations(),
+                countQueuedObservations(),
                 maxObservations,
             );
         }
@@ -3854,7 +4133,12 @@
             } else if (state === "searching") {
                 renderAddObsStateMessage("Searching observations", { busy: true });
             } else if (state === "zero-results") {
-                renderAddObsStateMessage("No observations found for these filters.");
+                const requiredField = String(options.requiredField || "").trim();
+                renderAddObsStateMessage(
+                    requiredField
+                        ? `No observations found with a nonempty “${requiredField}” field.`
+                        : "No observations found for these filters.",
+                );
             } else if (state === "error") {
                 renderAddObsStateMessage("Search failed — try again.", { error: true });
             }
@@ -3881,6 +4165,104 @@
             if (clearBanner) $("#addObsBannerError").hide().empty();
         }
 
+        function closeObservationFieldSuggestions() {
+            addObsFieldActiveIndex = -1;
+            $("#addObsObservationFieldList").prop("hidden", true).empty();
+            $("#addObsObservationField")
+                .attr("aria-expanded", "false")
+                .attr("aria-activedescendant", "");
+        }
+
+        function cancelObservationFieldAutocomplete() {
+            clearTimeout(addObsFieldTimer);
+            addObsFieldTimer = null;
+            addObsFieldGeneration += 1;
+            if (addObsFieldController) {
+                addObsFieldController.abort();
+                addObsFieldController = null;
+            }
+            addObsFieldSuggestions = [];
+            closeObservationFieldSuggestions();
+        }
+
+        function setObservationFieldActiveIndex(index) {
+            if (!addObsFieldSuggestions.length) return;
+            addObsFieldActiveIndex =
+                (index + addObsFieldSuggestions.length) % addObsFieldSuggestions.length;
+            const $options = $("#addObsObservationFieldList .observation-field-option")
+                .attr("aria-selected", "false");
+            const option = $options.eq(addObsFieldActiveIndex)
+                .attr("aria-selected", "true")[0];
+            if (option) option.scrollIntoView({ block: "nearest" });
+            $("#addObsObservationField").attr(
+                "aria-activedescendant",
+                `addObsObservationFieldOption-${addObsFieldActiveIndex}`,
+            );
+        }
+
+        function renderObservationFieldSuggestions(items) {
+            addObsFieldSuggestions = items.slice(0, 12);
+            addObsFieldActiveIndex = -1;
+            if (!addObsFieldSuggestions.length) {
+                closeObservationFieldSuggestions();
+                return;
+            }
+            const options = addObsFieldSuggestions.map((item, index) => {
+                const metadata = [
+                    item.datatype || "field",
+                    Number(item.values_count || 0).toLocaleString(),
+                ].join(" · ");
+                return `<button type="button" id="addObsObservationFieldOption-${index}"
+                    class="observation-field-option" role="option" aria-selected="false" data-index="${index}">
+                    <span>${escapeHtml(item.name)}</span>
+                    <span class="observation-field-option-meta">${escapeHtml(metadata)}</span>
+                </button>`;
+            }).join("");
+            $("#addObsObservationFieldList").html(options).prop("hidden", false);
+            $("#addObsObservationField").attr("aria-expanded", "true");
+        }
+
+        async function fetchObservationFieldSuggestions(query, generation) {
+            const controller = new AbortController();
+            addObsFieldController = controller;
+            try {
+                const response = await fetch(
+                    `/labels/observation_fields?q=${encodeURIComponent(query)}`,
+                    { signal: controller.signal },
+                );
+                const data = await response.json();
+                if (generation !== addObsFieldGeneration) return;
+                if (!response.ok) throw new Error(data.error || "Field search failed");
+                renderObservationFieldSuggestions(Array.isArray(data.results) ? data.results : []);
+            } catch (error) {
+                if (error.name !== "AbortError" && generation === addObsFieldGeneration) {
+                    closeObservationFieldSuggestions();
+                }
+            } finally {
+                if (addObsFieldController === controller) addObsFieldController = null;
+            }
+        }
+
+        function scheduleObservationFieldAutocomplete() {
+            cancelObservationFieldAutocomplete();
+            const query = $("#addObsObservationField").val().trim();
+            if (query.length < 2 || $("#addObsObservationField").prop("disabled")) return;
+            const generation = addObsFieldGeneration;
+            addObsFieldTimer = setTimeout(
+                () => fetchObservationFieldSuggestions(query, generation),
+                250,
+            );
+        }
+
+        function chooseObservationFieldSuggestion(index) {
+            const item = addObsFieldSuggestions[index];
+            if (!item) return;
+            $("#addObsObservationField").val(item.name);
+            $("#addObsObservationFieldId").val(item.id);
+            closeObservationFieldSuggestions();
+            scheduleAddObsSearch({ immediate: true });
+        }
+
         function getAddObsFilters() {
             return {
                 startDate: $("#addObsStartDate").val(),
@@ -3889,6 +4271,8 @@
                 taxon: $("#addObsTaxon").val().trim(),
                 source: $("input[name='addObsSource']:checked").val() || "inat",
                 dateMode: $("input[name='addObsDateMode']:checked").val() || "observed",
+                observationFieldName: $("#addObsObservationField").val().trim(),
+                observationFieldId: $("#addObsObservationFieldId").val(),
             };
         }
 
@@ -4092,6 +4476,15 @@
             formData.append("taxon", validation.filters.taxon);
             formData.append("source", validation.filters.source);
             formData.append("date_mode", validation.filters.dateMode);
+            if (
+                validation.filters.source === "inat" &&
+                validation.filters.observationFieldName
+            ) {
+                formData.append("obs_field_name", validation.filters.observationFieldName);
+                if (validation.filters.observationFieldId) {
+                    formData.append("obs_field_id", validation.filters.observationFieldId);
+                }
+            }
 
             try {
                 const response = await fetch("/labels/find_observations", {
@@ -4120,6 +4513,8 @@
                 const windows = Array.isArray(data.windows) ? data.windows : [];
                 const reportedTotal = Number(data.total_count ?? data.count ?? items.length);
                 addObsTotalCount = Number.isFinite(reportedTotal) ? reportedTotal : items.length;
+                const totalInScope = Number(data.total_in_scope);
+                const requiredField = String(data.required_observation_field || "").trim();
                 rememberAddObsObserver(validation.filters.source, validation.filters.username);
 
                 if (items.length > maxObservations || addObsTotalCount > maxObservations) {
@@ -4127,7 +4522,7 @@
                 }
 
                 if (items.length === 0) {
-                    setAddObsSearchState("zero-results");
+                    setAddObsSearchState("zero-results", { requiredField });
                     return;
                 }
 
@@ -4136,7 +4531,9 @@
                 renderAddObsWindows(windows, addObsTotalCount, items.length);
                 setAddObsSearchState("results", {
                     totalCount: addObsTotalCount,
-                    statusText: addObsTotalCount > maxObservations ? "" : undefined,
+                    statusText: requiredField && Number.isFinite(totalInScope)
+                        ? `${addObsTotalCount.toLocaleString()} match all filters · ${totalInScope.toLocaleString()} observations in scope before requiring “${requiredField}”`
+                        : addObsTotalCount > maxObservations ? "" : undefined,
                 });
                 updateAddObsSelectionState();
             } catch (error) {
@@ -4154,16 +4551,23 @@
         function updateAddObsSourceControls({ loadObserver = false } = {}) {
             const source = $("input[name='addObsSource']:checked").val() || "inat";
             addObsObserverSource = source;
+            $("#addObsModal").toggleClass("is-mo-source", source === "mo");
             if (source === "inat") {
                 $("#addObsUserLabel").text("iNat Username");
                 $("#addObsUser").attr("placeholder", "username");
                 $("#addObsTaxonLabel").text("Taxon (name or ID #)");
                 $("#addObsTaxon").attr("placeholder", "Life (default)");
+                $("#addObsObservationFieldGroup").prop("hidden", false);
+                $("#addObsObservationField").prop("disabled", false);
             } else {
                 $("#addObsUserLabel").text("MO Username");
                 $("#addObsUser").attr("placeholder", "Mushroom Observer username");
                 $("#addObsTaxonLabel").text("Taxon (name only)");
                 $("#addObsTaxon").attr("placeholder", "Fungi (default)");
+                $("#addObsObservationFieldGroup").prop("hidden", true);
+                $("#addObsObservationField").prop("disabled", true);
+                $("#addObsObservationFieldId").val("");
+                cancelObservationFieldAutocomplete();
             }
             if (loadObserver) {
                 loadLastAddObsObserver(source);
@@ -4175,6 +4579,7 @@
         function closeAddObsModal() {
             invalidateAddObsSearch();
             cancelAddObsObserverValidation();
+            cancelObservationFieldAutocomplete();
             $("#addObsModal").hide();
         }
 
@@ -4187,6 +4592,7 @@
             $("#addObsDateModeHelper").text("Filtering by observation date");
             $("input[name='addObsSource'][value='inat']").prop("checked", true);
             $("#addObsTaxon").val("Fungi");
+            $("#addObsObservationField, #addObsObservationFieldId").val("");
             addObsObserverValidationState = "none";
             addObsValidatedObserverKey = "";
             setUserStatus("none");
@@ -4279,6 +4685,48 @@
         $("#addObsTaxon").on("input change", function () {
             clearFieldError("addObsTaxon");
             scheduleAddObsSearch();
+        });
+
+        $("#addObsObservationField").on("input", function () {
+            $("#addObsObservationFieldId").val("");
+            scheduleObservationFieldAutocomplete();
+            scheduleAddObsSearch();
+        });
+
+        $("#addObsObservationField").on("keydown", function (event) {
+            if (event.key === "ArrowDown") {
+                if (!addObsFieldSuggestions.length) return;
+                event.preventDefault();
+                setObservationFieldActiveIndex(addObsFieldActiveIndex + 1);
+            } else if (event.key === "ArrowUp") {
+                if (!addObsFieldSuggestions.length) return;
+                event.preventDefault();
+                setObservationFieldActiveIndex(addObsFieldActiveIndex - 1);
+            } else if (event.key === "Enter") {
+                event.preventDefault();
+                if (addObsFieldActiveIndex >= 0) {
+                    chooseObservationFieldSuggestion(addObsFieldActiveIndex);
+                } else {
+                    closeObservationFieldSuggestions();
+                    scheduleAddObsSearch({ immediate: true });
+                }
+            } else if (event.key === "Escape") {
+                event.stopPropagation();
+                closeObservationFieldSuggestions();
+            }
+        });
+
+        $("#addObsObservationFieldList").on(
+            "mousedown",
+            ".observation-field-option",
+            function (event) { event.preventDefault(); },
+        ).on("click", ".observation-field-option", function () {
+            chooseObservationFieldSuggestion(Number($(this).data("index")));
+            $("#addObsObservationField").focus();
+        });
+
+        $("#addObsObservationField").on("blur", function () {
+            setTimeout(closeObservationFieldSuggestions, 100);
         });
 
         function updateAddObsSelectionState() {
@@ -4393,18 +4841,41 @@
             const input = $(this).closest(".observation-input");
             const inputId = input.find(".obs-id-input").attr("id");
             delete allObservationData[inputId];
+            input.find(".obs-id-input").data("lookupToken", ++rowLookupSerial);
 
-            if ($(".observation-input").length > 1) {
+            if ($("#observationInputs .observation-input").length > 1) {
                 input.remove();
-                updateObservationNumbers();
             } else {
                 input.removeAttr("data-taxon");
-                input.find(".obs-id-input").val("");
+                input.find(".obs-id-input").val("").removeData("lookupKey lookupStatus");
                 input.find(".result").empty();
             }
+            ensureSingleTrailingEmptyRow();
             updateDuplicateFlags();
             updateWarningMessage();
         });
+
+        function clearObservationQueue() {
+            const queuedCount = countQueuedObservations();
+            if (
+                queuedCount > 0 &&
+                !confirm(`Clear all ${queuedCount} observation${queuedCount === 1 ? "" : "s"} from the queue?`)
+            ) return;
+
+            pendingRowLookups.forEach((request) => request.abort());
+            pendingRowLookups.clear();
+            rowLookupSerial += 1;
+            allObservationData = {};
+            observationCount = 0;
+            $("#observationInputs").empty();
+            addObservationField();
+            $("#warningMessage").hide();
+            updateDuplicateFlags();
+            updateWarningMessage();
+            $("#observationInputs .obs-id-input").first().focus();
+        }
+
+        $("#clearQueueButton").on("click", clearObservationQueue);
 
         // Track fields to add and remove separately
         let addFields = [];
@@ -4887,9 +5358,8 @@
             $("#" + fieldId + "Error").hide().empty();
         }
 
-        if (!preloadFromUrl()) {
-            addObservationField();
-        }
+        if (!preloadFromUrl()) ensureSingleTrailingEmptyRow();
+        updateWarningMessage();
       });
     </script>
 </body>

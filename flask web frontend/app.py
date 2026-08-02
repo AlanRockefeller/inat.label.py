@@ -92,6 +92,12 @@ MO_MAX_WINDOW_PAGES = int(os.environ.get("MO_MAX_WINDOW_PAGES", "5"))
 # lock-serialized iNaturalist client.
 INAT_HISTOGRAM_CACHE_TTL = int(os.environ.get("INAT_HISTOGRAM_CACHE_TTL", "300"))
 INAT_HISTOGRAM_CACHE_MAX_ENTRIES = 64
+INAT_OBSERVATION_FIELD_CACHE_TTL = int(
+    os.environ.get("INAT_OBSERVATION_FIELD_CACHE_TTL", "300")
+)
+INAT_OBSERVATION_FIELD_CACHE_MAX_ENTRIES = 64
+INAT_OBSERVATION_FIELD_QUERY_MAX_LENGTH = 100
+INAT_OBSERVATION_FIELD_RESULT_LIMIT = 12
 FINISHED_JOB_TTL = int(
     os.environ.get("FINISHED_JOB_TTL", "300")
 )  # Time in seconds to keep finished jobs
@@ -1141,6 +1147,147 @@ def _daily_counts_from_histogram(payload):
 _histogram_cache = OrderedDict()
 _histogram_cache_lock = threading.Lock()
 
+_observation_field_cache = OrderedDict()
+_observation_field_cache_lock = threading.Lock()
+
+
+def _normalize_observation_field_result(field):
+    """Return only the autocomplete metadata used by the browser."""
+    if not isinstance(field, dict):
+        return None
+    field_id = field.get("id")
+    name = field.get("name")
+    if isinstance(field_id, bool) or not isinstance(field_id, int) or field_id < 1:
+        return None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    values_count = field.get("values_count", field.get("observations_count"))
+    if isinstance(values_count, bool) or not isinstance(values_count, int):
+        values_count = 0
+    datatype = field.get("datatype")
+    return {
+        "id": field_id,
+        "name": name.strip(),
+        "datatype": datatype.strip() if isinstance(datatype, str) else "",
+        "values_count": max(values_count, 0),
+    }
+
+
+def _cached_observation_field_search(query):
+    """Fetch a small, briefly cached set of iNaturalist field suggestions."""
+    cache_key = query.casefold()
+    now = time.time()
+    with _observation_field_cache_lock:
+        entry = _observation_field_cache.get(cache_key)
+        if entry is not None:
+            expires_at, cached_results = entry
+            if expires_at > now:
+                _observation_field_cache.move_to_end(cache_key)
+                return cached_results
+            del _observation_field_cache[cache_key]
+
+    response = inat_api_get(
+        "https://www.inaturalist.org/observation_fields.json",
+        params={"q": query},
+        timeout=15,
+    )
+    payload = response.json()
+    if isinstance(payload, list):
+        fields = payload
+    elif isinstance(payload, dict):
+        fields = payload.get("results") or []
+    else:
+        fields = []
+    normalized = [
+        item
+        for item in (
+            _normalize_observation_field_result(field)
+            for field in fields
+        )
+        if item is not None
+    ]
+    normalized.sort(
+        key=lambda item: (-item["values_count"], item["name"].casefold(), item["id"])
+    )
+    normalized = normalized[:INAT_OBSERVATION_FIELD_RESULT_LIMIT]
+
+    with _observation_field_cache_lock:
+        _observation_field_cache[cache_key] = (
+            time.time() + INAT_OBSERVATION_FIELD_CACHE_TTL,
+            normalized,
+        )
+        _observation_field_cache.move_to_end(cache_key)
+        while (
+            len(_observation_field_cache)
+            > INAT_OBSERVATION_FIELD_CACHE_MAX_ENTRIES
+        ):
+            _observation_field_cache.popitem(last=False)
+    return normalized
+
+
+def _inat_observation_field_filter(field_name):
+    """Build iNaturalist's field-presence parameter for a validated name."""
+    normalized_name = str(field_name or "").strip()
+    if not normalized_name:
+        return {}
+    return {f"field:{normalized_name}": ""}
+
+
+def _observation_has_required_field(observation, field_id=None, field_name=""):
+    """Confirm that an observation has a nonblank value for the requested field."""
+    normalized_name = str(field_name or "").strip().casefold()
+    fields = observation.get("ofvs") if isinstance(observation, dict) else None
+    if not isinstance(fields, list):
+        return False
+
+    def populated(field):
+        value = field.get("value") if isinstance(field, dict) else None
+        return value is not None and str(value).strip() != ""
+
+    if field_id is not None:
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            candidate_id = field.get("field_id")
+            if candidate_id is None:
+                observation_field = field.get("observation_field") or {}
+                if not isinstance(observation_field, dict):
+                    observation_field = {}
+                candidate_id = observation_field.get("id")
+            if str(candidate_id) == str(field_id) and populated(field):
+                return True
+
+    if normalized_name:
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            observation_field = field.get("observation_field") or {}
+            if not isinstance(observation_field, dict):
+                observation_field = {}
+            candidate_name = observation_field.get("name", field.get("name", ""))
+            if (
+                str(candidate_name).strip().casefold() == normalized_name
+                and populated(field)
+            ):
+                return True
+    return False
+
+
+@app.get("/labels/observation_fields")
+def observation_fields():
+    query = (request.args.get("q") or "").strip()
+    if len(query) < 2:
+        return jsonify({"results": []})
+    if len(query) > INAT_OBSERVATION_FIELD_QUERY_MAX_LENGTH:
+        return jsonify({"error": "Observation field query is too long"}), 400
+    try:
+        return jsonify({"results": _cached_observation_field_search(query)})
+    except (requests.RequestException, ValueError) as exc:
+        api_error_logger.warning(
+            "Observation field autocomplete failed: %s", str(exc), exc_info=True
+        )
+        return jsonify({"error": "Observation field search is unavailable"}), 502
+
 
 def _inat_daily_counts(histogram_params):
     """Fetch per-day counts, reusing a recent result for identical filters.
@@ -1222,9 +1369,25 @@ def find_observations():
     taxon_input = (request.form.get("taxon") or "").strip()
     source = request.form.get("source", "inat").strip().lower()
     date_mode = request.form.get("date_mode", "observed").strip().lower()
+    obs_field_name = (request.form.get("obs_field_name") or "").strip()
+    obs_field_id_raw = (request.form.get("obs_field_id") or "").strip()
 
     if source not in ("inat", "mo"):
         return jsonify({"error": "Unsupported source"}), 400
+
+    if len(obs_field_name) > INAT_OBSERVATION_FIELD_QUERY_MAX_LENGTH:
+        return jsonify({"error": "Observation field name is too long"}), 400
+    if obs_field_id_raw and not obs_field_id_raw.isdigit():
+        return jsonify({"error": "Invalid observation field ID"}), 400
+    obs_field_id = int(obs_field_id_raw) if obs_field_id_raw else None
+    if obs_field_id is not None and obs_field_id < 1:
+        return jsonify({"error": "Invalid observation field ID"}), 400
+    if source == "mo" and (obs_field_name or obs_field_id is not None):
+        return jsonify(
+            {"error": "Observation-field filtering is only supported for iNaturalist"}
+        ), 400
+    if obs_field_id is not None and not obs_field_name:
+        return jsonify({"error": "Observation field name is required"}), 400
 
     if date_mode not in ("observed", "created"):
         return jsonify({"error": "Unsupported date_mode. Use 'observed' or 'created'."}), 400
@@ -1257,6 +1420,7 @@ def find_observations():
     cap = MAX_OBS_PER_REQUEST + 1
     current_batch = []
     total_count = 0
+    total_in_scope = None
     windows = []
 
     if source == "inat":
@@ -1293,8 +1457,29 @@ def find_observations():
             inat_search_params["d1"] = d1_str
             inat_search_params["d2"] = d2_str
 
+        if obs_field_name:
+            try:
+                scope_response = inat_api_get(
+                    "https://api.inaturalist.org/v1/observations",
+                    params={**inat_search_params, "per_page": 1},
+                    timeout=30,
+                )
+                scope_total = scope_response.json().get("total_results")
+                if isinstance(scope_total, int) and scope_total >= 0:
+                    total_in_scope = scope_total
+            except (requests.RequestException, ValueError) as e:
+                api_error_logger.warning(
+                    "Unfiltered iNaturalist scope count failed: %s",
+                    str(e),
+                    exc_info=True,
+                )
+            inat_search_params.update(
+                _inat_observation_field_filter(obs_field_name)
+            )
+
         last_id = 0
         first_page = True
+        exhausted_results = False
         try:
             while len(current_batch) < cap:
                 params = {
@@ -1322,6 +1507,7 @@ def find_observations():
                     first_page = False
                 results = data.get("results", [])
                 if not results:
+                    exhausted_results = True
                     break
 
                 for r in results:
@@ -1330,6 +1516,10 @@ def find_observations():
                     oid = r.get("id")
                     if oid:
                         last_id = oid
+                    if obs_field_name and not _observation_has_required_field(
+                        r, obs_field_id, obs_field_name
+                    ):
+                        continue
                     taxon = r.get("taxon") or {}
 
                     iconic = taxon.get("iconic_taxon_name", "")
@@ -1348,10 +1538,13 @@ def find_observations():
                             "observed_on": r.get("observed_on"),
                             "place_guess": _concise_locality(r),
                             "photo_url": _thumbnail_url(r, allow_photo_url=True),
+                            "ofvs": r.get("ofvs", []),
                             "color": color,
                         }
                     )
             found = current_batch
+            if obs_field_name and exhausted_results:
+                total_count = len(current_batch)
             total_count = max(total_count, len(current_batch))
 
             if total_count > MAX_OBS_PER_REQUEST:
@@ -1491,6 +1684,7 @@ def find_observations():
                             "observed_on": obs_date,
                             "place_guess": _concise_locality(r),
                             "photo_url": _mushroom_observer_thumbnail_url(r),
+                            "ofvs": r.get("ofvs", []),
                             "color": "magenta",
                         }
                     )
@@ -1541,6 +1735,10 @@ def find_observations():
         "total_count": total_count,
         "items": found,
     }
+    if obs_field_name:
+        response_payload["required_observation_field"] = obs_field_name
+        if total_in_scope is not None:
+            response_payload["total_in_scope"] = total_in_scope
     if windows:
         response_payload["windows"] = windows
     return jsonify(response_payload), 200
