@@ -240,9 +240,23 @@ def configure_file_logging(flask_app):
     command_formatter = logging.Formatter("%(asctime)s: %(message)s")
 
     handler_specs = (
-        (flask_app.logger, "app_error_log", "error.log", 10, warning_formatter, logging.WARNING),
+        (
+            flask_app.logger,
+            "app_error_log",
+            "error.log",
+            10,
+            warning_formatter,
+            logging.WARNING,
+        ),
         (cmd_logger, "cmd_log", "app.log", 5, command_formatter, logging.INFO),
-        (api_error_logger, "api_error_log", "api_error.log", 5, warning_formatter, logging.WARNING),
+        (
+            api_error_logger,
+            "api_error_log",
+            "api_error.log",
+            5,
+            warning_formatter,
+            logging.WARNING,
+        ),
     )
     for logger, handler_name, filename, backup_count, formatter, level in handler_specs:
         _add_rotating_file_handler(
@@ -392,7 +406,12 @@ def lookup_batch_internal(obs_inputs):
                     "color": "black",
                     "iconic_taxon_name": "",
                     "taxon_color_group": "unknown",
-                    "ofvs": [{"name": "BugGuide URL", "value": f"https://bugguide.net/node/view/{bg_num}"}],
+                    "ofvs": [
+                        {
+                            "name": "BugGuide URL",
+                            "value": f"https://bugguide.net/node/view/{bg_num}",
+                        }
+                    ],
                 }
             )
         else:
@@ -845,7 +864,14 @@ def print_start():
             "print_start: No valid observations found after processing raw input."
         )
         if bg_omitted:
-            return jsonify({"error": "No labels were generated because all provided observations were BugGuide entries, which are only supported when minilabels are enabled."}), 400
+            return (
+                jsonify(
+                    {
+                        "error": "No labels were generated because all provided observations were BugGuide entries, which are only supported when minilabels are enabled."
+                    }
+                ),
+                400,
+            )
         return jsonify({"error": "No valid observations provided"}), 400
 
     script_path = os.path.join(app.root_path, "inat.label.py")
@@ -912,10 +938,16 @@ def print_start():
             "filename": filename,
         }
 
-    return jsonify({
-        "job_id": job_id,
-        "warning": "BugGuide observations were omitted because minilabels are not enabled." if bg_omitted else None
-    })
+    return jsonify(
+        {
+            "job_id": job_id,
+            "warning": (
+                "BugGuide observations were omitted because minilabels are not enabled."
+                if bg_omitted
+                else None
+            ),
+        }
+    )
 
 
 @app.route("/labels/print_stream")
@@ -1131,9 +1163,11 @@ def _daily_counts_from_histogram(payload):
     if not isinstance(results, dict):
         return {}
 
-    mappings = [results] if any(isinstance(value, int) for value in results.values()) else [
-        value for value in results.values() if isinstance(value, dict)
-    ]
+    mappings = (
+        [results]
+        if any(isinstance(value, int) for value in results.values())
+        else [value for value in results.values() if isinstance(value, dict)]
+    )
     daily_counts = defaultdict(int)
     for mapping in mappings:
         for raw_date, raw_count in mapping.items():
@@ -1200,10 +1234,7 @@ def _cached_observation_field_search(query):
         fields = []
     normalized = [
         item
-        for item in (
-            _normalize_observation_field_result(field)
-            for field in fields
-        )
+        for item in (_normalize_observation_field_result(field) for field in fields)
         if item is not None
     ]
     normalized.sort(
@@ -1217,10 +1248,7 @@ def _cached_observation_field_search(query):
             normalized,
         )
         _observation_field_cache.move_to_end(cache_key)
-        while (
-            len(_observation_field_cache)
-            > INAT_OBSERVATION_FIELD_CACHE_MAX_ENTRIES
-        ):
+        while len(_observation_field_cache) > INAT_OBSERVATION_FIELD_CACHE_MAX_ENTRIES:
             _observation_field_cache.popitem(last=False)
     return normalized
 
@@ -1265,9 +1293,8 @@ def _observation_has_required_field(observation, field_id=None, field_name=""):
             if not isinstance(observation_field, dict):
                 observation_field = {}
             candidate_name = observation_field.get("name", field.get("name", ""))
-            if (
-                str(candidate_name).strip().casefold() == normalized_name
-                and populated(field)
+            if str(candidate_name).strip().casefold() == normalized_name and populated(
+                field
             ):
                 return True
     return False
@@ -1383,14 +1410,22 @@ def find_observations():
     if obs_field_id is not None and obs_field_id < 1:
         return jsonify({"error": "Invalid observation field ID"}), 400
     if source == "mo" and (obs_field_name or obs_field_id is not None):
-        return jsonify(
-            {"error": "Observation-field filtering is only supported for iNaturalist"}
-        ), 400
+        return (
+            jsonify(
+                {
+                    "error": "Observation-field filtering is only supported for iNaturalist"
+                }
+            ),
+            400,
+        )
     if obs_field_id is not None and not obs_field_name:
         return jsonify({"error": "Observation field name is required"}), 400
 
     if date_mode not in ("observed", "created"):
-        return jsonify({"error": "Unsupported date_mode. Use 'observed' or 'created'."}), 400
+        return (
+            jsonify({"error": "Unsupported date_mode. Use 'observed' or 'created'."}),
+            400,
+        )
 
     if not d1_str or not d2_str or not username_raw:
         missing_fields = []
@@ -1473,9 +1508,7 @@ def find_observations():
                     str(e),
                     exc_info=True,
                 )
-            inat_search_params.update(
-                _inat_observation_field_filter(obs_field_name)
-            )
+            inat_search_params.update(_inat_observation_field_filter(obs_field_name))
 
         last_id = 0
         first_page = True
