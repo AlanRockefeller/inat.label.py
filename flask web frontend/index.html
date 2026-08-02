@@ -3245,7 +3245,13 @@
             $("#logModal").css("display", "flex");
         }
 
-        const modalOverlayIds = ["logModal", "addObsModal", "printPreflightModal"];
+        const modalOverlayIds = [
+            "logModal",
+            "addObsModal",
+            "editFieldsModal",
+            "customFieldsModal",
+            "printPreflightModal",
+        ];
 
         function trapFocusInOpenModal(event) {
             if (event.key !== "Tab") return;
