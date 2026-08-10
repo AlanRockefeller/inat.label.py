@@ -1,13 +1,14 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.9.9
-# By Alan Rockefeller
-# March 25, 2026
+# iNaturalist Herbarium Label Generator version 3.9.9.1
 
+# By Alan Rockefeller
+
+# August 10, 2026
 
 ## Description
 
-The Herbarium Label Generator is a Python tool designed to create formatted herbarium labels from a iNaturalist and Mushroom Observer observations. This project rapidly creates professional quality labels for herbarium specimens.   It is designed to be robust, work on many different platforms and handle errors or unexpected input gracefully.
+The Herbarium Label Generator is a Python tool designed to create formatted herbarium labels from a iNaturalist and Mushroom Observer observations. This project rapidly creates professional quality labels for herbarium specimens. It is designed to be robust, work on many different platforms and handle errors or unexpected input gracefully.
 
 An easy to use online version is at https://images.mushroomobserver.org/labels
 
@@ -32,7 +33,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
   - Scientific Name (in italics)
   - Common Name (if different from scientific name - disabled by default)
   - iNaturalist / Mushroom Observer Observation Number
-  - iNaturalist / Mushroom Observer URL 
+  - iNaturalist / Mushroom Observer URL
   - Location (in text format)
   - Coordinates (with accuracy - accuracy is set to 20km if observation geoprivacy is obscured)
   - Date Observed
@@ -72,15 +73,14 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
 - Optionally creates RTF files for high-quality printing + QR code (RTF or PDF output is strongly recommended)
 - Optionally creates PDF files for more compatibility
 - Handles special characters and formatting (e.g., italics for scientific names, proper display of ± symbol)
-- An optional command line switch can print out the iNaturalist URL's of observations which are in California.   This makes it easy to add these observations to the Mycomap CA Network project.
+- An optional command line switch can print out the iNaturalist URL's of observations which are in California. This makes it easy to add these observations to the Mycomap CA Network project.
 - Adds a QR code to the PDF and RTF labels which points to the iNaturalist or Mushroom Observer URL
-- When generating PDF or RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white.   This will help you quickly notice if an observation number is mistyped.
+- When generating PDF or RTF labels it prints the iconic taxon along with the name - fungi in blue, plants in green and everything else in white. This will help you quickly notice if an observation number is mistyped.
 - You can use the --no-qr command line argument to omit QR codes.
 - You can use the --minilabel command line argument to make tiny labels that have only the observation # and QR code.
 - BugGuide observation IDs are supported for minilabels (e.g. `BG2520730`, `BugGuide 2520730`).
 - Per-label customization of which fields appear on the label via the `--custom` option (add/remove default or observation fields without editing the code).
 - **Fungus Fair Mode:** Create display signage for fungus fairs using `--fungusfair`. Uses a CSV file as input and puts edible/toxic images on the labels instead of a QR code.
-
 
 ## Usage
 
@@ -102,7 +102,7 @@ To generate a PDF file, use the `--pdf` option:
 python inat.label.py <observation_number_or_url> [<observation_number_or_url> ...] --pdf <filename.pdf>
 ```
 
-To print out a list of URL's of observations that are in California, use the `--find-ca` option.    This was added to make it easy to add observations to the Mycomap CA Network project.   I paste the list of URL's into the Bulk URL Opener Chrome extension and add each tab to the project.   If there is an easier way, I haven't found it yet.
+To print out a list of URL's of observations that are in California, use the `--find-ca` option. This was added to make it easy to add observations to the Mycomap CA Network project. I paste the list of URL's into the Bulk URL Opener Chrome extension and add each tab to the project. If there is an easier way, I haven't found it yet.
 
 ```
 python inat.label.py <observation_number_or_url> [<observation_number_or_url> ...] --find-ca
@@ -111,31 +111,37 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
 ### Examples:
 
 1. Generate label for a single observation:
+
    ```
    python3 inat.label.py 183905751
    ```
 
 2. Generate labels for multiple observations:
+
    ```
    python3 inat.label.py 183905751 147249599 https://www.inaturalist.org/observations/106191917 MO505283
    ```
 
 3. Generate labels and save to an RTF file:
+
    ```
    python3 inat.label.py 183905751 147249599 --rtf two_labels.rtf
    ```
 
 4. Generate fungus fair signage from a CSV file:
+
    ```
    python3 inat.label.py --fungusfair fair.csv --pdf out.pdf
    ```
 
 5. Generate labels with custom fields - in this case without Coordinates but with Fungusworld number
+
    ```
    python3 inat.label.py 183905751 147249599 --custom "+Fungusworld, -Coordinates" --pdf out.pdf
    ```
 
 6. Generate labels in stack order (reordered for efficient cutting and stacking):
+
    ```
    python3 inat.label.py 183905751 147249599 147249600 147249601 147249602 147249603 --pdf labels.pdf --stack-order
    ```
@@ -147,7 +153,7 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
 
 ## Output
 
-The script generates herbarium labels to the standard output by default, or labels are written to an RTF file if the --rtf command line argument is given.   RTF labels look much more professional when printed and include QR codes - the standard output is mostly for testing.
+The script generates herbarium labels to the standard output by default, or labels are written to an RTF file if the --rtf command line argument is given. RTF labels look much more professional when printed and include QR codes - the standard output is mostly for testing.
 
 ## Dependencies
 
@@ -166,13 +172,14 @@ The script generates herbarium labels to the standard output by default, or labe
 
 Instead of installing this software, consider using the online version: https://images.mushroomobserver.org/labels
 
-
 1. Clone this repository:
+
    ```bash
    git clone https://github.com/AlanRockefeller/inat.label.py
    ```
 
 2. Navigate to the project directory:
+
    ```bash
    cd inat.label.py
    ```

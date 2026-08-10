@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: August 1, 2026
-Version: 3.9.9
+Date: August 10, 2026
+Version: 3.9.9.1
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -162,6 +162,7 @@ ProcessResult = (
 # ---------------------------------------------------------------------------
 
 PDF_BASE_FONT = os.environ.get("PDF_BASE_FONT", "Times-Roman")
+LABEL_NUMBER_FIELD = "__label_number__"
 RATE_LIMIT_RPM = int(os.environ.get("INAT_RATE_LIMIT_RPM", "60"))
 _DEFAULT_MAX_WORKERS = int(os.environ.get("INAT_MAX_WORKERS", "5"))
 
@@ -2060,7 +2061,9 @@ def find_non_ascii_chars(labels: list[TaggedLabel]) -> set[str]:
     ignore_chars = {"±"}
 
     for label, _ in labels:
-        for _, value in label:
+        for field, value in label:
+            if field == LABEL_NUMBER_FIELD:
+                continue
             if isinstance(value, str):
                 for char in value:
                     if ord(char) >= 128 and char not in ignore_chars:
@@ -2089,6 +2092,11 @@ def _select_pdf_font(labels: list[TaggedLabel]) -> tuple[str, float]:
                 "Warning: Non-ASCII characters detected, but the system Unicode font is not available. Characters may not render correctly."
             )
     return base_font, font_size_multiplier
+
+
+def _label_number(label: LabelFields) -> str | None:
+    """Return a label's internal sequential-number marker, if present."""
+    return next((value for field, value in label if field == LABEL_NUMBER_FIELD), None)
 
 
 # ---------------------------------------------------------------------------
@@ -2198,13 +2206,29 @@ def create_pdf_content(
     for label, _iconic_taxon_name in labels:
         label_content = []
         notes_value = ""  # Default if not found
+        label_number = _label_number(label)
 
         if fungus_fair_mode:
-            sci_name = next((v for f, v in label if f == "Scientific Name"), "")
-            common_name = next((v for f, v in label if f == "Common Name"), "")
-            habitat = next((v for f, v in label if f == "Habitat"), "")
-            spore_print = next((v for f, v in label if f == "Spore Print"), "")
-            edibility = next((v for f, v in label if f == "Edibility"), "")
+            sci_name = next(
+                (v for f, v in label if f != LABEL_NUMBER_FIELD and f == "Scientific Name"),
+                "",
+            )
+            common_name = next(
+                (v for f, v in label if f != LABEL_NUMBER_FIELD and f == "Common Name"),
+                "",
+            )
+            habitat = next(
+                (v for f, v in label if f != LABEL_NUMBER_FIELD and f == "Habitat"),
+                "",
+            )
+            spore_print = next(
+                (v for f, v in label if f != LABEL_NUMBER_FIELD and f == "Spore Print"),
+                "",
+            )
+            edibility = next(
+                (v for f, v in label if f != LABEL_NUMBER_FIELD and f == "Edibility"),
+                "",
+            )
 
             ff_center_style = ParagraphStyle(
                 "FFCenter",
@@ -2221,6 +2245,11 @@ def create_pdf_content(
                 fontSize=22 * font_size_multiplier,
                 leading=26 * font_size_multiplier,
             )
+
+            if label_number is not None:
+                label_content.append(
+                    Paragraph(f"<b>{label_number}</b>", custom_normal_style)
+                )
 
             # Scientific Name
             label_content.append(Paragraph(f"<b>{rl_safe(sci_name)}</b>", ff_sci_style))
@@ -2327,20 +2356,29 @@ def create_pdf_content(
             height_estimate = (
                 (3 * 26 + 4 * 14) * font_size_multiplier + 1.0 * 72 + 0.75 * 72
             )
+            if label_number is not None:
+                height_estimate += 14 * font_size_multiplier
 
         else:
             pre_notes_content = []
+            if label_number is not None:
+                pre_notes_content.append(
+                    Paragraph(f"<b>{label_number}</b>", custom_normal_style)
+                )
             qr_url = next(
                 (
                     value
                     for field, value in label
-                    if field in ("iNaturalist URL", "Mushroom Observer URL")
+                    if field != LABEL_NUMBER_FIELD
+                    and field in ("iNaturalist URL", "Mushroom Observer URL")
                 ),
                 None,
             )
 
             if title_field:
                 for field, value in label:
+                    if field == LABEL_NUMBER_FIELD:
+                        continue
                     if field == title_field:
                         p = Paragraph(f"<b>{rl_safe(value)}</b>", title_normal_style)
                         pre_notes_content.append(p)
@@ -2348,6 +2386,8 @@ def create_pdf_content(
                         break
 
             for field, value in label:
+                if field == LABEL_NUMBER_FIELD:
+                    continue
                 if field == "Notes":
                     notes_value = value
                     continue
@@ -2462,6 +2502,8 @@ def create_pdf_content(
 def _minilabel_source_abbr(label: LabelFields) -> str:
     """Return 'MO', 'BugGuide', or 'iNat' based on label source."""
     for field, _ in label:
+        if field == LABEL_NUMBER_FIELD:
+            continue
         if field == "Mushroom Observer Number":
             return "MO"
         if field == "BugGuide Number":
@@ -2483,9 +2525,13 @@ def _minilabel_qr_url(label: LabelFields) -> str | None:
         preferred = "Mushroom Observer URL"
     else:
         preferred = "iNaturalist URL"
-    url = next((v for f, v in label if f == preferred), None)
+    url = next(
+        (v for f, v in label if f != LABEL_NUMBER_FIELD and f == preferred), None
+    )
     if url is None:
-        url = next((v for f, v in label if "URL" in f), None)
+        url = next(
+            (v for f, v in label if f != LABEL_NUMBER_FIELD and "URL" in f), None
+        )
     return url
 
 
@@ -2495,9 +2541,12 @@ def _minilabel_obs_number(label: LabelFields) -> str | None:
         (
             v
             for f, v in label
-            if "Observation Number" in f
-            or f == "Mushroom Observer Number"
-            or f == "BugGuide Number"
+            if f != LABEL_NUMBER_FIELD
+            and (
+                "Observation Number" in f
+                or f == "Mushroom Observer Number"
+                or f == "BugGuide Number"
+            )
         ),
         None,
     )
@@ -2679,20 +2728,52 @@ def create_rtf_content(
 
             # start one label, force zero space-after here
             rtf_content += r"{\keep\pard\ql\keepn\sa0 " + space_before_cmd
+            label_number = _label_number(label)
 
             if fungus_fair_mode:
-                sci_name = next((v for f, v in label if f == "Scientific Name"), "")
-                common_name = next((v for f, v in label if f == "Common Name"), "")
-                habitat = next((v for f, v in label if f == "Habitat"), "")
-                spore_print = next((v for f, v in label if f == "Spore Print"), "")
-                edibility = next((v for f, v in label if f == "Edibility"), "")
+                sci_name = next(
+                    (
+                        v
+                        for f, v in label
+                        if f != LABEL_NUMBER_FIELD and f == "Scientific Name"
+                    ),
+                    "",
+                )
+                common_name = next(
+                    (
+                        v
+                        for f, v in label
+                        if f != LABEL_NUMBER_FIELD and f == "Common Name"
+                    ),
+                    "",
+                )
+                habitat = next(
+                    (v for f, v in label if f != LABEL_NUMBER_FIELD and f == "Habitat"),
+                    "",
+                )
+                spore_print = next(
+                    (
+                        v
+                        for f, v in label
+                        if f != LABEL_NUMBER_FIELD and f == "Spore Print"
+                    ),
+                    "",
+                )
+                edibility = next(
+                    (v for f, v in label if f != LABEL_NUMBER_FIELD and f == "Edibility"),
+                    "",
+                )
+
+                if label_number is not None:
+                    rtf_content += r"{\b " + escape_rtf(label_number) + r"}\par "
 
                 # Scientific Name - Center, Size 44 (22pt)
                 sci_name_rtf = _format_rtf_text(sci_name)
-                # Re-apply space_before_cmd because \pard resets paragraph properties
+                # Re-apply spacing when the scientific name is the first paragraph;
+                # otherwise it was already applied to the number paragraph above.
                 rtf_content += (
                     r"\pard"
-                    + space_before_cmd
+                    + ("" if label_number is not None else space_before_cmd)
                     + r"\keep\keepn\qc\sa120 {\fs44\b "
                     + sci_name_rtf
                     + r"}\par "
@@ -2805,22 +2886,33 @@ def create_rtf_content(
 
             else:
                 # Standard Label Logic
+                if label_number is not None:
+                    rtf_content += r"{\b " + escape_rtf(label_number) + r"}\line "
+
                 # find url and notes length first
                 qr_url = next(
                     (
                         value
                         for field, value in label
-                        if field in ("iNaturalist URL", "Mushroom Observer URL")
+                        if field != LABEL_NUMBER_FIELD
+                        and field in ("iNaturalist URL", "Mushroom Observer URL")
                     ),
                     None,
                 )
                 notes_value = next(
-                    (value for field, value in label if field == "Notes"), ""
+                    (
+                        value
+                        for field, value in label
+                        if field != LABEL_NUMBER_FIELD and field == "Notes"
+                    ),
+                    "",
                 )
                 notes_length = len(str(notes_value)) if notes_value else 0
 
                 # body fields
                 for field, value in label:
+                    if field == LABEL_NUMBER_FIELD:
+                        continue
                     if field == "iNaturalist URL":
                         rtf_content += escape_rtf(str(value)) + r" \line "
                     elif field == "Mushroom Observer URL":
@@ -3054,7 +3146,12 @@ def create_minilabel_rtf_content(
 def render_plaintext_labels(labels: list[TaggedLabel]) -> None:
     """Print labels to stdout in the existing plaintext format."""
     for label, _ in labels:
+        label_number = _label_number(label)
+        if label_number is not None:
+            print(label_number, flush=True)
         for field, value in label:
+            if field == LABEL_NUMBER_FIELD:
+                continue
             if field == "Notes":
                 value = remove_formatting_tags(value)
                 value = _remove_mo_import_text(value)
@@ -3444,6 +3541,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--stack-order", action="store_true", help="Print the labels in stack order"
+    )
+    parser.add_argument(
+        "--number-labels",
+        action="store_true",
+        default=False,
+        help="Number distinct observations sequentially in final sorted order (off by default)",
     )
     parser.add_argument(
         "--num-per-page",
@@ -4082,6 +4185,29 @@ def _sort_and_stack_labels(
     sorted_labels = sort_labels(labels, args.sort, args.title, args.sort_field)
     original_count = len(sorted_labels)
 
+    if args.number_labels and not args.minilabel:
+        numbers_by_identity: dict[tuple[str, object], int] = {}
+        numbered_labels: list[TaggedLabel] = []
+        for label, iconic_taxon_name in sorted_labels:
+            url = _minilabel_qr_url(label)
+            observation_number = _minilabel_obs_number(label)
+            if url:
+                identity_key: tuple[str, object] = ("url", url)
+            elif observation_number:
+                identity_key = ("obs", observation_number)
+            else:
+                identity_key = ("fields", tuple(label))
+
+            number = numbers_by_identity.get(identity_key)
+            if number is None:
+                number = len(numbers_by_identity) + 1
+                numbers_by_identity[identity_key] = number
+
+            numbered_labels.append(
+                ([(LABEL_NUMBER_FIELD, str(number)), *label], iconic_taxon_name)
+            )
+        sorted_labels = numbered_labels
+
     if args.stack_order:
         sorted_labels = _stack_order(sorted_labels, args.num_per_page)
 
@@ -4119,6 +4245,7 @@ def main() -> None:
     - Writing labels to an RTF file (--rtf) or a PDF file (--pdf), or printing human-readable labels to stdout when no output file is specified. When writing files, prints the created filename and its size in kilobytes when available.
     - A discovery mode (--find-ca) that prints iNaturalist observation URLs for observations located within California instead of generating labels.
     - Reading observation identifiers from a file via --file; accepts space-, comma-, or newline-separated entries.
+    - Sequential numbering in final sorted order via --number-labels, with numbering preserved through stack-order rearrangement; minilabel output ignores this option.
     - Concurrency tuning via --workers (or INAT_MAX_WORKERS env var) and global retry timeout adjustment via --max-wait-seconds (or INAT_MAX_WAIT_SECONDS env var).
     - Minimal verbosity control (--quiet) and a debug flag (--debug).
 
