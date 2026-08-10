@@ -144,6 +144,64 @@ def test_empty_identity_values_fall_back_to_complete_fields(inat_module):
     ]
 
 
+def test_number_identity_does_not_use_unrelated_url_fallback(inat_module):
+    shared_url = "https://mushroomobserver.org/shared"
+    items = [
+        (
+            0,
+            (
+                [
+                    ("iNaturalist Observation Number", "123"),
+                    ("Mushroom Observer URL", shared_url),
+                ],
+                "Fungi",
+            ),
+            None,
+        ),
+        (
+            1,
+            (
+                [
+                    ("iNaturalist Observation Number", "456"),
+                    ("Mushroom Observer URL", shared_url),
+                ],
+                "Fungi",
+            ),
+            None,
+        ),
+    ]
+
+    assert inat_module._minilabel_qr_url(items[0][1][0]) == shared_url
+    result, _ = inat_module._sort_and_stack_labels(_args(number_labels=True), items)
+
+    assert [_value(label, inat_module.LABEL_NUMBER_FIELD) for label in result] == [
+        "1",
+        "2",
+    ]
+
+
+def test_observation_number_identity_is_namespaced_by_source(inat_module):
+    items = [
+        (
+            0,
+            ([("iNaturalist Observation Number", "123")], "Fungi"),
+            None,
+        ),
+        (
+            1,
+            ([("Mushroom Observer Number", "123")], "Fungi"),
+            None,
+        ),
+    ]
+
+    result, _ = inat_module._sort_and_stack_labels(_args(number_labels=True), items)
+
+    assert [_value(label, inat_module.LABEL_NUMBER_FIELD) for label in result] == [
+        "1",
+        "2",
+    ]
+
+
 def test_stack_order_moves_each_label_with_its_preassigned_number(inat_module):
     items = [_item(index, str(index + 1)) for index in range(6)]
 

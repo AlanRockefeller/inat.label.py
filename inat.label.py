@@ -2511,12 +2511,13 @@ def _minilabel_source_abbr(label: LabelFields) -> str:
     return "iNat"
 
 
-def _minilabel_qr_url(label: LabelFields) -> str | None:
+def _minilabel_qr_url(label: LabelFields, allow_fallback: bool = True) -> str | None:
     """Return the source-appropriate URL for a minilabel QR code.
 
     Prefers the canonical URL for the detected source ('BugGuide URL' for BG,
     'Mushroom Observer URL' for MO, 'iNaturalist URL' for iNat).
-    Falls back to the first field whose name contains 'URL' if absent.
+    If *allow_fallback* is true, falls back to the first field whose name
+    contains 'URL' when the canonical field is absent.
     """
     source = _minilabel_source_abbr(label)
     if source == "BugGuide":
@@ -2528,7 +2529,7 @@ def _minilabel_qr_url(label: LabelFields) -> str | None:
     url = next(
         (v for f, v in label if f != LABEL_NUMBER_FIELD and f == preferred), None
     )
-    if url is None:
+    if url is None and allow_fallback:
         url = next(
             (v for f, v in label if f != LABEL_NUMBER_FIELD and "URL" in f), None
         )
@@ -4187,15 +4188,16 @@ def _sort_and_stack_labels(
     original_count = len(sorted_labels)
 
     if args.number_labels and not args.minilabel:
-        numbers_by_identity: dict[tuple[str, object], int] = {}
+        numbers_by_identity: dict[tuple[object, ...], int] = {}
         numbered_labels: list[TaggedLabel] = []
         for label, iconic_taxon_name in sorted_labels:
-            url = _minilabel_qr_url(label)
+            source = _minilabel_source_abbr(label)
+            url = _minilabel_qr_url(label, allow_fallback=False)
             observation_number = _minilabel_obs_number(label)
             if url:
-                identity_key: tuple[str, object] = ("url", url)
+                identity_key: tuple[object, ...] = ("url", url)
             elif observation_number:
-                identity_key = ("obs", observation_number)
+                identity_key = ("obs", source, observation_number)
             else:
                 identity_key = ("fields", tuple(label))
 
