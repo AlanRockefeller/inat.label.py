@@ -5,7 +5,7 @@ August 10, 2026
 
 - Added `--number-labels` to print a bold sequential number above each full-size label; minilabel output ignores this option.
 - Label numbers now count distinct observations rather than generated label copies, so duplicate copies share a number. Duplicate identity is determined by canonical source URL, then observation number, then the complete label fields as a fallback.
-- Numbers are assigned after sorting and before stack-order rearrangement. Stack-order padding repeats the final real label with its existing number instead of allocating another number.
+- Numbers are assigned after sorting and before stack-order rearrangement. Empty stack-order padding cells contain no observation data or label number.
 
 # 3.9.9
 August 1, 2026

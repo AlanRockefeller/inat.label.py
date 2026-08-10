@@ -162,22 +162,47 @@ def test_stack_order_moves_each_label_with_its_preassigned_number(inat_module):
     ]
 
 
-def test_stack_order_padding_repeats_final_labels_existing_number(inat_module):
+def test_stack_order_padding_uses_empty_tagged_label(inat_module, monkeypatch, capsys, tmp_path):
     items = [_item(index, str(index + 1)) for index in range(5)]
 
     result, _ = inat_module._sort_and_stack_labels(
         _args(number_labels=True, stack_order=True), items
     )
 
-    assert [_value(label, "ID") for label in result] == ["1", "3", "5", "2", "4", "5"]
+    assert result[-1] == ([], "")
+    assert [_value(label, "ID") for label in result] == ["1", "3", "5", "2", "4", None]
     assert [_value(label, inat_module.LABEL_NUMBER_FIELD) for label in result] == [
         "1",
         "3",
         "5",
         "2",
         "4",
-        "5",
+        None,
     ]
+
+    rtf = inat_module.create_rtf_content(result, no_qr=True)
+    assert rtf.count("Species 5") == 1
+
+    inat_module.render_plaintext_labels(result)
+    assert capsys.readouterr().out.count("Scientific Name: Species 5") == 1
+
+    captured_story = []
+    monkeypatch.setattr(
+        inat_module.BaseDocTemplate,
+        "build",
+        lambda _self, story: captured_story.extend(story),
+    )
+    inat_module.create_pdf_content(result, str(tmp_path / "stacked.pdf"), no_qr=True)
+    pdf_text = "\n".join(
+        flowable.getPlainText()
+        for label_flowable in captured_story
+        for flowable in label_flowable._content
+        if isinstance(flowable, inat_module.Paragraph)
+    )
+    assert pdf_text.count("Species 5") == 1
+    assert not any(
+        isinstance(flowable, inat_module.Paragraph) for flowable in captured_story[-1]._content
+    )
 
 
 def test_numbering_off_and_minilabel_mode_do_not_modify_labels(inat_module, capsys):

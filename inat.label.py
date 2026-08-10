@@ -3663,8 +3663,9 @@ def _stack_order(labels: list[TaggedLabel], num_per_page: int) -> list[TaggedLab
             + i // labels_per_page
         )
         if j >= m:
-            j = m - 1  # re-use last label as spacer to fill pages
-        stacked_labels.append(labels[j])
+            stacked_labels.append(([], ""))
+        else:
+            stacked_labels.append(labels[j])
     return stacked_labels
 
 

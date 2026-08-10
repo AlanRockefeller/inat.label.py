@@ -67,6 +67,7 @@ An easy to use online version is at https://images.mushroomobserver.org/labels
     DNA Barcode TEF1
 - Automatically sorts labels by observation number (or title field) for consistent ordering.
 - Optional sort orders with `--sort`: `date` (oldest first), `date-desc` (newest first), `voucher`, `custom` (with `--sort-field FIELD`), or `none` to keep input order. Date sorting uses the observation's API timestamp, including time of day, in the observation's own time zone.
+- Optional sequential numbering with `--number-labels` for full-size labels. Numbers are assigned after sorting, with one number per distinct observation; the option is ignored for minilabels.
 - Support for "stack order" printing with `--stack-order`, which reorders labels so they remain in order when the printed pages are cut and stacked (assumes 2 columns per page). The number of labels per page defaults to 6 and can be changed with `--num-per-page` (must be a positive even integer greater than 1).
 - Optimized PDF layout with narrow top/bottom margins and a wider center gap to simplify cutting and ensure uniform label sizes.
 - By default outputs labels to console for quick viewing / testing
@@ -112,31 +113,31 @@ python inat.label.py <observation_number_or_url> [<observation_number_or_url> ..
 
 1. Generate label for a single observation:
 
-   ```
+   ```bash
    python3 inat.label.py 183905751
    ```
 
 2. Generate labels for multiple observations:
 
-   ```
+   ```bash
    python3 inat.label.py 183905751 147249599 https://www.inaturalist.org/observations/106191917 MO505283
    ```
 
 3. Generate labels and save to an RTF file:
 
-   ```
+   ```bash
    python3 inat.label.py 183905751 147249599 --rtf two_labels.rtf
    ```
 
 4. Generate fungus fair signage from a CSV file:
 
-   ```
+   ```bash
    python3 inat.label.py --fungusfair fair.csv --pdf out.pdf
    ```
 
 5. Generate labels with custom fields - in this case without Coordinates but with Fungusworld number
 
-   ```
+   ```bash
    python3 inat.label.py 183905751 147249599 --custom "+Fungusworld, -Coordinates" --pdf out.pdf
    ```
 
