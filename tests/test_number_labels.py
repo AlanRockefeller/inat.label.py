@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 
 def _item(index, identifier, voucher=None):
     fields = [("ID", identifier), ("Scientific Name", f"Species {identifier}")]
@@ -220,7 +222,9 @@ def test_stack_order_moves_each_label_with_its_preassigned_number(inat_module):
     ]
 
 
-def test_stack_order_padding_uses_empty_tagged_label(inat_module, monkeypatch, capsys, tmp_path):
+def test_stack_order_padding_uses_empty_tagged_label(
+    inat_module, monkeypatch, capsys, tmp_path
+):
     items = [_item(index, str(index + 1)) for index in range(5)]
 
     result, _ = inat_module._sort_and_stack_labels(
@@ -238,8 +242,11 @@ def test_stack_order_padding_uses_empty_tagged_label(inat_module, monkeypatch, c
         None,
     ]
 
-    rtf = inat_module.create_rtf_content(result, no_qr=True)
+    rtf = inat_module.create_rtf_content(
+        result, no_qr=True, stack_order_num_per_page=6
+    )
     assert rtf.count("Species 5") == 1
+    assert rtf.count(r"\trrh-5040") == 6
 
     inat_module.render_plaintext_labels(result)
     assert capsys.readouterr().out.count("Scientific Name: Species 5") == 1
@@ -250,16 +257,71 @@ def test_stack_order_padding_uses_empty_tagged_label(inat_module, monkeypatch, c
         "build",
         lambda _self, story: captured_story.extend(story),
     )
-    inat_module.create_pdf_content(result, str(tmp_path / "stacked.pdf"), no_qr=True)
+    inat_module.create_pdf_content(
+        result,
+        str(tmp_path / "stacked.pdf"),
+        no_qr=True,
+        stack_order_num_per_page=6,
+    )
     pdf_text = "\n".join(
         flowable.getPlainText()
-        for label_flowable in captured_story
-        for flowable in label_flowable._content
+        for slot in captured_story
+        for cell in slot._cellvalues[0]
+        for flowable in getattr(cell, "_content", [])
         if isinstance(flowable, inat_module.Paragraph)
     )
     assert pdf_text.count("Species 5") == 1
-    assert not any(
-        isinstance(flowable, inat_module.Paragraph) for flowable in captured_story[-1]._content
+    assert all(isinstance(flowable, inat_module.Table) for flowable in captured_story)
+    assert captured_story[-1]._argH[0] == pytest.approx(
+        (11 - 2 * 0.12) * inat_module.inch / 3
+    )
+
+
+def test_stack_order_reserves_equal_slots_for_short_labels(
+    inat_module, monkeypatch, tmp_path
+):
+    items = [_item(index, str(index + 1)) for index in range(7)]
+    result, _ = inat_module._sort_and_stack_labels(_args(stack_order=True), items)
+
+    assert [_value(label, "ID") for label in result] == [
+        "1",
+        "5",
+        None,
+        "3",
+        "7",
+        None,
+        "2",
+        "6",
+        None,
+        "4",
+        None,
+        None,
+    ]
+
+    rtf = inat_module.create_rtf_content(
+        result, no_qr=True, stack_order_num_per_page=6
+    )
+    assert rtf.count(r"\trrh-5040") == 12
+
+    captured_story = []
+    monkeypatch.setattr(
+        inat_module.BaseDocTemplate,
+        "build",
+        lambda _self, story: captured_story.extend(story),
+    )
+    inat_module.create_pdf_content(
+        result,
+        str(tmp_path / "stacked-short-labels.pdf"),
+        no_qr=True,
+        stack_order_num_per_page=6,
+    )
+
+    expected_height = (11 - 2 * 0.12) * inat_module.inch / 3
+    assert len(captured_story) == 12
+    assert all(isinstance(flowable, inat_module.Table) for flowable in captured_story)
+    assert all(
+        flowable._argH[0] == pytest.approx(expected_height)
+        for flowable in captured_story
     )
 
 

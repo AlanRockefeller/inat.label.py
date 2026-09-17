@@ -1,5 +1,7 @@
 from flask import (
     Flask,
+    g,
+    has_request_context,
     request,
     jsonify,
     send_file,
@@ -20,15 +22,18 @@ import re
 import json
 import traceback
 import sys
+import importlib.util
 from collections import defaultdict, OrderedDict
 from datetime import date
 from uuid import uuid4
-from functools import partial
+from functools import partial, cmp_to_key
 
 import threading
 from logging.handlers import RotatingFileHandler
 
 from date_windows import build_date_windows
+from ratelimit import RateLimiter
+import usage_stats
 
 INAT_HEADERS = {
     "Accept": "application/json",
@@ -77,6 +82,7 @@ def legacy_color_for_taxon_group(color_group):
 # Rate limiting for iNaturalist API
 api_lock = threading.Lock()
 next_api_call_time = 0.0
+INAT_MIN_REQUEST_INTERVAL = float(os.environ.get("INAT_MIN_REQUEST_INTERVAL", "1.0"))
 
 # Hardening settings
 MAX_OBS_PER_REQUEST = int(os.environ.get("MAX_OBS_PER_REQUEST", "500"))
@@ -110,6 +116,182 @@ SORT_MODES = ("none", "date", "date-desc", "voucher", "custom")
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS"
 )  # comma-separated list of allowed origins
+
+# Every observation input that needs an MO -> iNat conversion costs one
+# subprocess and one upstream request, run inline while the request holds a
+# worker thread.  Without a cap, a single 500-entry request spawns 500 of them.
+MAX_MO_CONVERSIONS_PER_REQUEST = int(
+    os.environ.get("MAX_MO_CONVERSIONS_PER_REQUEST", "25")
+)
+MOTOINAT_TIMEOUT_SECONDS = int(os.environ.get("MOTOINAT_TIMEOUT_SECONDS", "45"))
+# An SSE stream occupies a worker thread for the life of the job.  Gunicorn
+# currently runs 1 worker with 4 threads, so this stays at the job cap: three
+# streams can be open and a thread is still free to serve everything else.
+MAX_CONCURRENT_STREAMS = int(
+    os.environ.get("MAX_CONCURRENT_STREAMS", str(MAX_CONCURRENT_JOBS))
+)
+# Requests are small forms; anything larger is either a mistake or an attempt to
+# tie up the worker parsing a body that will be rejected anyway.
+MAX_REQUEST_BYTES = int(os.environ.get("MAX_REQUEST_BYTES", str(2 * 1024 * 1024)))
+
+# Sliding-window request limits as {bucket: (max_requests, window_seconds)}.
+# Buckets are keyed by client IP; see _rate_limit_buckets() for the endpoint map.
+RATE_LIMIT_RULES = {
+    # Label generation: the most expensive thing an anonymous client can start.
+    "print": (int(os.environ.get("RATE_LIMIT_PRINT_PER_MIN", "12")), 60),
+    "print_daily": (int(os.environ.get("RATE_LIMIT_PRINT_PER_DAY", "300")), 86400),
+    # Multi-page observation searches: the heaviest read path.
+    "search": (int(os.environ.get("RATE_LIMIT_SEARCH_PER_MIN", "30")), 60),
+    # Row lookups and field autocomplete fire while the user types, so these are
+    # generous; the real upstream cost is already paced at one request/second
+    # globally, and these limits exist to stop one client hogging threads.
+    "lookup": (int(os.environ.get("RATE_LIMIT_LOOKUP_PER_MIN", "120")), 60),
+    "autocomplete": (int(os.environ.get("RATE_LIMIT_AUTOCOMPLETE_PER_MIN", "120")), 60),
+    "client_event": (int(os.environ.get("RATE_LIMIT_CLIENT_EVENT_PER_MIN", "30")), 60),
+    # To-Do suggestions stay open to everyone, but bounded per day.
+    "todo": (int(os.environ.get("RATE_LIMIT_TODO_PER_DAY", "10")), 86400),
+    "default": (int(os.environ.get("RATE_LIMIT_DEFAULT_PER_MIN", "240")), 60),
+}
+# Endpoints whose work is cheap enough that only the catch-all applies.
+RATE_LIMIT_ENDPOINTS = {
+    "print_start": ("print", "print_daily"),
+    "find_observations": ("search",),
+    "observation_fields": ("autocomplete",),
+    "client_event": ("client_event",),
+    "lookup_batch": ("lookup",),
+    "submit": ("lookup",),
+    "todo": ("todo",),
+}
+# Endpoints where the endpoint-specific limit applies to submissions only, so
+# that reading the page stays unlimited.
+RATE_LIMIT_WRITE_ONLY_ENDPOINTS = {"todo"}
+# Sort field names are forwarded to inat.label.py as a command argument.  An
+# allowlist keeps that boundary allowlist-shaped instead of blacklist-shaped.
+SORT_FIELD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ()/&.,'#_-]{0,63}$")
+# Custom label field names travel to the generator the same way.
+CUSTOM_FIELD_RE = re.compile(r"^[+-]?[A-Za-z0-9][A-Za-z0-9 ()/&.,'#_-]{0,63}$")
+MAX_CUSTOM_FIELDS = int(os.environ.get("MAX_CUSTOM_FIELDS", "40"))
+
+# Security logging deliberately distinguishes commodity Internet scans from
+# requests crafted around labelmaker's real controls.  Values are JSON-escaped
+# before logging, and a per-value bound prevents a single request from turning
+# into an unbounded log record while retaining enough of the payload to
+# investigate it.
+MAX_DIAGNOSTIC_VALUE_LENGTH = int(
+    os.environ.get("MAX_DIAGNOSTIC_VALUE_LENGTH", "4096")
+)
+# Values arrive straight off the wire, where MAX_CONTENT_LENGTH alone still
+# allows megabytes.  Classification only ever needs the head of a value, so
+# scanning is bounded well below that: an attacker must not be able to choose
+# how much text the regex engine walks.
+MAX_DIAGNOSTIC_SCAN_LENGTH = int(
+    os.environ.get("MAX_DIAGNOSTIC_SCAN_LENGTH", "2048")
+)
+# Recorded indicators are bounded far more tightly than MAX_DIAGNOSTIC_VALUE_LENGTH.
+# A security log that an attacker can rotate out of retention is worse than no
+# log at all, so one request can only ever contribute a small, fixed record.
+MAX_DIAGNOSTIC_INDICATORS = int(os.environ.get("MAX_DIAGNOSTIC_INDICATORS", "5"))
+MAX_DIAGNOSTIC_INDICATOR_LENGTH = int(
+    os.environ.get("MAX_DIAGNOSTIC_INDICATOR_LENGTH", "256")
+)
+# Nested containers are walked to a fixed depth.  Without this, a small payload
+# of nested JSON arrays exhausts the C stack inside the walker.
+MAX_DIAGNOSTIC_DEPTH = int(os.environ.get("MAX_DIAGNOSTIC_DEPTH", "10"))
+# Per-value bounds still leave a record that is wide rather than deep: one
+# event can carry many fields, or a list of many individually-bounded
+# strings.  A single record larger than the handler's maxBytes rotates every
+# backup out of retention in one request, so the assembled record is bounded
+# as well as each value inside it.
+MAX_DIAGNOSTIC_RECORD_LENGTH = int(
+    os.environ.get("MAX_DIAGNOSTIC_RECORD_LENGTH", "65536")
+)
+# Kept verbatim when a record has to be truncated: without them the surviving
+# line cannot be tied back to the request that produced it.
+DIAGNOSTIC_RECORD_IDENTITY_FIELDS = (
+    "event",
+    "request_id",
+    "client_ip",
+    "method",
+    "path",
+    "endpoint",
+)
+# Rotated 1 MB at a time; see configure_file_logging.
+SECURITY_LOG_BACKUP_COUNT = int(os.environ.get("SECURITY_LOG_BACKUP_COUNT", "30"))
+COMMON_SCANNER_TARGET_RE = re.compile(
+    r"(?:"
+    r"(?:^|/)(?:\.env|\.git|\.svn|wp-admin|wp-login(?:\.php)?|wordpress|"
+    r"phpmyadmin|cgi-bin|server-status|actuator|vendor/phpunit|boaform|"
+    r"HNAP1|\.aws)(?:/|$)|"
+    r"/etc/passwd|proc/self/environ|\.\./|%2e%2e|%00|"
+    r"(?:^|/)(?:config|backup|database)\.(?:php|sql|ya?ml|json)(?:$|[/?])"
+    r")",
+    re.IGNORECASE,
+)
+DIRECTORY_TRAVERSAL_VALUE_RE = re.compile(
+    r"(?:\.\.[/\\]|%(?:25)?2e%(?:25)?2e(?:%(?:25)?2f|%(?:25)?5c|[/\\])|"
+    r"/etc/passwd|proc/self/(?:environ|cmdline)|[A-Za-z]:\\(?:windows|users)\\)",
+    re.IGNORECASE,
+)
+# Every quantifier here is bounded, and callers truncate to
+# MAX_DIAGNOSTIC_SCAN_LENGTH first, so match cost stays linear in the scanned
+# length.  An unbounded ".*" between literals backtracks quadratically and is a
+# denial-of-service vector on a path that runs for every request.
+#
+# Both subprocess call sites build argv lists (never shell=True) and
+# print_stream emits "--" before user-supplied ids, so shell metacharacters are
+# indicators for the log rather than live injection vectors.  Bare ";" is left
+# out: it is ordinary punctuation in a taxon name or note and produced more
+# noise than signal.  Flag injection is handled by
+# ARGUMENT_INJECTION_VALUE_RE below.
+COMMAND_EXECUTION_VALUE_RE = re.compile(
+    r"(?:\x00|\r|\n|`[^`]{0,200}`|\$\(|\|\||&&|<script\b|"
+    r"\{\{[^{}]{0,200}\}\})",
+    re.IGNORECASE,
+)
+# Option-shaped values are classified separately from the metacharacters
+# above, because shape alone does not make one an attack.  The UI's
+# "suppress field" control posts custom_args[]=-Habitat, which is the exact
+# shape of a short option, so treating every leading dash as argument
+# injection files ordinary prints in the targeted-attack log -- and, because
+# log_targeted_attack sets g.security_event_logged, suppresses their
+# http_error_response records too.  A value the label endpoints would accept
+# as a field name is not injection into anything, so CUSTOM_FIELD_RE -- the
+# rule those endpoints validate with -- decides.  It rejects the "--flag"
+# form outright, so real argument injection stays flagged.  The match is
+# anchored to the start of the value: that is the only position where it
+# could become an argv option.
+ARGUMENT_INJECTION_VALUE_RE = re.compile(r"^\s{0,8}--?[A-Za-z][A-Za-z0-9_-]{0,64}")
+LABELMAKER_ATTACK_SURFACE_ENDPOINTS = frozenset(
+    {
+        "lookup_batch",
+        "submit",
+        "print_start",
+        "print_stream",
+        "find_observations",
+        "observation_fields",
+    }
+)
+
+# How many dropped observations the CSV export names in its response header.
+# The rest are counted only, so one bad paste cannot push a huge header at the
+# browser.
+MAX_SKIPPED_IDS_REPORTED = 20
+
+# Sanitizing limits for To-Do suggestions.
+TODO_MAX_NAME_LENGTH = 60
+TODO_MAX_SUGGESTION_LENGTH = 500
+TODO_MAX_FILE_BYTES = int(os.environ.get("TODO_MAX_FILE_BYTES", str(256 * 1024)))
+
+# Job output retention.  Directories are pruned on a timer inside the reaper
+# thread; their daily counts are archived first so the usage graph keeps its
+# history.  The first sweep is delayed so importing this module (tests, shell
+# sessions) never deletes anything unexpectedly.
+JOB_PRUNE_INTERVAL_SECONDS = int(
+    os.environ.get("JOB_PRUNE_INTERVAL_SECONDS", str(6 * 3600))
+)
+JOB_PRUNE_STARTUP_DELAY_SECONDS = int(
+    os.environ.get("JOB_PRUNE_STARTUP_DELAY_SECONDS", "120")
+)
 
 # Observation fields that inat.label.py automatically includes on labels when present.
 # These should be checked by default in the Add Fields modal.
@@ -149,6 +331,10 @@ DEFAULT_LABEL_FIELDS = [
 _jobs = {}
 _jobs_lock = threading.Lock()
 
+# Count of SSE log streams currently held open (one worker thread each).
+_open_streams = [0]
+_stream_count_lock = threading.Lock()
+
 
 def _reap_finished_jobs_locked():
     now = time.time()
@@ -171,30 +357,40 @@ def _reap_finished_jobs():
 
 
 def inat_api_get(url, **kwargs):
-    """A rate-limited GET request helper for the iNaturalist API."""
+    """A rate-limited GET request helper for the iNaturalist API.
+
+    The outbound pace stays at one request per second across all threads, but
+    only the scheduling is serialized: the lock is released before sleeping and
+    before the request itself.  Holding it across the network call made one slow
+    upstream response block every other request in the process.
+    """
     global next_api_call_time
     with api_lock:
-        now = time.time()
-        if now < next_api_call_time:
-            time.sleep(next_api_call_time - now)
+        scheduled_at = max(time.time(), next_api_call_time)
+        next_api_call_time = scheduled_at + INAT_MIN_REQUEST_INTERVAL
 
-        try:
-            kwargs.setdefault("headers", INAT_HEADERS)
-            kwargs.setdefault("timeout", 20)
-            response = requests.get(url, **kwargs)
-            next_api_call_time = time.time() + 1.0
-            response.raise_for_status()
-            return response
-        except requests.exceptions.RequestException:
-            app.logger.exception("Error during iNaturalist API request.")
-            next_api_call_time = time.time() + 1.0
-            raise
+    delay = scheduled_at - time.time()
+    if delay > 0:
+        time.sleep(delay)
+
+    try:
+        kwargs.setdefault("headers", INAT_HEADERS)
+        kwargs.setdefault("timeout", 20)
+        response = requests.get(url, **kwargs)
+        response.raise_for_status()
+        return response
+    except requests.exceptions.RequestException:
+        app.logger.exception("Error during iNaturalist API request.")
+        raise
 
 
 app = Flask(__name__, static_url_path="/labels/static")
 
 cmd_logger = logging.getLogger("cmd_logger")
 api_error_logger = logging.getLogger("api_error_logger")
+user_problem_logger = logging.getLogger("user_problem_logger")
+internet_scanner_logger = logging.getLogger("internet_scanner_logger")
+targeted_attack_logger = logging.getLogger("targeted_attack_logger")
 
 
 def _env_flag_enabled(name):
@@ -225,6 +421,9 @@ def configure_file_logging(flask_app):
     flask_app.logger.setLevel(logging.WARNING)
     cmd_logger.setLevel(logging.INFO)
     api_error_logger.setLevel(logging.WARNING)
+    user_problem_logger.setLevel(logging.WARNING)
+    internet_scanner_logger.setLevel(logging.WARNING)
+    targeted_attack_logger.setLevel(logging.WARNING)
 
     if _env_flag_enabled("LABELS_DISABLE_FILE_LOGGING"):
         # Skip file handlers only. Records still propagate to the root logger
@@ -260,6 +459,33 @@ def configure_file_logging(flask_app):
             warning_formatter,
             logging.WARNING,
         ),
+        (
+            user_problem_logger,
+            "user_problem_log",
+            "user_problems.log",
+            10,
+            warning_formatter,
+            logging.WARNING,
+        ),
+        # Deeper retention than the other logs.  These two are the ones an
+        # attacker has an interest in flushing, and bounded record sizes alone
+        # only slow that down; history has to outlive a sustained flood.
+        (
+            internet_scanner_logger,
+            "internet_scanner_log",
+            "internet_scanners.log",
+            SECURITY_LOG_BACKUP_COUNT,
+            warning_formatter,
+            logging.WARNING,
+        ),
+        (
+            targeted_attack_logger,
+            "targeted_attack_log",
+            "targeted_attacks.log",
+            SECURITY_LOG_BACKUP_COUNT,
+            warning_formatter,
+            logging.WARNING,
+        ),
     )
     for logger, handler_name, filename, backup_count, formatter, level in handler_specs:
         _add_rotating_file_handler(
@@ -280,6 +506,444 @@ if ALLOWED_ORIGINS:
     origins = [o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()]
     if origins:
         CORS(app, resources={r"/labels/*": {"origins": origins}})
+
+# Reject oversized bodies before Werkzeug parses them.  nginx allows 200M on
+# this vhost, and every byte of a form POST is parsed by the single worker.
+app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
+
+_rate_limiter = RateLimiter()
+# Loopback only: Gunicorn binds to 127.0.0.1, so a request that did not come
+# from the local nginx has no business claiming a forwarded client address.
+_TRUSTED_PROXY_ADDRESSES = {"127.0.0.1", "::1"}
+
+
+def _request_limits_disabled():
+    """Rate limiting and origin checks are off under test and by opt-out."""
+    return app.config.get("TESTING") or _env_flag_enabled("LABELS_DISABLE_REQUEST_LIMITS")
+
+
+def client_ip():
+    """Best-effort client address, trusting proxy headers only from loopback."""
+    remote_addr = request.remote_addr or "unknown"
+    if remote_addr not in _TRUSTED_PROXY_ADDRESSES:
+        return remote_addr
+
+    real_ip = (request.headers.get("X-Real-IP") or "").strip()
+    if real_ip:
+        return real_ip
+
+    forwarded_for = (request.headers.get("X-Forwarded-For") or "").strip()
+    if forwarded_for:
+        # nginx appends the peer address, so the last hop is the trustworthy one.
+        return forwarded_for.split(",")[-1].strip() or remote_addr
+
+    return remote_addr
+
+
+def _bounded_diagnostic_value(value, depth=0):
+    """Return a log-safe, bounded representation without redacting content.
+
+    Depth is capped as well as width: a client event body is attacker-supplied
+    JSON, and json.loads accepts nesting deeper than this walker could recurse
+    through, so an unbounded walk turns a few kilobytes into a 500.
+    """
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, (list, tuple, dict)) and depth >= MAX_DIAGNOSTIC_DEPTH:
+        return f"[nested {type(value).__name__} truncated at depth {depth}]"
+    if isinstance(value, (list, tuple)):
+        return [_bounded_diagnostic_value(item, depth + 1) for item in value[:100]]
+    if isinstance(value, dict):
+        return {
+            str(key)[:128]: _bounded_diagnostic_value(item, depth + 1)
+            for key, item in list(value.items())[:100]
+        }
+
+    text = str(value)
+    if len(text) <= MAX_DIAGNOSTIC_VALUE_LENGTH:
+        return text
+    omitted = len(text) - MAX_DIAGNOSTIC_VALUE_LENGTH
+    return f"{text[:MAX_DIAGNOSTIC_VALUE_LENGTH]}...[{omitted} chars omitted]"
+
+
+def _request_diagnostic_fields():
+    if not has_request_context():
+        return {}
+    return {
+        "request_id": getattr(g, "request_id", None),
+        "client_ip": client_ip(),
+        "method": request.method,
+        "path": request.path,
+        "endpoint": request.endpoint,
+        "user_agent": request.headers.get("User-Agent", ""),
+    }
+
+
+def _write_event(logger, event, **fields):
+    payload = {"event": event, **_request_diagnostic_fields(), **fields}
+    payload = {
+        key: _bounded_diagnostic_value(value)
+        for key, value in payload.items()
+        if value is not None
+    }
+    # JSON escaping keeps every event on one physical line even when a payload
+    # contains attacker-controlled newlines or terminal control characters.
+    line = json.dumps(payload, ensure_ascii=True, sort_keys=True, default=str)
+    if len(line) > MAX_DIAGNOSTIC_RECORD_LENGTH:
+        line = json.dumps(
+            _truncated_diagnostic_record(payload, len(line)),
+            ensure_ascii=True,
+            sort_keys=True,
+            default=str,
+        )
+    logger.warning(line)
+
+
+def _truncated_diagnostic_record(payload, record_length):
+    """Reduce an oversized record to its identifying fields plus an excerpt.
+
+    Keeping the record valid, bounded, and on one line matters more than
+    keeping all of it: the reader still learns which request produced it and
+    how much was dropped, and no single request can rotate the log away.
+    """
+    record = {
+        key: value
+        for key, value in payload.items()
+        if key in DIAGNOSTIC_RECORD_IDENTITY_FIELDS
+    }
+    body = {
+        key: value
+        for key, value in payload.items()
+        if key not in DIAGNOSTIC_RECORD_IDENTITY_FIELDS
+    }
+    record["record_truncated"] = True
+    record["record_length"] = record_length
+    record["record_excerpt"] = json.dumps(
+        body, ensure_ascii=True, sort_keys=True, default=str
+    )[:MAX_DIAGNOSTIC_VALUE_LENGTH]
+    return record
+
+
+def log_user_problem(event, **fields):
+    if has_request_context():
+        g.user_problem_event_logged = True
+    _write_event(user_problem_logger, event, **fields)
+
+
+def log_internet_scanner(event, **fields):
+    if has_request_context():
+        g.security_event_logged = True
+    _write_event(internet_scanner_logger, event, **fields)
+
+
+def log_targeted_attack(event, **fields):
+    if has_request_context():
+        g.security_event_logged = True
+    _write_event(targeted_attack_logger, event, **fields)
+
+
+def _request_target():
+    """Return the original request target when the server exposes it."""
+    return request.environ.get("RAW_URI") or request.environ.get(
+        "REQUEST_URI"
+    ) or request.full_path
+
+
+def _looks_like_injection(value):
+    return bool(_exploit_techniques(value))
+
+
+def _looks_like_argument_injection(text):
+    """True for option-shaped values the label endpoints would reject."""
+    if not ARGUMENT_INJECTION_VALUE_RE.match(text):
+        return False
+    # Endpoints strip() before validating, so compare on the same footing.
+    return not CUSTOM_FIELD_RE.match(text.strip())
+
+
+def _exploit_techniques(value):
+    # Truncate before matching, not just before logging.  The regex engine must
+    # never walk an attacker-chosen number of bytes on a per-request path.
+    text = str(value or "")[:MAX_DIAGNOSTIC_SCAN_LENGTH]
+    techniques = []
+    if DIRECTORY_TRAVERSAL_VALUE_RE.search(text):
+        techniques.append("directory_traversal")
+    if COMMAND_EXECUTION_VALUE_RE.search(text) or _looks_like_argument_injection(
+        text
+    ):
+        techniques.append("command_execution")
+    return techniques
+
+
+def _request_exploit_indicators():
+    """Find exploit syntax in fields consumed by real labelmaker endpoints."""
+    indicators = []
+    for source, values in (("query", request.args), ("form", request.form)):
+        for field, submitted_values in values.lists():
+            for value in submitted_values:
+                techniques = _exploit_techniques(value)
+                if techniques:
+                    indicators.append(
+                        {
+                            "source": source,
+                            "field": field,
+                            "value": str(value)[:MAX_DIAGNOSTIC_INDICATOR_LENGTH],
+                            "techniques": techniques,
+                        }
+                    )
+                    if len(indicators) >= MAX_DIAGNOSTIC_INDICATORS:
+                        return indicators
+    return indicators
+
+
+def _origin_host(header_value):
+    """Return the host[:port] of an Origin/Referer header value."""
+    if not header_value:
+        return None
+    value = header_value.strip()
+    if value == "null":
+        return "null"
+    match = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://([^/?#]+)", value)
+    return match.group(1).lower() if match else None
+
+
+def _allowed_request_origins():
+    hosts = {(request.host or "").lower()}
+    if ALLOWED_ORIGINS:
+        for origin in ALLOWED_ORIGINS.split(","):
+            host = _origin_host(origin.strip())
+            if host:
+                hosts.add(host)
+    hosts.discard("")
+    return hosts
+
+
+def _is_cross_site_write():
+    """True when a state-changing request declares a foreign origin.
+
+    This is the CSRF control: it costs nothing, needs no token or cookie, and
+    does not interfere with embedding the app in a third-party iframe, because a
+    framed page still posts with this app's own origin.  Requests with no Origin
+    or Referer (curl, scripts) are allowed through -- browsers always send one
+    for cross-site form posts and fetches, which is the case being defended
+    against.
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return False
+
+    declared = _origin_host(request.headers.get("Origin")) or _origin_host(
+        request.headers.get("Referer")
+    )
+    if not declared:
+        return False
+    return declared not in _allowed_request_origins()
+
+
+def _rate_limit_buckets():
+    endpoint = request.endpoint
+    if endpoint in RATE_LIMIT_WRITE_ONLY_ENDPOINTS and request.method in (
+        "GET",
+        "HEAD",
+        "OPTIONS",
+    ):
+        return ("default",)
+    return RATE_LIMIT_ENDPOINTS.get(endpoint, ()) + ("default",)
+
+
+@app.before_request
+def _start_request_diagnostics():
+    """Per-request state only.
+
+    Deliberately cheap.  Classification reads request.form and runs regexes over
+    attacker-controlled bytes, so it must not happen before the rate limiter has
+    had its say; it lives in _scan_request_for_attacks, registered below.
+    """
+    g.request_id = str(uuid4()).replace("-", "")[:12]
+    g.request_started_at = time.monotonic()
+    g.security_event_logged = False
+    g.user_problem_event_logged = False
+    return None
+
+
+@app.before_request
+def _enforce_request_limits():
+    if request.endpoint == "static" or _request_limits_disabled():
+        return None
+
+    if _is_cross_site_write():
+        log_targeted_attack(
+            "cross_site_write_blocked",
+            origin=request.headers.get("Origin") or request.headers.get("Referer"),
+        )
+        return (
+            jsonify(
+                {
+                    "error": "This request was blocked because it came from another website."
+                }
+            ),
+            403,
+        )
+
+    ip = client_ip()
+    for bucket in _rate_limit_buckets():
+        limit, window = RATE_LIMIT_RULES[bucket]
+        allowed, retry_after = _rate_limiter.check((bucket, ip), limit, window)
+        if not allowed:
+            # A user clicking too fast trips this far more often than an
+            # attacker does, so it belongs in the user-problem log.  Real floods
+            # are visible in nginx's access log.
+            log_user_problem(
+                "endpoint_rate_limit_exceeded",
+                bucket=bucket,
+                limit=limit,
+                window_seconds=window,
+                retry_after_seconds=retry_after,
+            )
+            window_text = "day" if window >= 86400 else (
+                "minute" if window == 60 else f"{window} seconds"
+            )
+            message = (
+                f"Rate limit reached: at most {limit} of these requests per "
+                f"{window_text}. Try again in {retry_after} seconds."
+            )
+            if request.endpoint == "todo":
+                # Reached by a browser form, so answer with the page itself
+                # rather than a JSON body the user would have to read raw.
+                return (
+                    render_template(
+                        "todo.html",
+                        todos=_read_todos(_todo_file_path()),
+                        notice=message,
+                    ),
+                    429,
+                    {"Retry-After": str(retry_after)},
+                )
+            response = jsonify({"error": message, "retry_after": retry_after})
+            return response, 429, {"Retry-After": str(retry_after)}
+
+    return None
+
+
+@app.before_request
+def _scan_request_for_attacks():
+    """Classify the request payload, after the rate limiter has admitted it.
+
+    Registered after _enforce_request_limits on purpose: this reads request.form
+    and runs regexes over it, so running it first let one unauthenticated POST
+    burn unbounded CPU that the rate limiter never got to refuse.  A request
+    that is rejected as cross-site or rate-limited is logged by that check
+    instead and is not classified here.
+    """
+    target = _request_target()
+    if request.endpoint in LABELMAKER_ATTACK_SURFACE_ENDPOINTS:
+        indicators = _request_exploit_indicators()
+        if indicators:
+            techniques = sorted(
+                {
+                    technique
+                    for indicator in indicators
+                    for technique in indicator["techniques"]
+                }
+            )
+            log_targeted_attack(
+                "labelmaker_exploit_payload",
+                attack_techniques=techniques,
+                indicators=indicators,
+            )
+    if getattr(g, "security_event_logged", False):
+        return None
+
+    target_techniques = _exploit_techniques(target)
+    if COMMON_SCANNER_TARGET_RE.search(target) or target_techniques:
+        # Exploit syntax on an unknown or non-input route is commodity scanner
+        # noise.  The same syntax in a consumed labelmaker field is classified
+        # above as a targeted attack.
+        log_internet_scanner(
+            "generic_exploit_probe",
+            request_target=target,
+            attack_techniques=target_techniques,
+        )
+    elif request.endpoint is None and not request.path.startswith("/labels"):
+        log_internet_scanner("non_application_route_probe", request_target=target)
+
+    return None
+
+
+@app.after_request
+def _add_security_headers(response):
+    response.headers.setdefault("X-Request-ID", getattr(g, "request_id", ""))
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    # Framing is deliberately left open so the app can be embedded in other
+    # sites; no X-Frame-Options or frame-ancestors restriction is set.
+    if (
+        response.status_code >= 400
+        and not getattr(g, "security_event_logged", False)
+        and not getattr(g, "user_problem_event_logged", False)
+    ):
+        started_at = getattr(g, "request_started_at", None)
+        duration_ms = (
+            round((time.monotonic() - started_at) * 1000, 1)
+            if started_at is not None
+            else None
+        )
+        log_user_problem(
+            "http_error_response",
+            status=response.status_code,
+            duration_ms=duration_ms,
+            content_length=request.content_length,
+        )
+    return response
+
+
+@app.errorhandler(413)
+def _request_entity_too_large(_error):
+    limit_mb = MAX_REQUEST_BYTES / (1024 * 1024)
+    # Pasting too many observations at once is the common cause here, not an
+    # attack; the size cap itself is what stops an abusive body.
+    log_user_problem(
+        "request_body_too_large",
+        content_length=request.content_length,
+        limit_bytes=MAX_REQUEST_BYTES,
+    )
+    return (
+        jsonify(
+            {
+                "error": (
+                    f"Request body too large (limit {limit_mb:.1f} MB). Split the "
+                    "observations into smaller batches."
+                )
+            }
+        ),
+        413,
+    )
+
+
+def error_reference(log_context, exc=None, logger=None):
+    """Log the full failure detail and return a short reference for the client.
+
+    Exception text can carry upstream URLs, query strings, usernames and
+    filesystem paths, so it belongs in the log rather than in a response.  The
+    reference ties a user's report back to the log line without exposing any of
+    it.
+    """
+    reference = uuid4().hex[:8]
+    target_logger = logger or app.logger
+    detail = f"[ref {reference}] {log_context}"
+    if exc is not None:
+        target_logger.warning("%s: %r", detail, exc, exc_info=True)
+    else:
+        target_logger.warning(detail)
+    return reference
+
+
+def client_error(message, status=400, exc=None, logger=None, log_context=None):
+    """Return a specific client-facing error without leaking internals."""
+    reference = error_reference(log_context or message, exc=exc, logger=logger)
+    return (
+        jsonify({"error": f"{message} (reference {reference})", "reference": reference}),
+        status,
+    )
 
 
 # Helper function to extract observation type and ID from raw input
@@ -327,8 +991,18 @@ def extract_obs_id(obs_input):
     raise ValueError(f"Invalid observation input: {obs_input}")
 
 
+class ConversionBudgetExceeded(ValueError):
+    """Raised when one request asks for more MO -> iNat conversions than allowed."""
+
+
 # Function to convert MO number to iNaturalist ID or return iNaturalist ID
-def get_inat_id(obs_input):
+def get_inat_id(obs_input, budget=None):
+    """Resolve one observation input to a generator-ready ID.
+
+    ``budget`` is an optional single-element list used as a per-request counter
+    for MO -> iNat conversions; each conversion spawns a subprocess and makes an
+    upstream request, so callers handling batches pass one in to bound the work.
+    """
     obs_type, obs_id = extract_obs_id(obs_input)
 
     # Direct MO observation - return with MO prefix (uppercase) for generator compatibility
@@ -340,25 +1014,74 @@ def get_inat_id(obs_input):
 
     # Convert MO to iNat (motoinat)
     if obs_type == "mo":
+        if budget is not None:
+            if budget[0] <= 0:
+                raise ConversionBudgetExceeded(
+                    f"Too many Mushroom Observer conversions in one request "
+                    f"(max {MAX_MO_CONVERSIONS_PER_REQUEST}). Submit MO #{obs_id} in a "
+                    f"smaller batch, or enter it as MO{obs_id} to skip the conversion."
+                )
+            budget[0] -= 1
         try:
             result = subprocess.run(
-                ["python", os.path.join(app.root_path, "motoinat.py"), "-q", obs_id],
+                [
+                    sys.executable,
+                    os.path.join(app.root_path, "motoinat.py"),
+                    "-q",
+                    obs_id,
+                ],
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=MOTOINAT_TIMEOUT_SECONDS,
             )
             inat_id = result.stdout.strip()
             if inat_id.isdigit():
                 return inat_id
             else:
                 raise ValueError(f"No iNaturalist observation found for MO #{obs_id}")
-        except subprocess.CalledProcessError as e:
+        except subprocess.TimeoutExpired:
+            app.logger.warning(
+                "motoinat timed out after %ss for MO #%s",
+                MOTOINAT_TIMEOUT_SECONDS,
+                obs_id,
+            )
             raise ValueError(
-                f"Error converting MO #{obs_id} to iNaturalist: {e.stderr.strip()}"
+                f"Timed out converting MO #{obs_id} to iNaturalist "
+                f"(after {MOTOINAT_TIMEOUT_SECONDS}s). Mushroom Observer may be slow "
+                f"right now."
+            )
+        except subprocess.CalledProcessError as e:
+            # The subprocess stderr can carry upstream URLs and query strings;
+            # keep it in the log rather than in the response.
+            app.logger.warning(
+                "motoinat failed for MO #%s (exit %s): %s",
+                obs_id,
+                e.returncode,
+                (e.stderr or "").strip(),
+            )
+            raise ValueError(
+                f"Error converting MO #{obs_id} to iNaturalist. "
+                f"The observation may not be linked to an iNaturalist record."
             )
 
     # iNat ID
     return obs_id
+
+
+@app.template_global()
+def static_asset_url(filename):
+    """Version a static URL by mtime.
+
+    nginx serves /labels/static/ without an expires header, so a browser may
+    heuristically cache it. index.html calls into addobs_helpers.js, and the two
+    have to stay in lockstep - a stale helper file would break the page.
+    """
+    try:
+        stamp = int(os.path.getmtime(os.path.join(app.static_folder, filename)))
+    except OSError:
+        return url_for("static", filename=filename)
+    return url_for("static", filename=filename, v=stamp)
 
 
 @app.route("/")
@@ -366,6 +1089,62 @@ def get_inat_id(obs_input):
 @app.route("/labels/")
 def labels():
     return render_template("index.html", default_label_fields=DEFAULT_LABEL_FIELDS)
+
+
+def _client_event_text(value):
+    """Coerce a browser-supplied field to a bounded string.
+
+    window.onerror hands the browser script strings here, but the request
+    body is attacker-controlled: a container would be walked by
+    _bounded_diagnostic_value rather than truncated, turning one request into
+    a log record far larger than any single value bound allows.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, dict)):
+        return f"[{type(value).__name__} omitted]"
+    return str(value)[:MAX_DIAGNOSTIC_VALUE_LENGTH]
+
+
+def _client_event_number(value):
+    """Line and column numbers are only meaningful as numbers."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+@app.post("/labels/client_event")
+def client_event():
+    """Receive bounded diagnostics for failures that happen only in a browser."""
+    try:
+        payload = request.get_json(silent=True)
+    except RecursionError:
+        # get_json(silent=True) swallows ValueError, but json.loads raises
+        # RecursionError on deeply nested input, which would surface as a 500.
+        payload = None
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Expected a JSON event"}), 400
+
+    event_type = str(payload.get("type") or "").strip()
+    allowed_types = {
+        "javascript_error",
+        "unhandled_rejection",
+        "resource_load_error",
+    }
+    if event_type not in allowed_types:
+        return jsonify({"error": "Unsupported client event type"}), 400
+
+    log_user_problem(
+        "browser_error",
+        browser_event_type=event_type,
+        message=_client_event_text(payload.get("message")),
+        source=_client_event_text(payload.get("source")),
+        line=_client_event_number(payload.get("line")),
+        column=_client_event_number(payload.get("column")),
+        stack=_client_event_text(payload.get("stack")),
+        page_url=_client_event_text(payload.get("page_url")),
+    )
+    return "", 204
 
 
 @app.route("/favicon.ico")
@@ -384,11 +1163,12 @@ def lookup_batch_internal(obs_inputs):
     inat_map_indices = {}
     mo_numbers = []
     mo_map_indices = {}
+    conversion_budget = [MAX_MO_CONVERSIONS_PER_REQUEST]
 
     # Resolve inputs to either iNat IDs or MO IDs
     for idx, obs_input in enumerate(obs_inputs):
         try:
-            resolved = get_inat_id(obs_input)
+            resolved = get_inat_id(obs_input, budget=conversion_budget)
         except ValueError as e:
             results[idx]["error"] = str(e)
             results[idx]["status"] = 400
@@ -441,7 +1221,15 @@ def lookup_batch_internal(obs_inputs):
                         id_to_result[str(r["id"])] = r
             except requests.exceptions.RequestException as e:
                 # Apply a generic error to all inat IDs in the failed chunk
-                msg = f"Error fetching iNaturalist data: {e!s}"
+                reference = error_reference(
+                    f"iNaturalist batch fetch failed for IDs {chunk}",
+                    exc=e,
+                    logger=api_error_logger,
+                )
+                msg = (
+                    "Could not fetch this observation from iNaturalist "
+                    f"(reference {reference})"
+                )
                 for inat_id in chunk:
                     for idx in inat_map_indices.get(inat_id, []):
                         if (
@@ -510,7 +1298,7 @@ def lookup_batch_internal(obs_inputs):
                 for idx in mo_map_indices.get(mo_num, []):
                     results[idx][
                         "error"
-                    ] = f"No data found for Mushroom Observer #{mo_num}"
+                    ] = f"Mushroom Observer observation #{mo_num} does not exist"
                     results[idx]["status"] = 404
                 continue
 
@@ -570,11 +1358,16 @@ def lookup_batch_internal(obs_inputs):
                     }
                 )
         except Exception as e:
-            app.logger.exception(e)
+            reference = error_reference(
+                f"Mushroom Observer lookup failed for MO #{mo_num}",
+                exc=e,
+                logger=api_error_logger,
+            )
             for idx in mo_map_indices.get(mo_num, []):
-                results[idx][
-                    "error"
-                ] = f"Error processing Mushroom Observer #{mo_num}: {e!s}"
+                results[idx]["error"] = (
+                    f"Error processing Mushroom Observer #{mo_num} "
+                    f"(reference {reference})"
+                )
                 results[idx]["status"] = 500
 
     # Normalize output: ensure items list of dicts with either error or data
@@ -622,6 +1415,509 @@ def lookup_batch():
     return jsonify(payload)
 
 
+_inat_label_module = None
+_inat_label_module_lock = threading.Lock()
+_inat_label_module_failed = False
+
+
+def inat_label_module():
+    """Load ``inat.label.py`` as a module so other code can reuse its helpers.
+
+    The generator is normally run as a subprocess, but the CSV export needs the
+    same date parsing and sort comparisons the labels use, and reimplementing
+    them here would let the two drift apart.  The filename is not importable, so
+    it is loaded by path, once per process.  A load failure is remembered and
+    returns ``None`` rather than raising, so a broken import degrades the CSV to
+    unsorted output instead of failing the download.
+    """
+    global _inat_label_module, _inat_label_module_failed
+    if _inat_label_module is not None or _inat_label_module_failed:
+        return _inat_label_module
+    with _inat_label_module_lock:
+        if _inat_label_module is not None or _inat_label_module_failed:
+            return _inat_label_module
+        try:
+            script_path = os.path.join(app.root_path, "inat.label.py")
+            spec = importlib.util.spec_from_file_location(
+                "inat_label_helpers", script_path
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _inat_label_module = module
+        except Exception as e:
+            _inat_label_module_failed = True
+            app.logger.warning(f"Could not load inat.label.py helpers: {e!s}")
+        return _inat_label_module
+
+
+def read_sort_request(form):
+    """Validate the shared Sort controls from a submitted form.
+
+    Returns ``(sort_mode, sort_field, error)``.  *error* is a message string when
+    the request should be rejected; both callers reject on the same rules so the
+    CSV and the labels always agree about what a given Sort selection means.
+    """
+    sort_mode = (form.get("sort") or "").strip().lower()
+    sort_field = (form.get("sort_field") or "").strip()
+    if sort_mode and sort_mode not in SORT_MODES:
+        if not _looks_like_injection(sort_mode):
+            # A crafted value is already recorded by _scan_request_for_attacks,
+            # which classifies every field on this endpoint before the view
+            # runs.
+            log_user_problem("invalid_sort_mode", submitted_value=sort_mode)
+        return "", "", "Invalid sort order"
+    if sort_mode == "custom" and not sort_field:
+        app.logger.warning("Custom sort requested without a field name")
+        return "", "", "Sorting by field requires a field name"
+    if sort_field and not SORT_FIELD_RE.match(sort_field):
+        if not _looks_like_injection(sort_field):
+            # A crafted value is already recorded by _scan_request_for_attacks,
+            # which classifies every field on this endpoint before the view
+            # runs.
+            log_user_problem("invalid_sort_field", submitted_value=sort_field)
+        return "", "", "Invalid sort field"
+    if sort_mode != "custom":
+        sort_field = ""
+    return sort_mode, sort_field, None
+
+
+def read_custom_fields_request(form):
+    """Validate and return the label field additions/removals in *form*."""
+    if not form.get("use_custom"):
+        return [], None
+
+    custom_fields = [
+        field.strip() for field in form.getlist("custom_args[]") if field.strip()
+    ]
+    if len(custom_fields) > MAX_CUSTOM_FIELDS:
+        log_user_problem(
+            "custom_field_limit_exceeded",
+            submitted_count=len(custom_fields),
+            limit=MAX_CUSTOM_FIELDS,
+        )
+        return [], f"Too many custom label fields (max {MAX_CUSTOM_FIELDS})"
+
+    invalid_fields = [f for f in custom_fields if not CUSTOM_FIELD_RE.match(f)]
+    if invalid_fields:
+        if not any(_looks_like_injection(field) for field in invalid_fields):
+            # A crafted value is already recorded by _scan_request_for_attacks,
+            # which classifies every field on this endpoint before the view
+            # runs.
+            log_user_problem(
+                "invalid_custom_fields", submitted_values=invalid_fields
+            )
+        return [], f"Invalid custom label field name: {invalid_fields[0][:64]!r}"
+
+    return custom_fields, None
+
+
+def _split_custom_fields(custom_fields):
+    """Return generator-style ``(additions, removals)`` field-name lists."""
+    additions = []
+    removals = []
+    for field in custom_fields or []:
+        if field.startswith("+"):
+            additions.append(field[1:].strip())
+        elif field.startswith("-"):
+            removals.append(field[1:].strip())
+    return additions, removals
+
+
+def _ofv_value(ofvs, *field_names):
+    """Return the first nonblank observation-field value matching *field_names*."""
+    if not isinstance(ofvs, list):
+        return ""
+    wanted = [name.lower() for name in field_names]
+    for name in wanted:
+        for field in ofvs:
+            if not isinstance(field, dict):
+                continue
+            if str(field.get("name") or "").strip().lower() != name:
+                continue
+            value = field.get("value")
+            if value is not None and str(value).strip():
+                return str(value).strip()
+    return ""
+
+
+def _voucher_value(ofvs):
+    """Return the voucher number under either of the field names in use."""
+    return _ofv_value(ofvs, "Voucher Number", "Voucher Number(s)")
+
+
+def sort_csv_rows(rows, sort_mode, sort_field):
+    """Order CSV rows the same way ``inat.label.py`` orders the printed labels.
+
+    Each row carries the metadata the comparisons need, including the rendered
+    label fields after custom additions/removals.  That prevents raw API fields
+    hidden from the labels from changing only the spreadsheet order.  Rows are
+    returned in the new order; the caller renumbers the ID column afterwards.
+    """
+    if sort_mode == "none":
+        return sorted(rows, key=lambda row: row["index"])
+
+    module = inat_label_module()
+
+    if sort_mode in ("voucher", "custom"):
+        if module is None:
+            return list(rows)
+
+        def raw_value(row):
+            label_fields = row.get("label_fields") or []
+            if sort_mode == "voucher":
+                return module.get_voucher_value(label_fields)
+            return module.label_get(label_fields, sort_field)
+
+        def compare(row_a, row_b):
+            result = module.cmp_alpha_then_trailing_num(
+                raw_value(row_a) or None, raw_value(row_b) or None
+            )
+            if result != 0:
+                return result
+            return row_a["index"] - row_b["index"]
+
+        return sorted(rows, key=cmp_to_key(compare))
+
+    if sort_mode in ("date", "date-desc"):
+
+        def date_key(row):
+            observed = row["observed"]
+            if observed is None:
+                # Undated rows sort last in both directions, so the leading flag
+                # stays ascending and only the index orders them.
+                return (1, 0.0, 0.0, row["index"])
+            # The local calendar date leads so rows stay in the order their
+            # printed dates suggest even when time zones differ; the instant only
+            # breaks ties within one displayed date.
+            ordinal = float(observed.date().toordinal())
+            instant = observed.timestamp()
+            if sort_mode == "date-desc":
+                return (0, -ordinal, -instant, row["index"])
+            return (0, ordinal, instant, row["index"])
+
+        return sorted(rows, key=date_key)
+
+    # Default: observation number, matching the generator's numeric sort.
+    def number_key(row):
+        if module is not None:
+            numeric = module.parse_key_default(row["obs_number"])
+        else:
+            match = re.search(r"(\d+)\s*$", str(row["obs_number"]).strip())
+            numeric = int(match.group(1)) if match else 0
+        return (numeric, row["index"])
+
+    return sorted(rows, key=number_key)
+
+
+# Columns of the CSV export.  "ID" is the row's position in the exported order,
+# so it matches the order the labels print in for the same Sort selection.
+CSV_COLUMNS = [
+    "ID",
+    "Observation Number",
+    "Scientific Name",
+    "Common Name",
+    "Observer",
+    "Observer Name",
+    "Date Observed",
+    "Time Observed",
+    "Location",
+    "Latitude",
+    "Longitude",
+    "Coordinate Accuracy",
+    "Herbarium Catalog Number",
+    "Voucher Number",
+    "URL",
+]
+
+_CLOCK_TIME_RE = re.compile(r"\d{1,2}:\d{2}")
+# Plain numbers are data, not formulas, so they are exempt from the leading
+# apostrophe below; without this every negative longitude would export as text.
+_PLAIN_NUMBER_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
+
+
+def safe_csv_field(val):
+    """Return *val* as CSV text, defused if a spreadsheet would read it as a formula."""
+    try:
+        s = str(val)
+    except Exception:
+        s = ""
+    if s and s[0] in ("=", "+", "-", "@") and not _PLAIN_NUMBER_RE.fullmatch(s):
+        return "'" + s
+    return s
+
+
+def _observed_date_and_time(observation, observed):
+    """Split a resolved observation datetime into date and clock-time columns.
+
+    *observed* comes from ``observation_sort_datetime``, which falls back to
+    date-only fields and returns midnight when there is no time of day.  The
+    clock column is filled only when the source actually carried a time, so an
+    undated-hour observation reads as blank instead of a spurious 00:00:00.
+    """
+    if observed is None:
+        return "", ""
+    date_text = observed.date().isoformat()
+    if str(observation.get("time_observed_at") or "").strip():
+        return date_text, observed.strftime("%H:%M:%S")
+    # Records without the API timestamp only have a time if their free-text date
+    # string carries one and no calendar-date field preempted it -- that is the
+    # Mushroom Observer case.
+    if not observation.get("observed_on") and _CLOCK_TIME_RE.search(
+        str(observation.get("observed_on_string") or "")
+    ):
+        return date_text, observed.strftime("%H:%M:%S")
+    return date_text, ""
+
+
+def _coordinate_columns(observation):
+    """Return ``(latitude, longitude, accuracy)`` as the labels would print them."""
+    module = inat_label_module()
+    if module is None:
+        return "", "", ""
+    try:
+        coords, accuracy = module.get_coordinates(observation)
+    except Exception as e:
+        app.logger.warning(f"Could not read coordinates for CSV export: {e!s}")
+        return "", "", ""
+    # "private" and "Not available" are statuses, not coordinates.
+    if not coords or "," not in coords:
+        return "", "", ""
+    latitude, _, longitude = coords.partition(",")
+    return latitude.strip(), longitude.strip(), accuracy or ""
+
+
+def _mo_observation_shape(mo_result, mo_number):
+    """Shape a Mushroom Observer record like the dicts inat.label.py expects.
+
+    Reusing that shape lets the MO rows get their date and coordinates from the
+    same helpers as the iNaturalist rows, so both sort together correctly.
+    """
+    observation = {
+        "id": f"MO{mo_number}",
+        "observed_on_string": mo_result.get("date") or "",
+        "description": mo_result.get("notes") or "",
+        "ofvs": [
+            {
+                "name": "Mushroom Observer URL",
+                "value": f"https://mushroomobserver.org/obs/{mo_number}",
+            }
+        ],
+    }
+    consensus = mo_result.get("consensus") or {}
+    observation["taxon"] = {
+        "name": consensus.get("name") or mo_result.get("name") or "Not available",
+        "preferred_common_name": "",
+    }
+    owner = mo_result.get("owner") or {}
+    observation["user"] = {
+        "name": owner.get("legal_name") or "",
+        "login": owner.get("login_name") or mo_result.get("login_name") or "",
+    }
+    if "herbarium_name" in mo_result:
+        observation["ofvs"].append(
+            {
+                "name": "Herbarium Name",
+                "value": mo_result.get("herbarium_name") or "",
+            }
+        )
+    if "herbarium_id" in mo_result:
+        observation["ofvs"].append(
+            {
+                "name": "Herbarium Catalog Number",
+                "value": mo_result.get("herbarium_id") or "",
+            }
+        )
+    location = mo_result.get("location")
+    if isinstance(location, dict):
+        observation["place_guess"] = location.get("name") or ""
+        try:
+            longitude = (
+                float(location["longitude_east"]) + float(location["longitude_west"])
+            ) / 2
+            latitude = (
+                float(location["latitude_north"]) + float(location["latitude_south"])
+            ) / 2
+            observation["geojson"] = {"coordinates": [longitude, latitude]}
+        except (KeyError, TypeError, ValueError):
+            pass
+    return observation
+
+
+def _rendered_label_fields(observation, custom_fields):
+    """Build the post-filtered fields that printed-label sorting can inspect."""
+    module = inat_label_module()
+    if module is None or not observation:
+        return []
+    additions, removals = _split_custom_fields(custom_fields)
+    taxon = observation.get("taxon") or {}
+    iconic_taxon = taxon.get("iconic_taxon_name") or (
+        "Fungi" if str(observation.get("id") or "").startswith("MO") else "Life"
+    )
+    try:
+        rendered = module.create_inaturalist_label(
+            observation,
+            iconic_taxon,
+            custom_add=additions,
+            custom_remove=removals,
+        )
+    except Exception as e:
+        app.logger.warning(f"Could not build label fields for CSV sorting: {e!s}")
+        return []
+    return rendered[0] if rendered else []
+
+
+def _padded_row_values(obs_number, scientific_name="", observer="", url=""):
+    """Return a row for a record with no usable detail, blank past what is known."""
+    values = [""] * (len(CSV_COLUMNS) - 1)
+    values[0] = obs_number
+    values[1] = scientific_name
+    values[3] = observer
+    values[-1] = url
+    return values
+
+
+def _observed_datetime(observation):
+    """Resolve an observation's datetime with the generator's own parser."""
+    module = inat_label_module()
+    if module is None or not observation:
+        return None
+    try:
+        return module.observation_sort_datetime(observation)
+    except Exception as e:
+        app.logger.warning(f"Could not read observation date for CSV export: {e!s}")
+        return None
+
+
+def _inat_csv_row(
+    index, obs_number, observation, custom_fields=None, include_sort_fields=False
+):
+    """Build one CSV row from an iNaturalist observation record."""
+    taxon = observation.get("taxon") or {}
+    user = observation.get("user") or {}
+    ofvs = observation.get("ofvs") or []
+    observed = _observed_datetime(observation)
+    date_text, time_text = _observed_date_and_time(observation, observed)
+    latitude, longitude, accuracy = _coordinate_columns(observation)
+    return {
+        "index": index,
+        "obs_number": obs_number,
+        "observed": observed,
+        "ofvs": ofvs,
+        "label_fields": (
+            _rendered_label_fields(observation, custom_fields)
+            if include_sort_fields
+            else []
+        ),
+        "values": [
+            obs_number,
+            taxon.get("name") or "Unknown",
+            taxon.get("preferred_common_name") or "",
+            user.get("login") or "Unknown",
+            user.get("name") or "",
+            date_text,
+            time_text,
+            _concise_locality(observation) or "",
+            latitude,
+            longitude,
+            accuracy,
+            _ofv_value(ofvs, "Herbarium Catalog Number"),
+            _voucher_value(ofvs),
+            f"https://www.inaturalist.org/observations/{obs_number}",
+        ],
+    }
+
+
+def _mo_csv_row(
+    index, obs_number, mo_result, custom_fields=None, include_sort_fields=False
+):
+    """Build one CSV row from a Mushroom Observer record, or a placeholder row.
+
+    *mo_result* is ``None`` when the lookup failed; the row still goes out so the
+    observation is not silently missing from the export.
+    """
+    mo_number = obs_number[2:]
+    url = f"https://mushroomobserver.org/obs/{mo_number}"
+    if not isinstance(mo_result, dict):
+        return {
+            "index": index,
+            "obs_number": obs_number,
+            "observed": None,
+            "ofvs": [],
+            "label_fields": [],
+            "values": _padded_row_values(
+                obs_number, scientific_name="Unknown", observer="Unknown", url=url
+            ),
+        }
+
+    consensus = mo_result.get("consensus") or {}
+    owner = mo_result.get("owner") or {}
+    observation = _mo_observation_shape(mo_result, mo_number)
+    observed = _observed_datetime(observation)
+    date_text, time_text = _observed_date_and_time(observation, observed)
+    latitude, longitude, accuracy = _coordinate_columns(observation)
+    ofvs = observation["ofvs"]
+    herbarium_catalog_number = mo_result.get("herbarium_id") or ""
+    return {
+        "index": index,
+        "obs_number": obs_number,
+        "observed": observed,
+        "ofvs": ofvs,
+        "label_fields": (
+            _rendered_label_fields(observation, custom_fields)
+            if include_sort_fields
+            else []
+        ),
+        "values": [
+            obs_number,
+            consensus.get("name") or mo_result.get("name") or "Unknown",
+            "",
+            owner.get("login_name") or mo_result.get("login_name") or "Unknown",
+            owner.get("legal_name") or "",
+            date_text,
+            time_text,
+            observation.get("place_guess") or "",
+            latitude,
+            longitude,
+            accuracy,
+            str(herbarium_catalog_number),
+            "",
+            url,
+        ],
+    }
+
+
+def _bugguide_csv_row(index, obs_number):
+    """Build one CSV row for a BugGuide entry, which has no API lookup here."""
+    bg_number = obs_number[2:]
+    return {
+        "index": index,
+        "obs_number": obs_number,
+        "observed": None,
+        "ofvs": [],
+        "label_fields": [],
+        "values": _padded_row_values(
+            obs_number,
+            scientific_name="BugGuide",
+            url=f"https://bugguide.net/node/view/{bg_number}",
+        ),
+    }
+
+
+def _skipped_ids_header(skipped):
+    """Render dropped observation inputs as a single safe header value.
+
+    The entries are raw user input, so they are reduced to an identifier-shaped
+    subset before going back out in a header: no separators, no control
+    characters, nothing that could split the header.
+    """
+    parts = []
+    for value in skipped[:MAX_SKIPPED_IDS_REPORTED]:
+        cleaned = re.sub(r"[^A-Za-z0-9_-]", "", str(value))[:32]
+        if cleaned:
+            parts.append(cleaned)
+    return ", ".join(parts)
+
+
 @app.route("/labels/submit", methods=["POST"])
 def submit():
     try:
@@ -636,22 +1932,44 @@ def submit():
                 400,
             )
 
+        # Same Sort selection the labels use.  An empty value means the
+        # generator's default, which is by observation number.
+        sort_mode, sort_field, sort_error = read_sort_request(request.form)
+        if sort_error:
+            return sort_error, 400
+        custom_fields, custom_fields_error = read_custom_fields_request(request.form)
+        if custom_fields_error:
+            return custom_fields_error, 400
+
+        # Inputs that never reach the file: unparseable entries here, and iNat
+        # IDs the API does not return below (deleted, private, or mistyped).  A
+        # silently short CSV is indistinguishable from a broken export, so the
+        # skipped entries travel back in response headers.
+        skipped = []
+
         # Resolve inputs into either iNat IDs or MO IDs
         resolved = []
+        conversion_budget = [MAX_MO_CONVERSIONS_PER_REQUEST]
         for obs in raw_observations:
             try:
-                rid = get_inat_id(obs)
+                rid = get_inat_id(obs, budget=conversion_budget)
                 resolved.append(rid)
+            except ConversionBudgetExceeded as e:
+                app.logger.warning(str(e))
+                return str(e), 429
             except ValueError as e:
                 app.logger.warning(str(e))
                 # Skip invalid entries
+                skipped.append(obs)
                 continue
 
-        # Partition into iNat and MO
+        # Partition into iNat and MO.  BugGuide entries are neither, and putting
+        # a "BG..." value in the iNat id list would malform the whole chunk's
+        # query, so they are excluded here and rendered from the input alone.
         inat_ids = [
             str(x)
             for x in resolved
-            if not (isinstance(x, str) and x.upper().startswith("MO"))
+            if not (isinstance(x, str) and x.upper().startswith(("MO", "BG")))
         ]
 
         # Batch fetch iNat observations in chunks
@@ -677,25 +1995,14 @@ def submit():
                     )
                     continue
 
-        def safe_csv_field(val):
-            try:
-                s = str(val)
-            except Exception:
-                s = ""
-            if s and s[0] in ("=", "+", "-", "@"):
-                return "'" + s
-            return s
-
-        csv_data = [["ID", "Observation Number", "Scientific Name", "Observer"]]
-        valid_counter = 0
-
-        # Build CSV rows in original order
-        for rid in resolved:
+        rows = []
+        include_sort_fields = sort_mode in ("voucher", "custom")
+        for index, rid in enumerate(resolved):
             rid_str = str(rid)
             # MO observations (fetch per-ID with detail fallback)
             if rid_str.upper().startswith("MO"):
-                valid_counter += 1
                 mo_number = rid_str[2:]
+                mo_result = None
                 try:
                     mo_response = requests.get(
                         f"https://mushroomobserver.org/api2/observations/{mo_number}.json?detail=high",
@@ -721,71 +2028,66 @@ def submit():
                         and mo_data["results"]
                         and isinstance(mo_data["results"][0], dict)
                     ):
-                        result = mo_data["results"][0]
-
-                        consensus = result.get("consensus") or {}
-                        owner = result.get("owner") or {}
-                        scientific_name = consensus.get("name") or result.get(
-                            "name", "Unknown"
-                        )
-                        user_login = owner.get("login_name") or result.get(
-                            "login_name", "Unknown"
-                        )
-
-                        csv_data.append(
-                            [
-                                valid_counter,
-                                safe_csv_field(rid_str),
-                                safe_csv_field(scientific_name),
-                                safe_csv_field(user_login),
-                            ]
-                        )
-                    else:
-                        csv_data.append(
-                            [
-                                valid_counter,
-                                safe_csv_field(rid_str),
-                                "Unknown",
-                                "Unknown",
-                            ]
-                        )
+                        mo_result = mo_data["results"][0]
                 except Exception as e:
                     app.logger.warning(f"Error fetching MO data: {e!s}")
-                    csv_data.append(
-                        [valid_counter, rid_str, "Unknown (API Error)", "Unknown"]
+                rows.append(
+                    _mo_csv_row(
+                        index,
+                        rid_str,
+                        mo_result,
+                        custom_fields,
+                        include_sort_fields,
                     )
+                )
+                continue
+            if rid_str.upper().startswith("BG"):
+                rows.append(_bugguide_csv_row(index, rid_str))
                 continue
             # iNaturalist observation from batch map
             r = id_to_inat.get(rid_str)
             if r:
-                valid_counter += 1
-                taxon = r.get("taxon") or {}
-                user = r.get("user") or {}
-                scientific_name = taxon.get("name", "Unknown")
-                user_login = user.get("login", "Unknown")
-                csv_data.append(
-                    [
-                        valid_counter,
-                        safe_csv_field(rid_str),
-                        safe_csv_field(scientific_name),
-                        safe_csv_field(user_login),
-                    ]
+                rows.append(
+                    _inat_csv_row(
+                        index,
+                        rid_str,
+                        r,
+                        custom_fields,
+                        include_sort_fields,
+                    )
                 )
-            # If r missing, skip adding a row to preserve numbering semantics like previous implementation
+            else:
+                # No row; the caller is told how many were dropped.
+                skipped.append(rid_str)
+
+        # The Sort dropdown drives the export the same way it drives the labels,
+        # so a run's CSV and its printed labels come out in the same order.
+        rows = sort_csv_rows(rows, sort_mode, sort_field)
+
+        csv_data = [list(CSV_COLUMNS)]
+        for position, row in enumerate(rows, start=1):
+            csv_data.append([position] + [safe_csv_field(v) for v in row["values"]])
 
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerows(csv_data)
         csv_content = output.getvalue()
 
-        return (
-            csv_content,
-            200,
-            {
-                "Content-Type": "text/csv",
-                "Content-Disposition": "attachment; filename=observations.csv",
-            },
-        )
+        headers = {
+            "Content-Type": "text/csv",
+            "Content-Disposition": "attachment; filename=observations.csv",
+        }
+        if skipped:
+            app.logger.warning(
+                "CSV export skipped %d of %d requested observations: %s",
+                len(skipped),
+                len(raw_observations),
+                ", ".join(str(s) for s in skipped[:MAX_SKIPPED_IDS_REPORTED]),
+            )
+            headers["X-Skipped-Observations"] = str(len(skipped))
+            headers["X-Skipped-Ids"] = _skipped_ids_header(skipped)
+
+        return csv_content, 200, headers
     except Exception as e:
         app.logger.exception(e)
         return "An internal error occurred while generating the CSV file.", 500
@@ -796,7 +2098,11 @@ def submit():
 def print_start():
     fmt = (request.form.get("format") or "rtf").lower()
     if fmt not in ("rtf", "pdf"):
-        app.logger.warning(f"print_start: Invalid format requested: {fmt}")
+        if not _looks_like_injection(fmt):
+            # A crafted value is already recorded by _scan_request_for_attacks,
+            # which classifies every field on this endpoint before the view
+            # runs.
+            log_user_problem("invalid_output_format", submitted_value=fmt)
         return jsonify({"error": "Invalid format"}), 400
 
     omit_qr_codes = request.form.get("omit_qr_codes")
@@ -804,19 +2110,17 @@ def print_start():
 
     # Label sort order.  An empty value keeps inat.label.py's default
     # observation-number sort, so no --sort flag is passed in that case.
-    sort_mode = (request.form.get("sort") or "").strip().lower()
-    sort_field = (request.form.get("sort_field") or "").strip()
-    if sort_mode and sort_mode not in SORT_MODES:
-        app.logger.warning(f"print_start: Invalid sort mode requested: {sort_mode}")
-        return jsonify({"error": "Invalid sort order"}), 400
-    if sort_mode == "custom" and not sort_field:
-        app.logger.warning("print_start: Custom sort requested without a field name")
-        return jsonify({"error": "Sorting by field requires a field name"}), 400
-    if sort_field.startswith("-"):
-        app.logger.warning("print_start: Sort field must not start with '-'")
-        return jsonify({"error": "Invalid sort field"}), 400
-    if sort_mode != "custom":
-        sort_field = ""
+    sort_mode, sort_field, sort_error = read_sort_request(request.form)
+    if sort_error:
+        return jsonify({"error": sort_error}), 400
+
+    # Custom label fields are forwarded to inat.label.py as a command argument,
+    # so validate them here rather than relying on how argparse happens to treat
+    # option-shaped values.
+    custom_fields, custom_fields_error = read_custom_fields_request(request.form)
+    if custom_fields_error:
+        return jsonify({"error": custom_fields_error}), 400
+
     raw_observations = request.form.getlist("observations[]")
     if not raw_observations:
         app.logger.warning("print_start: No observations provided")
@@ -850,10 +2154,11 @@ def print_start():
     inat_ids = []
     bg_omitted = False
     is_minilabel = bool(request.form.get("minilabel"))
+    conversion_budget = [MAX_MO_CONVERSIONS_PER_REQUEST]
 
     for obs in raw_observations:
         try:
-            inat_id = str(get_inat_id(obs))
+            inat_id = str(get_inat_id(obs, budget=conversion_budget))
             if inat_id.upper().startswith("BG"):
                 if not is_minilabel:
                     bg_omitted = True
@@ -861,6 +2166,9 @@ def print_start():
             inat_ids.append(inat_id)
             if print_duplicate_labels:
                 inat_ids.append(inat_id)
+        except ConversionBudgetExceeded as e:
+            app.logger.warning(str(e))
+            return jsonify({"error": str(e)}), 429
         except ValueError as e:
             app.logger.warning(str(e))
             continue
@@ -897,7 +2205,6 @@ def print_start():
         sys.executable,
         "-u",
         script_path,
-        *inat_ids,
         *(["--rtf", output_path] if fmt == "rtf" else ["--pdf", output_path]),
     ]
     if omit_qr_codes:
@@ -913,16 +2220,20 @@ def print_start():
         command.append("--common-names")
     if request.form.get("omit_notes"):
         command.append("--omit-notes")
+    if request.form.get("number_labels"):
+        command.append("--number-labels")
     if sort_mode:
         command.extend(["--sort", sort_mode])
         if sort_mode == "custom":
             command.extend(["--sort-field", sort_field])
-    if request.form.get("use_custom"):
-        custom_args = request.form.getlist("custom_args[]")
-        if custom_args:
-            command.append("--custom")
-            # Join all custom fields with commas as inat.label.py expects a comma-separated list
-            command.append(", ".join(custom_args))
+    if custom_fields:
+        command.append("--custom")
+        # Join all custom fields with commas as inat.label.py expects a comma-separated list
+        command.append(", ".join(custom_fields))
+    # Everything after "--" is a positional observation ID, so no validated
+    # value can be re-read as an option by the generator's argument parser.
+    command.append("--")
+    command.extend(inat_ids)
     cmd_logger.info(" ".join(command))
     app.logger.debug(f"Starting streaming command: {' '.join(command)}")
 
@@ -960,8 +2271,21 @@ def print_start():
 def print_stream():
     job_id = request.args.get("job_id")
 
+    if job_id and not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        job_id,
+        re.IGNORECASE,
+    ):
+        if not getattr(g, "security_event_logged", False):
+            log_user_problem("malformed_print_job_id", submitted_value=job_id)
+
     with _jobs_lock:
         if not job_id or job_id not in _jobs:
+            if (
+                not getattr(g, "security_event_logged", False)
+                and not getattr(g, "user_problem_event_logged", False)
+            ):
+                log_user_problem("print_job_not_found", submitted_value=job_id)
             # Job is already gone, possibly reaped.
             # Return an immediate SSE 'done' event with an error.
             def generate_reaped_error():
@@ -983,6 +2307,30 @@ def print_stream():
         proc = job["proc"]
         output_path = job["output_path"]
 
+    # Each open stream pins a worker thread until its job ends, so refuse new
+    # ones past the cap instead of letting them exhaust the thread pool.  The
+    # client falls back to polling for the finished file.
+    with _stream_count_lock:
+        if _open_streams[0] >= MAX_CONCURRENT_STREAMS:
+            app.logger.warning(
+                "print_stream: refusing stream, %s already open (max %s)",
+                _open_streams[0],
+                MAX_CONCURRENT_STREAMS,
+            )
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            f"Too many log streams open ({_open_streams[0]}, max "
+                            f"{MAX_CONCURRENT_STREAMS}). The label job is still running; "
+                            f"the download will appear when it finishes."
+                        )
+                    }
+                ),
+                429,
+            )
+        _open_streams[0] += 1
+
     rel_path = os.path.relpath(
         output_path, os.path.join(app.root_path, "static")
     ).replace("\\", "/")
@@ -1002,6 +2350,13 @@ def print_stream():
             exit_code = proc.wait()
 
             if os.path.exists(output_path):
+                if exit_code != 0:
+                    log_user_problem(
+                        "label_generator_nonzero_exit",
+                        job_id=job_id,
+                        exit_code=exit_code,
+                        output_path=output_path,
+                    )
                 done_payload = json.dumps(
                     {
                         "success": True,
@@ -1020,6 +2375,12 @@ def print_stream():
                         "error": error_message,
                         "exit_code": exit_code,
                     }
+                )
+                log_user_problem(
+                    "label_generator_output_missing",
+                    job_id=job_id,
+                    exit_code=exit_code,
+                    output_path=output_path,
                 )
 
             yield f"event: done\ndata: {done_payload}\n\n"
@@ -1044,6 +2405,9 @@ def print_stream():
             with _jobs_lock:
                 if job_id in _jobs:
                     _jobs[job_id]["finished_time"] = time.time()
+
+            with _stream_count_lock:
+                _open_streams[0] = max(0, _open_streams[0] - 1)
 
     return app.response_class(
         generate(),
@@ -1404,7 +2768,6 @@ def find_observations():
     date_mode = request.form.get("date_mode", "observed").strip().lower()
     obs_field_name = (request.form.get("obs_field_name") or "").strip()
     obs_field_id_raw = (request.form.get("obs_field_id") or "").strip()
-
     if source not in ("inat", "mo"):
         return jsonify({"error": "Unsupported source"}), 400
 
@@ -1482,10 +2845,15 @@ def find_observations():
                 else:
                     return jsonify({"error": f"Taxon not found: {taxon_input}"}), 404
             except requests.RequestException as e:
-                api_error_logger.warning(
-                    f"Taxon lookup failed: {e!s}", exc_info=True
+                return client_error(
+                    f"Could not reach iNaturalist to look up the taxon "
+                    f"{taxon_input!r}. This is usually a temporary upstream "
+                    f"problem; try again in a moment.",
+                    status=502,
+                    exc=e,
+                    logger=api_error_logger,
+                    log_context=f"Taxon lookup failed for {taxon_input!r}",
                 )
-                return jsonify({"error": f"Error looking up taxon: {e!s}"}), 500
 
         inat_search_params = {
             "user_login": username_inat,
@@ -1642,21 +3010,21 @@ def find_observations():
                         exc_info=True,
                     )
         except requests.RequestException as e:
-            api_error_logger.warning(
-                f"Observation fetch for user '{username_inat}' failed: {e!s}",
-                exc_info=True,
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            detail = (
+                f"iNaturalist returned HTTP {status_code}."
+                if status_code
+                else "iNaturalist could not be reached."
             )
-            error_message = f"Error fetching observations: {e!s}"
-            try:
-                if e.response:
-                    error_details = e.response.json()
-                    if "error" in error_details:
-                        error_message = (
-                            f"Error fetching observations: {error_details['error']}"
-                        )
-            except ValueError:
-                pass
-            return jsonify({"error": error_message}), 500
+            return client_error(
+                f"Could not fetch observations for iNaturalist user "
+                f"{username_inat!r} between {d1_str} and {d2_str}. {detail} "
+                f"Check the username, or try again shortly.",
+                status=502,
+                exc=e,
+                logger=api_error_logger,
+                log_context=f"Observation fetch for user {username_inat!r} failed",
+            )
     else:
         # source == "mo"
         try:
@@ -1792,17 +3160,22 @@ def find_observations():
                     d2_str,
                 )
         except requests.RequestException as e:
-            api_error_logger.warning(
-                f"Mushroom Observer fetch for user '{username_mo}' failed: {e!s}",
-                exc_info=True,
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            detail = (
+                f"Mushroom Observer returned HTTP {status_code}."
+                if status_code
+                else "Mushroom Observer could not be reached."
             )
-            return (
-                jsonify(
-                    {
-                        "error": f"Error fetching Mushroom Observer observations: {e!s}"
-                    }
+            return client_error(
+                f"Could not fetch observations for Mushroom Observer user "
+                f"{username_mo!r} between {d1_str} and {d2_str}. {detail} "
+                f"Check the username, or try again shortly.",
+                status=502,
+                exc=e,
+                logger=api_error_logger,
+                log_context=(
+                    f"Mushroom Observer fetch for user {username_mo!r} failed"
                 ),
-                500,
             )
 
     found.reverse()
@@ -1826,9 +3199,27 @@ def serve_help():
     return app.send_static_file("help.html")
 
 
+def _todo_file_path():
+    return os.path.join(app.root_path, "static", "todos.txt")
+
+
+def _read_todos(todo_file):
+    if not os.path.exists(todo_file):
+        return []
+    with open(todo_file, "r") as f:
+        return [line.strip() for line in f.readlines()]
+
+
 @app.route("/labels/todo", methods=["GET", "POST"])
 def todo():
-    todo_file = os.path.join(app.root_path, "static", "todos.txt")
+    """Public suggestion box.
+
+    Submission stays open to everyone; the guards here are on volume, not
+    identity: a per-IP daily cap in the request limiter, per-field length caps,
+    and a ceiling on the file itself, since the whole file is read into memory
+    and rendered on every page view.
+    """
+    todo_file = _todo_file_path()
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         suggestion = request.form.get("suggestion", "").strip()
@@ -1836,25 +3227,89 @@ def todo():
         # Sanitize input: allow only alphanumeric, spaces, and some punctuation, including Spanish characters
         name = re.sub(r"[^a-zA-Z0-9 .,!?\'\-áéíóúüÁÉÍÓÚÜñÑ]", "", name)
         suggestion = re.sub(r"[^a-zA-Z0-9 .,!?\'\-áéíóúüÁÉÍÓÚÜñÑ]", "", suggestion)
+        name = name[:TODO_MAX_NAME_LENGTH].strip()
+        suggestion = suggestion[:TODO_MAX_SUGGESTION_LENGTH].strip()
 
         if name and suggestion:
+            try:
+                current_size = os.path.getsize(todo_file)
+            except OSError:
+                current_size = 0
+
+            if current_size >= TODO_MAX_FILE_BYTES:
+                app.logger.warning(
+                    "todo: suggestion list is full (%s bytes, max %s)",
+                    current_size,
+                    TODO_MAX_FILE_BYTES,
+                )
+                return (
+                    render_template(
+                        "todo.html",
+                        todos=_read_todos(todo_file),
+                        notice=(
+                            "The suggestion list is full right now. Please try "
+                            "again later."
+                        ),
+                    ),
+                    507,
+                )
+
             with open(todo_file, "a") as f:
                 submitted_on = time.strftime("%Y-%m-%d", time.gmtime())
                 f.write(f"[{submitted_on}] {name}: {suggestion}\n")
         return redirect(url_for("todo"))
 
-    todos = []
-    if os.path.exists(todo_file):
-        with open(todo_file, "r") as f:
-            todos = [line.strip() for line in f.readlines()]
-    return render_template("todo.html", todos=todos)
+    return render_template("todo.html", todos=_read_todos(todo_file))
 
 
 # Start a background thread to reap finished jobs
+def _prune_job_output(now=None):
+    """Archive and delete job directories past the retention window.
+
+    Counts are folded into the daily usage ledger before deletion so
+    make_graph.py keeps its history after the files are gone.
+    """
+    try:
+        result = usage_stats.prune_job_dirs(
+            retention_days=usage_stats.JOB_RETENTION_DAYS,
+            jobs_dir=os.path.join(app.root_path, "static", "jobs"),
+            now=now,
+        )
+    except Exception:
+        app.logger.exception("Job output prune failed.")
+        return None
+
+    if result["removed"] or result["failed"]:
+        cmd_logger.info(
+            "Pruned %s job directories older than %s days "
+            "(%.1f MB freed, %s labels archived, %s failed)",
+            result["removed"],
+            usage_stats.JOB_RETENTION_DAYS,
+            result["bytes_freed"] / 1_048_576,
+            result["labels"],
+            result["failed"],
+        )
+    return result
+
+
 def _reaper_thread():
+    # Deleting output on import would be a nasty surprise for a test run or a
+    # shell session, so the first sweep waits until the process has clearly
+    # settled into serving.
+    next_prune = time.monotonic() + JOB_PRUNE_STARTUP_DELAY_SECONDS
+    prune_enabled = not _env_flag_enabled("LABELS_DISABLE_JOB_PRUNE")
+    if prune_enabled:
+        # Cheap and idempotent: the graph data has to stay readable to whoever
+        # runs make_graph.py, not just to the service user that writes it.
+        usage_stats.ensure_ledger_permissions(usage_stats.LEDGER_PATH)
+
     while True:
         time.sleep(10)
         _reap_finished_jobs()
+
+        if prune_enabled and time.monotonic() >= next_prune:
+            next_prune = time.monotonic() + JOB_PRUNE_INTERVAL_SECONDS
+            _prune_job_output()
 
 
 reaper = threading.Thread(target=_reaper_thread, daemon=True)

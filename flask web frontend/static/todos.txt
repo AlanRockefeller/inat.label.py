@@ -1,0 +1,11 @@
+Alan: Allow users to choose custom fields to appear on labels
+Alan: Allow users to re-order the labels
+Alan: Allow users to make labels for any iNaturalist project
+Alan: Warn users if they try to make more than 500 labels via the Add Labels button
+Alan: Make MOtoiNat feature have more helpful error messages and document it better in the help
+Alan: Let the label generator use my API key so I can make requests twice as fast, cutting the time to generate large numbers of labels in half
+Mathias Rocheleau-Duplain: In Add observations, having the option to automatically select a single startend date where the end date matches the start date would be a helpful time-saving feature.
+Joe Paquin: Add a Sort By option time, inat , or voucher number
+Joe Paquin: An ability to format output to a label product like Avery 5160
+Jeff G. gillyj: Would it be possible to include matrix barcodes for both Mushroom Observer MO and iNaturalist iNat links on the same label for mirrored observations?When I scanned the iNaturalist label barcode on my mobile device and then tried to open the MO hyperlink within that observation, I was prompted to log in to MO. However, when I tested a Mushroom Observer label that had its own matrix barcode, I was not prompted for MO login credentials.Including both barcodes on the same label would make it easier and more efficient to access both the MO and iNaturalist observations directly.
+Alden Dirks: Option to bulk upload iNat accessions. A simple copy and paste with rows of iNat accession numbers similar to what MycoMap.Org has would be great. There's the option to add observations by user and date, but if observations are scattered over many different dates, this is not a solution.

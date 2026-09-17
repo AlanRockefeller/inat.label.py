@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Herbarium Label Generator</title>
+    <script>
+        (function () {
+            try {
+                const savedTheme = localStorage.getItem("labels-theme");
+                document.documentElement.dataset.theme = savedTheme === "light" ? "light" : "dark";
+            } catch (_) {
+                document.documentElement.dataset.theme = "dark";
+            }
+        })();
+    </script>
+    <style>
+        /* Design tokens copied from templates/index.html. Keep these in sync. */
+        :root {
+            --paper: #15120e;
+            --slip: #1b1712;
+            --slip-hi: #221d16;
+            --rule: #322a21;
+            --row-rule: #3d3429;
+            --rule-hi: #4d4132;
+            --ink: #e7dece;
+            --ink-hi: #fdf8ec;
+            --ink-mute: #9a8d79;
+            --brass: #c79a3e;
+            --brass-hi: #dfb659;
+            --brass-dim: #6d5527;
+            --stamp: #c26049;
+            --warn-ink: #dfb659;
+            --warn-edge: #6d5527;
+            --t-fungi: #ef77a6;
+            --t-plantae: #86b742;
+            --t-protozoa: #d181de;
+            --t-chromista: #bd936b;
+            --t-orange-animal: #f57d5e;
+            --t-blue-animal: #5ea8fd;
+            --t-unknown: #9a8d79;
+            --ui: "Archivo", system-ui, -apple-system, sans-serif;
+            --serif: "Newsreader", Georgia, "Times New Roman", serif;
+            --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+            --edge: 3px;
+            --r: 2px;
+        }
+
+        html[data-theme="light"] {
+            --paper: #e6dfd0;
+            --slip: #f4efe4;
+            --slip-hi: #fbf8ef;
+            --rule: #cdc2ab;
+            --row-rule: #b9ad95;
+            --rule-hi: #a2947a;
+            --ink: #2a2418;
+            --ink-hi: #14100a;
+            --ink-mute: #6c604a;
+            --brass: #8a6716;
+            --brass-hi: #6e5210;
+            --brass-dim: #c3b18a;
+            --stamp: #9b3b23;
+            --warn-ink: #6e5210;
+            --warn-edge: #c3b18a;
+            --t-fungi: #9f055a;
+            --t-plantae: #426404;
+            --t-protozoa: #871998;
+            --t-chromista: #80542e;
+            --t-orange-animal: #9d2700;
+            --t-blue-animal: #0558a3;
+            --t-unknown: #6c604a;
+            color-scheme: light;
+        }
+
+        html[data-theme="dark"] {
+            color-scheme: dark;
+        }
+
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 32px 20px;
+            background: var(--paper);
+            color: var(--ink-mute);
+            font-family: var(--ui);
+            font-size: 15px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .card {
+            padding: 40px;
+            background: var(--slip);
+            border: 1px solid var(--rule);
+            border-radius: var(--r);
+        }
+
+        header {
+            padding-bottom: 28px;
+            border-bottom: 1px solid var(--rule-hi);
+        }
+
+        .back-link,
+        a {
+            color: var(--brass);
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 18px;
+            text-decoration: none;
+        }
+
+        a:hover {
+            color: var(--brass-hi);
+        }
+
+        a:focus-visible {
+            outline: 2px solid var(--brass);
+            outline-offset: 3px;
+        }
+
+        h1,
+        h2 {
+            font-family: var(--serif);
+            color: var(--ink);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(2.15rem, 6vw, 3.25rem);
+            font-weight: 500;
+            line-height: 1.05;
+        }
+
+        .subtitle {
+            margin: 10px 0 0;
+            color: var(--ink-mute);
+        }
+
+        .toc {
+            margin: 24px 0 0;
+            padding: 20px 0 0;
+            border-top: 1px solid var(--rule);
+        }
+
+        .toc ul {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px 28px;
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .toc a {
+            text-decoration-thickness: 1px;
+            text-underline-offset: 3px;
+        }
+
+        h2 {
+            margin: 42px 0 14px;
+            padding-bottom: 7px;
+            border-bottom: 1px solid var(--rule);
+            font-size: 1.7rem;
+            font-weight: 500;
+            line-height: 1.25;
+            scroll-margin-top: 20px;
+        }
+
+        p {
+            margin: 0 0 12px;
+            text-wrap: pretty;
+        }
+
+        strong {
+            color: var(--ink);
+            font-weight: 600;
+        }
+
+        ul {
+            margin: 10px 0;
+            padding-left: 24px;
+        }
+
+        li + li {
+            margin-top: 5px;
+        }
+
+        code {
+            padding: 1px 4px;
+            background: var(--slip-hi);
+            border: 1px solid var(--rule);
+            border-radius: var(--r);
+            color: var(--ink);
+            font-family: var(--mono);
+            font-size: 0.9em;
+            overflow-wrap: anywhere;
+        }
+
+        .instructions {
+            margin: 20px 0;
+            padding: 15px 16px;
+            background: var(--slip-hi);
+            border-left: 4px solid var(--brass-dim);
+            border-radius: 0;
+        }
+
+        .instructions > :last-child {
+            margin-bottom: 0;
+        }
+
+        .color-legend {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            margin: 20px 0;
+        }
+
+        .color-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 9px 11px;
+            background: var(--slip-hi);
+            border: 1px solid var(--rule);
+            border-radius: var(--r);
+            color: var(--ink);
+        }
+
+        .color-dot {
+            width: 13px;
+            height: 13px;
+            flex: 0 0 13px;
+            border: 1px solid var(--rule-hi);
+            border-radius: 50%;
+        }
+
+        .fungi { background: var(--t-fungi); }
+        .plantae { background: var(--t-plantae); }
+        .birds,
+        .reptiles,
+        .mammals { background: var(--t-blue-animal); }
+        .protozoa { background: var(--t-protozoa); }
+        .insects,
+        .arachnids,
+        .mollusks { background: var(--t-orange-animal); }
+
+        .example-links {
+            display: grid;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .example-link {
+            display: block;
+            padding: 12px 14px;
+            background: var(--slip-hi);
+            border: 1px solid var(--rule);
+            border-radius: var(--r);
+            color: var(--ink-mute);
+            font-family: var(--mono);
+            font-size: 0.9em;
+            text-decoration: none;
+            overflow-wrap: anywhere;
+        }
+
+        .example-link strong {
+            display: block;
+            margin-bottom: 4px;
+            font-family: var(--ui);
+            font-size: 1rem;
+        }
+
+        .example-link:hover {
+            border-color: var(--brass);
+            color: var(--brass);
+        }
+
+        .usage-graph {
+            display: block;
+            width: 100%;
+            height: auto;
+            border: 1px solid var(--rule);
+            border-radius: var(--r);
+        }
+
+        .github-link {
+            display: inline-block;
+            margin-top: 10px;
+            text-decoration: none;
+        }
+
+        footer {
+            margin-top: 22px;
+            color: var(--ink-mute);
+            text-align: center;
+            font-size: 0.9rem;
+        }
+
+        footer p {
+            margin: 0;
+        }
+
+        @media (max-width: 700px) {
+            body {
+                padding: 0;
+            }
+
+            .card {
+                padding: 26px 20px;
+                border-right: 0;
+                border-left: 0;
+            }
+
+            .toc ul,
+            .color-legend {
+                grid-template-columns: 1fr;
+            }
+
+            footer {
+                padding: 0 20px 22px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html {
+                scroll-behavior: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <header>
+                <a class="back-link" href="/labels">← Back to generator</a>
+                <h1>Herbarium Label Generator</h1>
+                <p class="subtitle">For iNaturalist and Mushroom Observer</p>
+                <nav class="toc" aria-label="Help topics">
+                    <ul>
+                        <li><a href="#input-formats">How to use</a></li>
+                        <li><a href="#printing">Printing labels</a></li>
+                        <li><a href="#batch-add">Add observations in bulk</a></li>
+                        <li><a href="#url-preloading">One-click URL preloading</a></li>
+                        <li><a href="#bugguide">BugGuide labels</a></li>
+                        <li><a href="#colors">Color coding system</a></li>
+                        <li><a href="#usage">Usage statistics</a></li>
+                    </ul>
+                </nav>
+            </header>
+
+            <h2 id="input-formats">How to use</h2>
+            <p>1. Enter observations and click away from the input to look them up. You can mix iNaturalist and Mushroom Observer entries.</p>
+            <div class="instructions">
+                <p><strong>Supported input formats:</strong></p>
+                <ul>
+                    <li><strong>iNaturalist:</strong> Enter just the number (e.g., <code>150291663</code>) or the full observation URL to generate an iNaturalist label.</li>
+                    <li><strong>Mushroom Observer:</strong> Enter <code>MO12345</code> (case-insensitive) or a Mushroom Observer observation URL to generate a Mushroom Observer label.</li>
+                    <li><strong>Convert MO → iNat:</strong> Enter <code>motoinat12345</code> to convert the MO observation to its iNaturalist counterpart and generate an iNaturalist label.</li>
+                    <li><strong>BugGuide:</strong> Enter <code>BG12345</code>, <code>BG 12345</code>, or <code>BugGuide 12345</code>. Only supported when generating minilabels.</li>
+                </ul>
+            </div>
+            <p>2. You can also enter multiple numbers separated by a space or comma.</p>
+            <p>3. You'll receive immediate feedback with the organism name and the iNaturalist / MO user who created the observation.</p>
+
+            <h2 id="printing">Printing labels</h2>
+            <p>You can make labels for 500 observations at a time.  If you want more, contact Alan Rockefeller or use the command line tool.  When you're ready:</p>
+            <p>1. Click <strong>Print PDF Labels</strong> to download <code>labels.pdf</code>, or <strong>Print RTF Labels</strong> to download <code>labels.rtf</code>.</p>
+            <p>2. Open the RTF file in LibreOffice Writer or Microsoft Word; open the PDF in any PDF viewer or web browser.  LibreOffice Writer works better than MS Word because MS Word doesn't wrap the labels properly, so some will be split between pages, requiring manual editing.</p>
+            <p>3. The labels will be arranged in two columns with QR codes. Often 8 labels fit on a page - but that depends on your observation fields.</p>
+            <p><strong>Note (RTF):</strong> If the QR code is missing, ensure you're opening the RTF file in a program that supports images in RTF files like Libreoffice Writer.</p>
+
+            <h2 id="batch-add">Add observations in bulk</h2>
+            <p>Instead of pasting observations one at a time, <strong>+ Add many at once</strong> finds every observation matching an observer, a date range, and optionally a taxon, and queues them together. It is useful after a field day, a trip, or a batch of recent uploads.</p>
+            <div class="instructions">
+                <p>1. On the trailing empty observation row, click <strong>+ Add many at once</strong> to the right of the ID input, then choose <strong>iNaturalist</strong> or <strong>Mushroom Observer</strong>.</p>
+                <p>2. Enter the observer's username and a date range. The date presets make recent sessions especially quick; add a taxon if you want to narrow the search.</p>
+                <p>3. Results appear automatically. Review the organisms, filter or sort the list, then select individual observations or use <strong>Select all</strong>.</p>
+                <p>4. Click <strong>Add observations</strong>. The selected records are added to the main page together, ready to print.</p>
+            </div>
+            <p>For iNaturalist searches, you can switch between the date an observation was <strong>observed</strong> and the date it was <strong>created</strong>.</p>
+            <p><strong>Require observation field (iNaturalist only):</strong> Start typing an observation field name and choose it from the suggestions. The results will include only observations where that field has a nonempty value. This is useful for finding records with data such as a personal voucher number, herbarium accession number, or DNA barcode. It filters which observations are added; it does not control which fields are printed on the labels.</p>
+            <h2 id="url-preloading">One-click URL preloading</h2>
+            <p>You can preload observations and label options directly in the URL. This is useful for sharing a link that opens the label generator with the observation list and print settings already filled in.</p>
+            <div class="instructions">
+                <p><strong>Common URL parameters:</strong></p>
+                <ul>
+                    <li><code>obs</code>, <code>observations</code>, or <code>ids</code>: observation numbers, separated by commas. Repeating the parameter also works.</li>
+                    <li><code>omit_qr_codes=1</code>: check Omit QR Codes.</li>
+                    <li><code>print_duplicate_labels=1</code>: check Print duplicate labels.</li>
+                    <li><code>minilabel_size=1</code> through <code>minilabel_size=10</code>: enable Mini-labels at that size.</li>
+                    <li><code>common_names=1</code> and <code>omit_notes=1</code>: check those label options.</li>
+                    <li><code>sort=date</code>, <code>sort=date-desc</code>, <code>sort=voucher</code>, or <code>sort=none</code>: set the label sort order. Use <code>sort=custom&amp;sort_field=Field%20Name</code> to sort by a named label field. Omit the parameter for the default observation-number order.</li>
+                    <li><code>add_fields</code> and <code>remove_fields</code>: include or exclude observation fields. Separate multiple fields with commas.</li>
+                    <li><code>open_add_observations=1</code> with <code>source</code>, <code>username</code>, <code>taxon</code>, <code>d1</code>, and <code>d2</code>: open the <strong>+ Add many at once</strong> panel from the trailing empty observation row with those filters prefilled.</li>
+                </ul>
+            </div>
+            <p><strong>Clickable examples:</strong></p>
+            <div class="example-links">
+                <a class="example-link" href="https://dikarya.us/labels?obs=150291663" target="_blank">
+                    <strong>Preload one iNaturalist observation</strong>
+                    https://dikarya.us/labels?obs=150291663
+                </a>
+                <a class="example-link" href="https://dikarya.us/labels?obs=150291663,MO12345&amp;common_names=1&amp;omit_qr_codes=1" target="_blank">
+                    <strong>Mix iNaturalist and Mushroom Observer, include common names, omit QR codes</strong>
+                    https://dikarya.us/labels?obs=150291663,MO12345&amp;common_names=1&amp;omit_qr_codes=1
+                </a>
+                <a class="example-link" href="https://dikarya.us/labels?obs=BG2520730&amp;minilabel_size=1" target="_blank">
+                    <strong>Preload a BugGuide mini-label</strong>
+                    https://dikarya.us/labels?obs=BG2520730&amp;minilabel_size=1
+                </a>
+                <a class="example-link" href="https://dikarya.us/labels?obs=150291663&amp;add_fields=MycoMap%20BLAST%20Results&amp;remove_fields=Microscopy%20Performed" target="_blank">
+                    <strong>Add MycoMap BLAST Results and remove Microscopy Performed</strong>
+                    https://dikarya.us/labels?obs=150291663&amp;add_fields=MycoMap%20BLAST%20Results&amp;remove_fields=Microscopy%20Performed
+                </a>
+                <a class="example-link" href="https://dikarya.us/labels?open_add_observations=1&amp;source=inat&amp;username=alan_rockefeller&amp;taxon=Fungi&amp;d1=2026-05-01&amp;d2=2026-06-02" target="_blank">
+                    <strong>Open Add Observations with iNaturalist filters prefilled</strong>
+                    https://dikarya.us/labels?open_add_observations=1&amp;source=inat&amp;username=alan_rockefeller&amp;taxon=Fungi&amp;d1=2026-05-01&amp;d2=2026-06-02
+                </a>
+            </div>
+            
+            <h2 id="bugguide">BugGuide labels</h2>
+            <p>You can create labels for BugGuide observations by entering the BugGuide ID directly into the input fields using formats such as <code>BG 2520730</code>, <code>BG2520730</code>, or <code>BugGuide 2520730</code>.</p>
+            <div class="instructions">
+                <p><strong>Important note:</strong> BugGuide inputs are only supported when the <strong>Mini-labels</strong> option is enabled. If you enter BugGuide IDs during a normal label print run, they will be skipped.</p>
+            </div>
+            
+            <h2 id="colors">Color coding system</h2>
+            <div class="color-legend">
+                <div class="color-item">
+                    <span class="color-dot fungi" aria-hidden="true"></span>
+                    <span>Fungi</span>
+                </div>
+                <div class="color-item">
+                    <span class="color-dot plantae" aria-hidden="true"></span>
+                    <span>Plantae</span>
+                </div>
+                <div class="color-item">
+                    <span class="color-dot birds" aria-hidden="true"></span>
+                    <span>Birds</span>
+                </div>
+                <div class="color-item">
+                    <span class="color-dot reptiles" aria-hidden="true"></span>
+                    <span>Reptiles</span>
+                </div>
+                <div class="color-item">
+                    <span class="color-dot mammals" aria-hidden="true"></span>
+                    <span>Mammals</span>
+                </div>
+                <div class="color-item">
+                    <span class="color-dot protozoa" aria-hidden="true"></span>
+                    <span>Protozoa</span>
+                </div>
+                <div class="color-item">
+                    <span class="color-dot insects" aria-hidden="true"></span>
+                    <span>Insects</span>
+                </div>
+                <div class="color-item">
+                    <span class="color-dot arachnids" aria-hidden="true"></span>
+                    <span>Arachnids</span>
+                </div>
+                <div class="color-item">
+                    <span class="color-dot mollusks" aria-hidden="true"></span>
+                    <span>Mollusks</span>
+                </div>
+            </div>
+
+            <h2 id="usage">Usage statistics</h2>
+            <a href="https://dikarya.us/labels/static/usage_graph.jpg" target="_blank">
+                <img class="usage-graph" src="/labels/static/usage_graph.jpg" width="1670" height="922" alt="Daily label generation graph showing jobs, labels, and the seven-day average over time">
+            </a>
+
+            <p>
+                <a href="https://github.com/AlanRockefeller/inat.label.py" target="_blank" class="github-link">
+                    Visit the inat.label.py repository on GitHub for more information <span aria-hidden="true">↗</span>
+                </a>
+            </p>
+        </div>
+
+        <footer>
+            <p>By Alan Rockefeller</p>
+        </footer>
+    </div>
+</body>
+</html>

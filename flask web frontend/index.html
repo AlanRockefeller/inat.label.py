@@ -15,8 +15,9 @@
             }
         })();
     </script>
+    <script src="{{ static_asset_url('browser_telemetry.js') }}"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="{{ url_for('static', filename='addobs_helpers.js') }}"></script>
+    <script src="{{ static_asset_url('addobs_helpers.js') }}"></script>
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -142,13 +143,12 @@
             flex-wrap: wrap;
         }
 
-        .eyebrow {
-            font-family: var(--mono);
-            font-size: 10.5px;
-            letter-spacing: 0.16em;
-            text-transform: uppercase;
+        .source-summary {
+            font-family: var(--ui);
+            font-size: 15px;
+            font-weight: 400;
             color: var(--ink-mute);
-            margin-bottom: 8px;
+            margin-top: 8px;
         }
 
         .masthead h1 {
@@ -161,10 +161,14 @@
         }
 
         .colophon {
-            font-family: var(--mono);
-            font-size: 11px;
+            font-family: var(--ui);
+            font-size: 13.5px;
             color: var(--ink-mute);
             margin-top: 10px;
+        }
+
+        .colophon .filename {
+            font-family: var(--mono);
         }
 
         .colophon a {
@@ -186,10 +190,9 @@
         }
 
         .tool-link {
-            font-family: var(--mono);
-            font-size: 11px;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
+            font-family: var(--ui);
+            font-size: 13.5px;
+            letter-spacing: normal;
             color: var(--ink-mute);
             background: none;
             border: 0;
@@ -275,7 +278,7 @@
         .slip {
             position: relative;
             display: grid;
-            grid-template-columns: var(--edge) 3.5ch minmax(11ch, 18ch) minmax(0, 1fr);
+            grid-template-columns: var(--edge) 3.5ch 35ch minmax(0, 1fr);
             align-items: baseline;
             column-gap: 16px;
             border-bottom: 1px solid var(--row-rule);
@@ -340,15 +343,21 @@
             font-size: 13.5px;
             color: var(--ink-hi);
             background: transparent;
-            border: 0;
-            border-bottom: 1px dotted var(--rule-hi);
-            padding: 6px 2px 4px;
+            border: 1px solid var(--rule);
+            border-radius: var(--r);
+            padding: 6px 7px;
             margin: 6px 0;
-            width: 100%;
-            letter-spacing: 0.01em;
+            width: 35ch;
+            max-width: 100%;
+            letter-spacing: normal;
         }
 
-        .slip-input::placeholder,
+        .slip-input::placeholder {
+            color: var(--ink-mute);
+            opacity: 1;
+            letter-spacing: normal;
+        }
+
         .field-input::placeholder {
             color: var(--ink-mute);
             opacity: 1;
@@ -357,18 +366,98 @@
 
         .slip-input:focus {
             outline: none;
-            border-bottom: 1px solid var(--brass);
+            border-color: var(--brass);
         }
 
         .slip-input:focus-visible {
             outline: 2px solid var(--brass);
-            outline-offset: 3px;
-            border-radius: 1px;
+            outline-offset: 2px;
         }
 
         .slip-det {
             padding: 6px 0;
             min-width: 0;
+        }
+
+        .empty-row-choice {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            min-height: 30px;
+            font-family: var(--ui);
+            font-size: 14.5px;
+        }
+
+        .slip:has(.slip-input:not(:placeholder-shown)) .empty-row-choice {
+            display: none;
+        }
+
+        .empty-row-or {
+            color: var(--ink-mute);
+            text-transform: lowercase;
+        }
+
+        .add-many-action {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 7px;
+            padding: 0 0 2px;
+            border: 0;
+            border-bottom: 1px dotted var(--brass-dim);
+            background: transparent;
+            color: var(--brass);
+            font: inherit;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .add-many-action:hover {
+            border-bottom-color: var(--brass-hi);
+            color: var(--brass-hi);
+        }
+
+        .add-many-action:focus-visible {
+            outline: 2px solid var(--brass);
+            outline-offset: 3px;
+        }
+
+        .add-many-glyph {
+            font-size: 16px;
+            line-height: 1;
+        }
+
+        .sheet-empty-state {
+            display: grid;
+            grid-template-columns: var(--edge) 3.5ch 35ch minmax(0, 1fr);
+            column-gap: 16px;
+            padding: 34px 0 26px;
+        }
+
+        .sheet-empty-state[hidden] {
+            display: none;
+        }
+
+        .sheet-empty-copy {
+            grid-column: 3 / -1;
+            max-width: 540px;
+        }
+
+        .sheet-empty-title {
+            margin: 0;
+            color: var(--ink);
+            font-family: var(--serif);
+            font-size: 22px;
+            font-weight: 600;
+            line-height: 1.4;
+        }
+
+        .sheet-empty-detail {
+            margin: 10px 0 0;
+            color: var(--ink-mute);
+            font-family: var(--ui);
+            font-size: 15px;
+            line-height: 1.6;
+            text-wrap: pretty;
         }
 
         .result-item {
@@ -421,9 +510,10 @@
         }
 
         .slip-meta {
-            font-family: var(--mono);
-            font-size: 10.5px;
-            letter-spacing: 0.06em;
+            font-family: var(--ui);
+            font-size: 13.5px;
+            line-height: 15.75px;
+            letter-spacing: normal;
             color: var(--ink-mute);
             margin-top: 2px;
             overflow-wrap: anywhere;
@@ -444,13 +534,26 @@
             border: 1px solid var(--rule-hi);
             padding: 0 4px;
             margin-left: 6px;
-            text-transform: uppercase;
-            font-size: 9.5px;
-            letter-spacing: 0.1em;
+            font-size: 10.5px;
         }
 
         .slip-meta.err {
             color: var(--stamp);
+        }
+
+        .lookup-retry {
+            margin-left: 8px;
+            padding: 0;
+            border: 0;
+            border-bottom: 1px solid currentColor;
+            background: transparent;
+            color: var(--brass);
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .lookup-retry:hover {
+            color: var(--brass-hi);
         }
 
         .duplicate-flag {
@@ -479,8 +582,8 @@
             transition: opacity 110ms linear, color 110ms linear;
         }
 
-        .slip:hover .slip-strike,
-        .slip:focus-within .slip-strike,
+        .slip:has(.slip-input:not(:placeholder-shown)):hover .slip-strike,
+        .slip:has(.slip-input:not(:placeholder-shown)):focus-within .slip-strike,
         .slip-strike:focus-visible {
             opacity: 1;
         }
@@ -566,10 +669,9 @@
             color: var(--ink-mute);
             padding-left: 0;
             padding-right: 14px;
-            font-family: var(--mono);
-            font-size: 11px;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+            font-family: var(--ui);
+            font-size: 14.5px;
+            letter-spacing: normal;
         }
 
         .btn-quiet:hover:not(:disabled) {
@@ -635,7 +737,7 @@
 
         legend {
             font-family: var(--mono);
-            font-size: 10px;
+            font-size: 10.5px;
             letter-spacing: 0.18em;
             text-transform: uppercase;
             color: var(--ink-mute);
@@ -655,7 +757,7 @@
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            font-size: 13.5px;
+            font-size: 15px;
             color: var(--ink);
             cursor: pointer;
             white-space: nowrap;
@@ -666,6 +768,7 @@
             color: var(--ink);
             flex: 0 0 auto;
             width: auto;
+            field-sizing: content;
         }
 
         #sortFieldOpt[hidden] {
@@ -698,13 +801,10 @@
             border-top: 1px solid var(--rule);
         }
 
-        /* Sort rides along on the button row: the options row above is already
-           full, so putting it there added a line to the fieldset. */
         .sort-controls {
             display: flex;
             align-items: center;
             gap: 14px;
-            margin-left: auto;
         }
 
         .warning {
@@ -724,36 +824,35 @@
             justify-content: space-between;
             align-items: baseline;
             gap: 20px;
-            margin-top: 46px;
+            margin-top: 28px;
             padding-top: 12px;
             border-top: 1px solid var(--rule);
-            font-family: var(--mono);
-            font-size: 11px;
-            letter-spacing: 0.09em;
-            text-transform: uppercase;
+            font-family: var(--ui);
+            font-size: 14.5px;
+            letter-spacing: normal;
             color: var(--ink-mute);
             flex-wrap: wrap;
         }
 
         .tally b {
-            color: var(--ink-hi);
+            color: var(--ink);
             font-weight: 500;
         }
 
-        .tally-clear {
+        .tally .tally-clear {
             border: 0;
+            border-bottom: 1px dotted currentColor;
             background: transparent;
-            color: var(--ink-mute);
+            color: var(--stamp);
             font: inherit;
-            letter-spacing: inherit;
-            text-transform: inherit;
-            padding: 0 0 0 10px;
+            padding: 0;
             cursor: pointer;
         }
 
-        .tally-clear:hover,
-        .tally-clear:focus-visible {
+        .tally .tally-clear:hover,
+        .tally .tally-clear:focus-visible {
             color: var(--stamp);
+            border-bottom-color: currentColor;
         }
 
         .tally nav {
@@ -775,18 +874,23 @@
         }
 
         .keyline {
-            font-family: var(--mono);
-            font-size: 10.5px;
-            letter-spacing: 0.08em;
+            font-family: var(--ui);
+            font-size: 14px;
+            letter-spacing: normal;
             color: var(--ink-mute);
             margin-top: 10px;
             display: flex;
             flex-wrap: wrap;
-            gap: 6px 16px;
+            gap: 6px 0;
         }
 
         .keyline span {
             white-space: nowrap;
+        }
+
+        .keyline span:not(:last-child)::after {
+            content: "·";
+            margin: 0 9px;
         }
 
         .keyline i {
@@ -840,6 +944,23 @@
                 fadeout 0.5s 2.5s;
         }
 
+        /* Toasts carrying an action stay up long enough to actually click it. */
+        #toast.show.toast-lasting {
+            animation:
+                fadein 0.5s,
+                fadeout 0.5s 9.5s;
+        }
+
+        .toast-action {
+            border: 0;
+            border-bottom: 1px dotted currentColor;
+            background: transparent;
+            color: var(--brass);
+            font: inherit;
+            padding: 0;
+            cursor: pointer;
+        }
+
         @keyframes fadein {
             from {
                 bottom: 0;
@@ -882,11 +1003,6 @@
         }
 
         @media screen and (max-width: 720px) {
-            /* Once the button row wraps, right-aligning Sort just strands it. */
-            .sort-controls {
-                margin-left: 0;
-            }
-
             .masthead h1 {
                 font-size: 34px;
             }
@@ -909,6 +1025,10 @@
                 grid-column: 3;
                 padding-top: 2px;
                 padding-bottom: 8px;
+            }
+
+            .sheet-empty-state {
+                grid-template-columns: var(--edge) 3.5ch minmax(0, 1fr);
             }
 
             .slip-input {
@@ -1125,6 +1245,13 @@
         .addobs-header-source {
             width: 100%;
             justify-self: center;
+        }
+
+        .addobs-header-actions {
+            display: flex;
+            align-items: center;
+            justify-self: end;
+            gap: 0.5rem;
         }
 
         .addobs-modal-body {
@@ -2174,39 +2301,50 @@
     <div class="sheet">
         <header class="masthead">
             <div>
-                <div class="eyebrow">iNaturalist &nbsp;·&nbsp; Mushroom Observer &nbsp;·&nbsp; BugGuide</div>
                 <h1>Herbarium Label Generator</h1>
+                <div class="source-summary">Labels from iNaturalist and Mushroom Observer</div>
                 <div class="colophon">
-                    inat.label.py &nbsp;·&nbsp; A. Rockefeller &nbsp;·&nbsp;
+                    <a class="filename" href="https://github.com/AlanRockefeller/inat.label.py"
+                        target="_blank">inat.label.py</a> &nbsp;·&nbsp; A. Rockefeller &nbsp;·&nbsp;
                     <a href="https://github.com/AlanRockefeller/inat.label.py/blob/main/LICENSE.md"
                         target="_blank">MIT</a>
                 </div>
             </div>
             <div class="masthead-tools">
                 <button type="button" id="themeToggle" class="tool-link" aria-label="Switch to light mode"
-                    title="Switch to light mode">Light</button>
+                    title="Switch to light mode">Light mode</button>
                 <a href="/labels/help" class="tool-link">Help</a>
             </div>
         </header>
 
         <main>
             <section class="section">
-                <div class="section-head">
-                    <span class="fill"></span>
-                    <span class="section-note">iNat # · MO12345 · motoinat12345 · BG12345</span>
-                </div>
-
                 <form id="observationForm">
                     <div class="observation-list slips" id="observationInputs">
                         <div class="observation-input slip">
                             <span class="slip-edge"></span>
                             <span class="observation-number slip-no">1</span>
                             <input type="text" id="obs1" name="observations[]"
-                                class="obs-input obs-id-input slip-input" placeholder="Enter observation number"
+                                class="obs-input obs-id-input slip-input" placeholder="iNat or MO observation # or URL"
                                 aria-label="Observation 1" autocomplete="off" />
-                            <div class="result slip-det"></div>
+                            <div class="result slip-det">
+                                <div class="empty-row-choice">
+                                    <span class="empty-row-or">or</span>
+                                    <button type="button" class="add-many-action">
+                                        <span class="add-many-glyph" aria-hidden="true">+</span>
+                                        <span>Add many at once</span>
+                                    </button>
+                                </div>
+                            </div>
                             <button type="button" class="removeButton slip-strike"
                                 aria-label="Remove row 1">&times;</button>
+                        </div>
+                    </div>
+
+                    <div id="sheetEmptyState" class="sheet-empty-state" hidden>
+                        <div class="sheet-empty-copy">
+                            <p class="sheet-empty-title">Paste an observation number or URL</p>
+                            <p class="sheet-empty-detail">Or skip the typing - pull in every observation you made in a date range. Most people start that way.</p>
                         </div>
                     </div>
 
@@ -2216,9 +2354,8 @@
                     </div>
 
                     <div class="actions">
-                        <button type="button" id="printRtfButton" class="btn btn-print">Print RTF labels</button>
-                        <button type="button" id="printPdfButton" class="btn btn-line">Print PDF labels</button>
-                        <button type="button" id="addObsButton" class="btn btn-line">Add by date &amp; observer</button>
+                        <button type="button" id="printPdfButton" class="btn btn-print">Print PDF labels</button>
+                        <button type="button" id="printRtfButton" class="btn btn-line">Print RTF labels</button>
                     </div>
 
                     <fieldset>
@@ -2228,6 +2365,7 @@
                             <label class="opt"><input type="checkbox" id="printDuplicateLabels" /> Print duplicates</label>
                             <label class="opt"><input type="checkbox" name="common_names" id="common_names" /> Common names</label>
                             <label class="opt"><input type="checkbox" name="omit_notes" id="omit_notes" /> Omit notes</label>
+                            <label class="opt"><input type="checkbox" name="number_labels" id="number_labels" /> Number labels</label>
                             <label class="opt">Mini-labels
                                 <select id="minilabelSize" name="minilabel_size">
                                     <option value="">Off</option>
@@ -2243,11 +2381,6 @@
                                     <option value="10">10 — largest</option>
                                 </select>
                             </label>
-                        </div>
-                        <div class="field-actions">
-                            <button type="button" id="editFieldsButton" class="btn btn-quiet">+ Observation fields</button>
-                            <button type="button" id="customFieldsButton" class="btn btn-quiet">− Suppress fields</button>
-                            <button type="button" id="downloadCsvButton" class="btn btn-quiet">↓ CSV</button>
                             <div class="sort-controls">
                                 <label class="opt">Sort
                                     <select id="sortMode" name="sort">
@@ -2266,38 +2399,45 @@
                                 </label>
                             </div>
                         </div>
+                        <div class="field-actions">
+                            <button type="button" id="editFieldsButton" class="btn btn-quiet">+ Observation fields</button>
+                            <button type="button" id="customFieldsButton" class="btn btn-quiet">− Suppress fields</button>
+                            <button type="button" id="downloadCsvButton" class="btn btn-quiet">↓ Download CSV</button>
+                        </div>
                     </fieldset>
                 </form>
 
                 <div class="tally">
                     <div><b id="tallyCount">0</b> <span id="tallyLabelWord">labels</span><span
-                            id="tallySheetSummary"> &nbsp;·&nbsp; <b id="tallySheets">1</b>
-                            <span id="tallySheetWord">sheet</span> at 8 per page</span><button type="button"
-                            id="clearQueueButton" class="tally-clear">Clear queue</button></div>
+                            id="tallySheetSummary"> &nbsp;·&nbsp; about <b id="tallySheets">1</b>
+                            <span id="tallySheetWord">sheet</span></span> <span aria-hidden="true">·</span> <button type="button"
+                            id="clearQueueButton" class="tally-clear">Clear queue</button> <span aria-hidden="true">·</span>
+                        <a href="#" id="restorePreviousLabelsButton" class="tally-clear">Restore previous labels</a></div>
                     <nav>
-                        <a href="/labels/todo">To-do</a>
-                        <a href="https://dikarya.us/voucher-labels" target="_blank">Voucher Labels</a>
-                        <a href="https://www.inaturalist.org" target="_blank">iNaturalist</a>
-                        <a href="https://mushroomobserver.org" target="_blank">Mushroom Observer</a>
-                        <a href="https://github.com/AlanRockefeller/inat.label.py" target="_blank">GitHub</a>
+                        <a href="/labels/todo">To-do list</a>
+                        <a href="https://dikarya.us/voucher-labels" target="_blank">Voucher labels</a>
+                        <a href="https://www.inaturalist.org" target="_blank">iNaturalist ↗</a>
+                        <a href="https://mushroomobserver.org" target="_blank">Mushroom Observer ↗</a>
+                        <a href="https://github.com/AlanRockefeller" target="_blank">GitHub ↗</a>
                     </nav>
                 </div>
 
                 <div class="keyline">
                     <span><i style="background: var(--t-fungi)"></i>Fungi</span>
                     <span><i style="background: var(--t-plantae)"></i>Plantae</span>
-                    <span><i style="background: var(--t-blue-animal)"></i>Birds · <i
-                            style="background: var(--t-blue-animal)"></i>Reptiles · <i
-                            style="background: var(--t-blue-animal)"></i>Mammals</span>
+                    <span><i style="background: var(--t-blue-animal)"></i>Birds</span>
+                    <span><i style="background: var(--t-blue-animal)"></i>Reptiles</span>
+                    <span><i style="background: var(--t-blue-animal)"></i>Mammals</span>
                     <span><i style="background: var(--t-protozoa)"></i>Protozoa</span>
-                    <span><i style="background: var(--t-orange-animal)"></i>Insects · <i
-                            style="background: var(--t-orange-animal)"></i>Arachnids · <i
-                            style="background: var(--t-orange-animal)"></i>Mollusks</span>
+                    <span><i style="background: var(--t-orange-animal)"></i>Insects</span>
+                    <span><i style="background: var(--t-orange-animal)"></i>Arachnids</span>
+                    <span><i style="background: var(--t-orange-animal)"></i>Mollusks</span>
                 </div>
             </section>
         </main>
     </div>
-    <div id="toast" role="alert" aria-live="assertive" aria-atomic="true"><span id="toastMessage"></span></div>
+    <div id="toast" role="alert" aria-live="assertive" aria-atomic="true"><span id="toastMessage"></span><button
+            type="button" id="toastAction" class="toast-action" hidden></button></div>
     <!-- Log Modal -->
     <div id="logModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="logModalTitle"
         tabindex="-1">
@@ -2332,7 +2472,10 @@
                         <div class="segment-label">Mushroom Observer</div>
                     </label>
                 </div>
-                <button id="addObsCloseX" class="btn btn-outline btn-icon" aria-label="Close">&times;</button>
+                <div class="addobs-header-actions">
+                    <a href="/labels/help#batch-add" class="tool-link" target="_blank">Help ↗</a>
+                    <button id="addObsCloseX" class="btn btn-outline btn-icon" aria-label="Close">&times;</button>
+                </div>
             </div>
             <div class="modal-body addobs-modal-body">
                 <div id="addObsBannerError" class="addobs-banner-error" role="alert"></div>
@@ -2377,7 +2520,7 @@
                         <div id="addObsDateModeHelper" class="modal-helper-text">Filtering by observation date</div>
                     </div>
                     <div class="field-group addobs-observation-field" id="addObsObservationFieldGroup">
-                        <label for="addObsObservationField" class="field-label">Require observation field</label>
+                        <label for="addObsObservationField" class="field-label">Require observation field (optional)</label>
                         <input type="text" id="addObsObservationField" class="field-input" autocomplete="off"
                             role="combobox" aria-autocomplete="list" aria-expanded="false"
                             aria-controls="addObsObservationFieldList" aria-activedescendant=""
@@ -2544,7 +2687,7 @@
                 $("#themeToggle")
                     .attr("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode")
                     .attr("title", isDark ? "Switch to light mode" : "Switch to dark mode")
-                    .text(isDark ? "Light" : "Dark");
+                    .text(isDark ? "Light mode" : "Dark mode");
 
                 try {
                     localStorage.setItem("labels-theme", nextTheme);
@@ -2563,18 +2706,42 @@
             const DEFAULT_LABEL_FIELDS = {{ default_label_fields | tojson | safe
         }};
 
-        function showToast(message, isSuccess = true) {
+        let toastHideTimer = null;
+
+        function hideToast() {
+            clearTimeout(toastHideTimer);
+            toastHideTimer = null;
+            $("#toast").removeClass("show toast-lasting");
+            $("#toastAction").prop("hidden", true).off("click").text("");
+        }
+
+        // `action` is an optional { label, onClick }; toasts carrying one stay up
+        // longer so the button is actually reachable.
+        function showToast(message, isSuccess = true, action = null) {
+            clearTimeout(toastHideTimer);
             $("#toastMessage").text(message);
+
+            const $action = $("#toastAction").off("click");
+            if (action) {
+                $action
+                    .text(action.label)
+                    .prop("hidden", false)
+                    .on("click", function () {
+                        hideToast();
+                        action.onClick();
+                    });
+            } else {
+                $action.prop("hidden", true).text("");
+            }
+
             $("#toast")
-                .removeClass("show toast-success toast-error")
+                .removeClass("show toast-success toast-error toast-lasting")
                 .addClass(isSuccess ? "toast-success" : "toast-error");
 
             void $("#toast")[0].offsetWidth;
-            $("#toast").addClass("show");
+            $("#toast").addClass(action ? "show toast-lasting" : "show");
 
-            setTimeout(function () {
-                $("#toast").removeClass("show");
-            }, 3000);
+            toastHideTimer = setTimeout(hideToast, action ? 10000 : 3000);
         }
 
         function updateObservationNumbers() {
@@ -2598,6 +2765,74 @@
         function countQueuedObservations() {
             return getQueuedObservationIds().length;
         }
+
+        // The typed queue is autosaved so navigating away does not lose it.
+        // Only the raw text is stored - options and fetched data are not.
+        const QUEUE_STORAGE_KEY = "labels-queue-v1";
+        const PREVIOUS_LABELS_STORAGE_KEY = "labels-previous-v1";
+        let queueSaveTimer = null;
+        let restoringQueue = false;
+        let currentQueueWasGenerated = false;
+
+        function rawObservationInputValues() {
+            return $("#observationInputs .obs-id-input")
+                .map(function () { return $(this).val(); })
+                .get();
+        }
+
+        function saveQueueStateNow() {
+            clearTimeout(queueSaveTimer);
+            queueSaveTimer = null;
+            if (restoringQueue || currentQueueWasGenerated) return;
+
+            const state = LabelsAddObsHelpers.serializeQueueState(rawObservationInputValues());
+            if (!state) {
+                removeLabelsStorage(QUEUE_STORAGE_KEY);
+                return;
+            }
+            writeLabelsStorage(QUEUE_STORAGE_KEY, JSON.stringify(state));
+        }
+
+        function scheduleQueueSave() {
+            if (restoringQueue) return;
+            currentQueueWasGenerated = false;
+            clearTimeout(queueSaveTimer);
+            queueSaveTimer = setTimeout(saveQueueStateNow, 500);
+        }
+
+        function forgetSavedQueue() {
+            clearTimeout(queueSaveTimer);
+            queueSaveTimer = null;
+            removeLabelsStorage(QUEUE_STORAGE_KEY);
+        }
+
+        function rememberSuccessfullyGeneratedQueue(submittedObservationIds) {
+            const state = LabelsAddObsHelpers.serializeQueueState(submittedObservationIds);
+            if (!state) return;
+
+            if (!writeLabelsStorage(PREVIOUS_LABELS_STORAGE_KEY, JSON.stringify(state))) {
+                return;
+            }
+
+            const currentObservationIds = getQueuedObservationIds();
+            const queueStillMatches =
+                currentObservationIds.length === submittedObservationIds.length &&
+                currentObservationIds.every(
+                    (observationId, index) => observationId === submittedObservationIds[index],
+                );
+            if (queueStillMatches) {
+                currentQueueWasGenerated = true;
+                forgetSavedQueue();
+            } else {
+                saveQueueStateNow();
+            }
+        }
+
+        // Flush before leaving so a navigation inside the debounce window still saves.
+        window.addEventListener("beforeunload", saveQueueStateNow);
+        document.addEventListener("visibilitychange", function () {
+            if (document.visibilityState === "hidden") saveQueueStateNow();
+        });
 
         function countPrintedLabels() {
             return LabelsAddObsHelpers.printedLabelCount(
@@ -2636,10 +2871,13 @@
             $("#tallyLabelWord").text(total === 1 ? "label" : "labels");
 
             const miniLabelsOn = $("#minilabelSize").val() !== "";
-            $("#tallySheetSummary").toggle(!miniLabelsOn);
-            if (miniLabelsOn) return;
+            if (miniLabelsOn) {
+                $("#tallySheetSummary").hide();
+                return;
+            }
 
             const sheets = LabelsAddObsHelpers.standardSheetCount(total);
+            $("#tallySheetSummary").toggle(sheets >= 5);
             $("#tallySheets").text(sheets);
             $("#tallySheetWord").text(sheets === 1 ? "sheet" : "sheets");
         }
@@ -2650,6 +2888,7 @@
             const warningDiv = $("#warningMessage");
             const warningText = $("#warningText");
 
+            $("#sheetEmptyState").prop("hidden", observationTotal !== 0);
             updateTally(printedLabelTotal);
             updateSheetBreaks();
 
@@ -2663,6 +2902,17 @@
             }
         }
 
+        function emptyRowChoiceMarkup() {
+            return `
+                <div class="empty-row-choice">
+                    <span class="empty-row-or">or</span>
+                    <button type="button" class="add-many-action">
+                        <span class="add-many-glyph" aria-hidden="true">+</span>
+                        <span>Add many at once</span>
+                    </button>
+                </div>`;
+        }
+
         function addObservationField($afterRow = null) {
             observationCount++;
 
@@ -2674,10 +2924,10 @@
                        id="obs${observationCount}"
                        name="observations[]"
                        class="obs-input obs-id-input slip-input"
-                       placeholder="Enter observation number"
+                       placeholder="iNat or MO observation # or URL"
                        aria-label="Observation ${observationCount}"
                        autocomplete="off">
-                <div class="result slip-det"></div>
+                <div class="result slip-det">${emptyRowChoiceMarkup()}</div>
                 <button type="button" class="removeButton slip-strike"
                         aria-label="Remove row ${observationCount}">&times;</button>
             </div>`;
@@ -2700,9 +2950,12 @@
                     $row.remove();
                 }
             });
-            const $last = $("#observationInputs .observation-input").last();
+            let $last = $("#observationInputs .observation-input").last();
             if (!$last.length || $last.find(".obs-id-input").val().trim()) {
-                addObservationField();
+                $last = addObservationField();
+            }
+            if (!$last.find(".empty-row-choice").length) {
+                $last.find(".result").empty().append(emptyRowChoiceMarkup());
             }
             updateObservationNumbers();
         }
@@ -2761,9 +3014,20 @@
             const resultItem = $('<div class="result-item"></div>');
 
             if (data.error) {
-                resultItem.html(
-                    `<div class="slip-meta err">${escapeHtml(original)}: ${escapeHtml(data.error || "")}</div>`,
-                );
+                const errorLine = $("<div>", { class: "slip-meta err" })
+                    .text(data.error || "Could not fetch observation");
+                const status = Number(data.status);
+                const retryable = data.retryable === true || status === 429 || status >= 500;
+
+                if (retryable) {
+                    $("<button>", {
+                        type: "button",
+                        class: "lookup-retry",
+                        text: "Retry",
+                        "aria-label": `Retry lookup for ${original}`,
+                    }).appendTo(errorLine);
+                }
+                resultItem.append(errorLine);
             } else {
                 let displayText;
                 const lower = (original || "").toLowerCase();
@@ -2950,6 +3214,7 @@
                         const item = items[index] || {
                             error: "No lookup result returned",
                             original_input: state.obsId,
+                            retryable: true,
                         };
                         allObservationData[state.inputId] = [item];
                         state.$input.data("lookupStatus", "complete");
@@ -2960,11 +3225,17 @@
                     });
                     updateDuplicateFlags();
                 },
-                error: function (_xhr, status) {
+                error: function (xhr, status) {
                     if (status === "abort") return;
                     rowStates.forEach(function (state) {
                         if (state.$input.data("lookupToken") !== state.token) return;
-                        const item = { error: "Error fetching details", original_input: state.obsId };
+                        const responseError = xhr.responseJSON && xhr.responseJSON.error;
+                        const item = {
+                            error: responseError || "Could not fetch observation",
+                            original_input: state.obsId,
+                            status: xhr.status || 503,
+                            retryable: !xhr.status || xhr.status === 429 || xhr.status >= 500,
+                        };
                         allObservationData[state.inputId] = [item];
                         state.$input.data("lookupStatus", "error");
                         state.$input.siblings(".result").empty().append(
@@ -3004,6 +3275,13 @@
             return normalizeAndLookupObservationInput($input);
         }
 
+        $("#observationInputs").on("click", ".lookup-retry", function () {
+            const $input = $(this).closest(".observation-input").find(".obs-id-input");
+            $input.removeData("lookupStatus");
+            normalizeAndLookupObservationInput($input);
+            $input.focus();
+        });
+
         $("#observationInputs").on("input", ".obs-id-input", function () {
             const $this = $(this);
             const inputId = $this.attr("id");
@@ -3023,6 +3301,7 @@
 
             updateWarningMessage();
             updateDuplicateFlags();
+            scheduleQueueSave();
         });
 
         $("#observationInputs").on("paste", ".obs-id-input", function () {
@@ -3089,11 +3368,28 @@
                 return;
             }
 
+            // The CSV follows the same Sort selection as the labels, so the
+            // spreadsheet rows and the printed labels come out in one order.
+            const sortMode = $("#sortMode").val();
+            const sortField = $("#sortField").val().trim();
+            if (sortMode === "custom" && !sortField) {
+                $("#sortField").addClass("input-error").focus();
+                showToast("Enter a field name to sort by, or choose another sort order", false);
+                return;
+            }
+
             var formData = new FormData();
 
             getQueuedObservationIds().forEach(function (id) {
                 formData.append("observations[]", id);
             });
+
+            if (sortMode) {
+                formData.append("sort", sortMode);
+            }
+            if (sortMode === "custom") {
+                formData.append("sort_field", sortField);
+            }
 
             const submitBtn = $(this);
             const originalText = submitBtn.html();
@@ -3108,7 +3404,7 @@
                 data: formData,
                 processData: false,
                 contentType: false,
-                success(response) {
+                success(response, textStatus, xhr) {
                     submitBtn.html(originalText).removeClass("is-busy").prop("disabled", false);
 
                     var blob = new Blob([response], {
@@ -3121,8 +3417,27 @@
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
-                    window.URL.revokeObjectURL(url);
-                    showToast("CSV downloaded");
+                    // Revoking straight after the click can race the browser's
+                    // handoff of the download and cancel it with no visible
+                    // error, so let the click settle first.
+                    setTimeout(function () {
+                        window.URL.revokeObjectURL(url);
+                    }, 60000);
+
+                    const skipped = parseInt(xhr.getResponseHeader("X-Skipped-Observations"), 10) || 0;
+                    if (skipped > 0) {
+                        let skippedIds = xhr.getResponseHeader("X-Skipped-Ids") || "";
+                        if (skippedIds.length > 80) {
+                            skippedIds = `${skippedIds.slice(0, 80).replace(/,[^,]*$/, "")}, …`;
+                        }
+                        const detail = skippedIds ? `: ${skippedIds}` : "";
+                        showToast(
+                            `CSV downloaded, but ${skipped} observation${skipped === 1 ? " was" : "s were"} left out${detail}`,
+                            false
+                        );
+                    } else {
+                        showToast("CSV downloaded");
+                    }
                 },
 
                 error(xhr) {
@@ -3539,6 +3854,7 @@
             updateObservationNumbers();
             updateDuplicateFlags();
             updateWarningMessage();
+            scheduleQueueSave();
 
             showToast(`Added ${observations.length} observations`);
         }
@@ -3578,6 +3894,7 @@
                 omitQrCodes: $("#omitQrCodes").is(":checked"),
                 commonNames: $("#common_names").is(":checked"),
                 omitNotes: $("#omit_notes").is(":checked"),
+                numberLabels: $("#number_labels").is(":checked"),
             };
         }
 
@@ -3616,6 +3933,7 @@
             if (printState.miniLabelSize) options.push(`Mini-label size ${printState.miniLabelSize}`);
             if (printState.commonNames) options.push("Common names");
             if (printState.omitNotes) options.push("Omit notes");
+            if (printState.numberLabels) options.push("Number labels");
             if (printState.omitQrCodes) options.push("Omit QR codes");
 
             const rows = [
@@ -3662,6 +3980,14 @@
 
         async function startPrintJob(printState) {
             const { btn, format, downloadName, successMsg } = printState;
+            const submittedObservationIds = getQueuedObservationIds();
+            let successfulPrintRecorded = false;
+
+            function recordSuccessfulPrint() {
+                if (successfulPrintRecorded) return;
+                successfulPrintRecorded = true;
+                rememberSuccessfullyGeneratedQueue(submittedObservationIds);
+            }
 
             const formData = collectObservationsFormData();
             formData.append("format", format);
@@ -3687,6 +4013,10 @@
 
             if (printState.omitNotes) {
                 formData.append("omit_notes", "on");
+            }
+
+            if (printState.numberLabels) {
+                formData.append("number_labels", "on");
             }
 
             const sortMode = printState.sortMode;
@@ -3759,6 +4089,7 @@
 
                         if (resp.ok && !downloaded) {
                             downloaded = true;
+                            recordSuccessfulPrint();
                             btn.html(originalText).removeClass("is-busy").prop("disabled", false);
                             const a = document.createElement("a");
                             a.href = expectedUrl;
@@ -3831,6 +4162,7 @@
 
                             if (payload.success && payload.download_url) {
                                 downloaded = true;
+                                recordSuccessfulPrint();
                                 const a = document.createElement("a");
                                 a.href = payload.download_url;
                                 a.download = downloadName;
@@ -3861,6 +4193,7 @@
 
                         if (payload.success && payload.download_url) {
                             downloaded = true;
+                            recordSuccessfulPrint();
                             // Auto-download
                             const a = document.createElement("a");
                             a.href = payload.download_url;
@@ -3969,7 +4302,7 @@
             },
         };
 
-        function readAddObsStorage(key, fallback = "") {
+        function readLabelsStorage(key, fallback = "") {
             try {
                 return localStorage.getItem(key) ?? fallback;
             } catch (_) {
@@ -3977,17 +4310,27 @@
             }
         }
 
-        function writeAddObsStorage(key, value) {
+        function writeLabelsStorage(key, value) {
             try {
                 localStorage.setItem(key, value);
+                return true;
             } catch (_) {
-                // Searching still works when persistence is unavailable.
+                // Searching and printing still work when persistence is unavailable.
+                return false;
+            }
+        }
+
+        function removeLabelsStorage(key) {
+            try {
+                localStorage.removeItem(key);
+            } catch (_) {
+                // Nothing to do when storage is unavailable.
             }
         }
 
         function recentAddObsObservers(source) {
             try {
-                const parsed = JSON.parse(readAddObsStorage(addObsObserverStorageKeys[source].recent, "[]"));
+                const parsed = JSON.parse(readLabelsStorage(addObsObserverStorageKeys[source].recent, "[]"));
                 return Array.isArray(parsed) ? parsed.filter((value) => typeof value === "string") : [];
             } catch (_) {
                 return [];
@@ -4006,7 +4349,7 @@
         }
 
         function loadLastAddObsObserver(source) {
-            const observer = readAddObsStorage(addObsObserverStorageKeys[source].last, "");
+            const observer = readLabelsStorage(addObsObserverStorageKeys[source].last, "");
             $("#addObsUser").val(observer);
             renderRecentAddObsObservers(source);
             return observer;
@@ -4020,8 +4363,8 @@
                 recentAddObsObservers(source),
                 value,
             );
-            writeAddObsStorage(keys.last, value);
-            writeAddObsStorage(keys.recent, JSON.stringify(recent));
+            writeLabelsStorage(keys.last, value);
+            writeLabelsStorage(keys.recent, JSON.stringify(recent));
             if (source === addObsObserverSource) renderRecentAddObsObservers(source);
         }
 
@@ -4629,7 +4972,7 @@
             $("#addObsModal").hide();
         }
 
-        $("#addObsButton").click(function () {
+        $("#observationInputs").on("click", ".add-many-action", function () {
             clearModalErrors();
             cancelAddObsObserverValidation();
             invalidateAddObsSearch();
@@ -4899,15 +5242,10 @@
             ensureSingleTrailingEmptyRow();
             updateDuplicateFlags();
             updateWarningMessage();
+            scheduleQueueSave();
         });
 
-        function clearObservationQueue() {
-            const queuedCount = countQueuedObservations();
-            if (
-                queuedCount > 0 &&
-                !confirm(`Clear all ${queuedCount} observation${queuedCount === 1 ? "" : "s"} from the queue?`)
-            ) return;
-
+        function resetObservationQueue() {
             pendingRowLookups.forEach((request) => request.abort());
             pendingRowLookups.clear();
             rowLookupSerial += 1;
@@ -4918,10 +5256,26 @@
             $("#warningMessage").hide();
             updateDuplicateFlags();
             updateWarningMessage();
+            currentQueueWasGenerated = false;
+            forgetSavedQueue();
             $("#observationInputs .obs-id-input").first().focus();
         }
 
+        function clearObservationQueue() {
+            const queuedCount = countQueuedObservations();
+            if (
+                queuedCount > 0 &&
+                !confirm(`Clear all ${queuedCount} observation${queuedCount === 1 ? "" : "s"} from the queue?`)
+            ) return;
+
+            resetObservationQueue();
+        }
+
         $("#clearQueueButton").on("click", clearObservationQueue);
+        $("#restorePreviousLabelsButton").on("click", function (event) {
+            event.preventDefault();
+            restorePreviousLabels();
+        });
 
         // Track fields to add and remove separately
         let addFields = [];
@@ -5170,6 +5524,69 @@
             }
         }
 
+        // One input fans out into rows via expandObservationInput(), so restoring
+        // a queue costs a single batched lookup request.
+        function restoreQueueObservations(observations, saveAsActiveQueue = false) {
+            restoringQueue = true;
+            try {
+                const $first = $(".obs-id-input").first();
+                $first.val(observations.join(", "));
+                $first.trigger("input");
+                lookupObservation($first);
+            } finally {
+                restoringQueue = false;
+            }
+
+            if (saveAsActiveQueue) saveQueueStateNow();
+            return countQueuedObservations();
+        }
+
+        // Bring back unfinished work automatically after navigation.
+        function restoreSavedQueue() {
+            const observations = LabelsAddObsHelpers.deserializeQueueState(
+                readLabelsStorage(QUEUE_STORAGE_KEY, ""),
+            );
+            if (!observations.length) return false;
+
+            // Text that parses to nothing usable is still the user's typing, so it
+            // stays in the box - but there is nothing to announce or undo.
+            const restoredCount = restoreQueueObservations(observations);
+            if (restoredCount) {
+                showToast(
+                    `Restored ${restoredCount} observation${restoredCount === 1 ? "" : "s"}`,
+                    true,
+                    { label: "Undo", onClick: resetObservationQueue },
+                );
+            }
+            return true;
+        }
+
+        // Printed queues remain available on demand without being restored on
+        // every visit as though they were unfinished work.
+        function restorePreviousLabels() {
+            const observations = LabelsAddObsHelpers.deserializeQueueState(
+                readLabelsStorage(PREVIOUS_LABELS_STORAGE_KEY, ""),
+            );
+            if (!observations.length) {
+                showToast("No previous labels are available to restore", false);
+                return;
+            }
+
+            const queuedCount = countQueuedObservations();
+            if (
+                queuedCount > 0 &&
+                !confirm(
+                    `Replace the ${queuedCount} queued observation${queuedCount === 1 ? "" : "s"} with the previous labels?`,
+                )
+            ) return;
+
+            resetObservationQueue();
+            const restoredCount = restoreQueueObservations(observations, true);
+            showToast(
+                `Restored ${restoredCount} previous label${restoredCount === 1 ? "" : "s"}`,
+            );
+        }
+
         function preloadObservationRowsFromUrl() {
             const observations = splitUrlParamList(
                 getUrlParamValues(
@@ -5210,6 +5627,7 @@
             );
             setUrlCheckbox("#common_names", "common_names", "commonNames");
             setUrlCheckbox("#omit_notes", "omit_notes", "omitNotes");
+            setUrlCheckbox("#number_labels", "number_labels", "numberLabels");
 
             const minilabelSize = readUrlValue("minilabel_size", "minilabelSize");
             if (/^(?:[1-9]|10)$/.test(minilabelSize)) {
@@ -5404,7 +5822,8 @@
             $("#" + fieldId + "Error").hide().empty();
         }
 
-        if (!preloadFromUrl()) ensureSingleTrailingEmptyRow();
+        // URL params win over a restored queue: an explicit link is a deliberate act.
+        if (!preloadFromUrl() && !restoreSavedQueue()) ensureSingleTrailingEmptyRow();
         updateWarningMessage();
       });
     </script>
