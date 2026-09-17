@@ -2110,6 +2110,7 @@ def create_pdf_content(
     no_qr: bool = False,
     title_field: str | None = None,
     fungus_fair_mode: bool = False,
+    stack_order_num_per_page: int | None = None,
 ) -> None:
     """Render labels into a two-column PDF at the given filename.
 
@@ -2120,6 +2121,8 @@ def create_pdf_content(
         title_field: Field name to render as a large centered title.
         fungus_fair_mode: Use the fungus-fair layout (large names, edibility
             image) instead of the standard herbarium layout.
+        stack_order_num_per_page: When set, empty stack-order padding labels
+            occupy one full row of the configured page layout.
     """
 
     register_fonts()
@@ -2202,8 +2205,21 @@ def create_pdf_content(
         alignment=1,  # Centered
     )
     story = []
+    stack_order_slot_height = None
+    if stack_order_num_per_page is not None:
+        stack_order_slot_height = frame_height / (stack_order_num_per_page // 2)
 
     for label, _iconic_taxon_name in labels:
+        if not label and stack_order_slot_height is not None:
+            story.append(
+                Table(
+                    [[""]],
+                    colWidths=[frame_width],
+                    rowHeights=[stack_order_slot_height],
+                )
+            )
+            continue
+
         label_content = []
         notes_value = ""  # Default if not found
         label_number = _label_number(label)
@@ -2489,7 +2505,31 @@ def create_pdf_content(
                     (notes_value.count("\n") + 1) * 14 * font_size_multiplier
                 )
 
-        if height_estimate > frame_height:
+        if stack_order_slot_height is not None:
+            slot_content = KeepInFrame(
+                frame_width,
+                stack_order_slot_height,
+                label_content,
+                mode="shrink",
+            )
+            slot = Table(
+                [[slot_content]],
+                colWidths=[frame_width],
+                rowHeights=[stack_order_slot_height],
+            )
+            slot.setStyle(
+                TableStyle(
+                    [
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                        ("TOPPADDING", (0, 0), (-1, -1), 0),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                    ]
+                )
+            )
+            story.append(slot)
+        elif height_estimate > frame_height:
             story.append(
                 KeepInFrame(frame_width, frame_height, label_content, mode="shrink")
             )
@@ -2689,7 +2729,10 @@ def create_minilabel_pdf_content(
 
 
 def create_rtf_content(
-    labels: list[TaggedLabel], no_qr: bool = False, fungus_fair_mode: bool = False
+    labels: list[TaggedLabel],
+    no_qr: bool = False,
+    fungus_fair_mode: bool = False,
+    stack_order_num_per_page: int | None = None,
 ) -> str:
     """Generate RTF content for the given labels and return it as a string.
 
@@ -2701,6 +2744,8 @@ def create_rtf_content(
         labels: Iterable of ``(label_fields, iconic_taxon_name)`` tuples.
         no_qr: Omit QR codes when True.
         fungus_fair_mode: Use the fungus-fair layout.
+        stack_order_num_per_page: When set, empty stack-order padding labels
+            occupy one full row of the configured page layout.
 
     Returns:
         A complete RTF document as a string.
@@ -2718,17 +2763,41 @@ def create_rtf_content(
     rtf_footer = r"}"
 
     rtf_content = rtf_header
+    stack_order_slot_height_twips = None
+    if stack_order_num_per_page is not None:
+        rows_per_page = stack_order_num_per_page // 2
+        # The RTF page is 15,840 twips high with 360-twip top/bottom margins.
+        stack_order_slot_height_twips = (15840 - 2 * 360) // rows_per_page
 
     try:
         for idx, (label, _iconic_taxon_name) in enumerate(labels):
+            fixed_slot = stack_order_slot_height_twips is not None
+            if not label and fixed_slot:
+                rtf_content += (
+                    r"{\trowd\trkeep\trgaph0\trrh-"
+                    + str(stack_order_slot_height_twips)
+                    + r"\cellx5400\pard\intbl\sb0\sa0 \cell\row}"
+                )
+                continue
+
             # Calculate space before to handle spacing between labels without ghost space at top of columns
             sb_twips = 0
             if idx > 0:
                 sb_twips = 1080 if fungus_fair_mode else 560
             space_before_cmd = f"\\sb{sb_twips} "
 
-            # start one label, force zero space-after here
-            rtf_content += r"{\keep\pard\ql\keepn\sa0 " + space_before_cmd
+            # In stack-order mode every label is an exact-height table row. This
+            # keeps short labels and padding aligned to the same physical slots.
+            if fixed_slot:
+                rtf_content += (
+                    r"{\trowd\trkeep\trgaph0\trrh-"
+                    + str(stack_order_slot_height_twips)
+                    + r"\cellx5400\pard\intbl\ql\keepn\sa0 "
+                    + space_before_cmd
+                )
+            else:
+                rtf_content += r"{\keep\pard\ql\keepn\sa0 " + space_before_cmd
+            table_par = r"\pard\intbl" if fixed_slot else r"\pard"
             label_number = _label_number(label)
 
             if fungus_fair_mode:
@@ -2773,7 +2842,7 @@ def create_rtf_content(
                 # Re-apply spacing when the scientific name is the first paragraph;
                 # otherwise it was already applied to the number paragraph above.
                 rtf_content += (
-                    r"\pard"
+                    table_par
                     + ("" if label_number is not None else space_before_cmd)
                     + r"\keep\keepn\qc\sa120 {\fs44\b "
                     + sci_name_rtf
@@ -2783,15 +2852,16 @@ def create_rtf_content(
                 # Common Name - Center, Size 36 (18pt)
                 if common_name:
                     rtf_content += (
-                        r"\pard\keep\keepn\qc\sa240 {\fs36\b "
+                        table_par
+                        + r"\keep\keepn\qc\sa240 {\fs36\b "
                         + escape_rtf(common_name)
                         + r"}\par "
                     )
                 else:
-                    rtf_content += r"\pard\keep\keepn\sa240 \par "
+                    rtf_content += table_par + r"\keep\keepn\sa240 \par "
 
                 # Reset alignment to left for details
-                rtf_content += r"\pard\keep\ql\sa0 "
+                rtf_content += table_par + r"\keep\ql\sa0 "
 
                 # Details text
                 details_rtf = ""
@@ -2848,7 +2918,24 @@ def create_rtf_content(
 
                 # If image exists, use a table or absolute positioning?
                 # RTF tables are simpler. 2 columns: Text | Image
-                if img_hex and img_dims:
+                if img_hex and img_dims and fixed_slot:
+                    # RTF cannot nest the image-layout table inside the exact-height
+                    # slot row. Keep the same information, with the image below the
+                    # details, when stack-order slots are active.
+                    rtf_content += details_rtf + r"\par " + table_par + r"\qr "
+                    rtf_content += (
+                        r"{\pict\jpegblip\picw"
+                        + str(iw)
+                        + r"\pich"
+                        + str(ih)
+                        + r"\picwgoal"
+                        + str(img_dims[0])
+                        + r"\pichgoal"
+                        + str(img_dims[1])
+                        + r" "
+                    )
+                    rtf_content += split_hex_string(img_hex, 76) + r"}\par "
+                elif img_hex and img_dims:
                     # Table def
                     rtf_content += r"\trowd\trkeep\trgaph108\trleft0"  # 108 twips gap
 
@@ -2996,7 +3083,7 @@ def create_rtf_content(
                         if notes_length == 0 and rtf_content.endswith(r"\line "):
                             rtf_content = rtf_content[:-6]
 
-                        rtf_content += r"\par\pard\qr\ri360\sb57\sa0 "
+                        rtf_content += r"\par" + table_par + r"\qr\ri360\sb57\sa0 "
                         qr_width_twips = qr_size[0] * 15
                         qr_height_twips = qr_size[1] * 15
                         rtf_content += (
@@ -3021,8 +3108,8 @@ def create_rtf_content(
                     # no QR - just end paragraph cleanly
                     rtf_content += r"\par"
 
-            # close label group
-            rtf_content += r"}"
+            # close the fixed-height row or the ordinary label group
+            rtf_content += r"\cell\row}" if fixed_slot else r"}"
 
         rtf_content += rtf_footer
     except Exception as e:
@@ -3696,7 +3783,12 @@ def _emit_output(
                 print(f"PDF file created: {os.path.basename(args.pdf)}", flush=True)
         elif rtf_mode:
             rtf_content = create_rtf_content(
-                labels, no_qr=args.no_qr, fungus_fair_mode=args.fungusfair
+                labels,
+                no_qr=args.no_qr,
+                fungus_fair_mode=args.fungusfair,
+                stack_order_num_per_page=(
+                    args.num_per_page if args.stack_order else None
+                ),
             )
             with open(args.rtf, "w", encoding="utf-8") as rtf_file:
                 rtf_file.write(rtf_content)
@@ -3717,6 +3809,9 @@ def _emit_output(
                 no_qr=args.no_qr,
                 title_field=args.title,
                 fungus_fair_mode=args.fungusfair,
+                stack_order_num_per_page=(
+                    args.num_per_page if args.stack_order else None
+                ),
             )
             try:
                 size_bytes = os.path.getsize(args.pdf)
