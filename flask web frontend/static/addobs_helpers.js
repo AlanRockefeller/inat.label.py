@@ -46,10 +46,10 @@
   }
 
   function parseObservationInput(input) {
-    const normalizedInput = String(input || "").replace(
-      /\b(bg|bugguide)\s+(\d+)/gi,
-      "BG$2",
-    );
+    const normalizedInput = String(input || "")
+      .replace(/\b(?:bg|bugguide)\s+(\d+)/gi, "BG$1")
+      .replace(/\b(?:mo|mushroomobserver)\s+(\d+)/gi, "MO$1")
+      .replace(/\b(?:inat|inaturalist)\s+(\d+)/gi, "$1");
     const results = [];
 
     normalizedInput
@@ -304,7 +304,7 @@
     const visibleSelected = visibleEligible.filter((row) => row.checked).length;
 
     return {
-      shown: normalizedRows.length,
+      shown: normalizedRows.filter((row) => !row.hidden).length,
       selected,
       alreadyOnSheet,
       visibleEligible: visibleEligible.length,

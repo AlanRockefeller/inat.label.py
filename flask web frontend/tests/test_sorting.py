@@ -1,3 +1,4 @@
+import importlib.util
 import unittest
 import sys
 import os
@@ -42,13 +43,14 @@ except ImportError:
     sys.modules["dateutil"] = m
     sys.modules["dateutil.parser"] = m.parser
 
-from importlib.machinery import SourceFileLoader
-
-try:
-    inat = SourceFileLoader("inat_label", "inat.label.py").load_module()
-except Exception as e:
-    print(f"Failed to load module: {e}")
-    sys.exit(1)
+module_path = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "inat.label.py")
+)
+spec = importlib.util.spec_from_file_location("inat_label", module_path)
+if spec is None or spec.loader is None:
+    raise ImportError(f"Could not load module specification from {module_path}")
+inat = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(inat)
 
 
 class TestSorting(unittest.TestCase):

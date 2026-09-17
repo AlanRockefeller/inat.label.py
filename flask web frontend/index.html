@@ -3391,6 +3391,17 @@
                 formData.append("sort_field", sortField);
             }
 
+            const csvCustomFields = [
+                ...addFields.map((field) => `+${field}`),
+                ...removeFields.map((field) => `-${field}`),
+            ];
+            if (csvCustomFields.length > 0) {
+                formData.append("use_custom", "on");
+                csvCustomFields.forEach((field) => {
+                    formData.append("custom_args[]", field);
+                });
+            }
+
             const submitBtn = $(this);
             const originalText = submitBtn.html();
             submitBtn

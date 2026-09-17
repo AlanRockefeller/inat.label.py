@@ -541,6 +541,7 @@ class TestAddObservationBrowserHelpers(unittest.TestCase):
             "spaces:h.parseObservationInput('123 456 789'),"
             "commas:h.parseObservationInput('123,456, 789'),"
             "bugguide:h.parseObservationInput('BG 12345'),"
+            "spacedPrefixes:h.parseObservationInput('MO 123 mushroomobserver 456 inat 789 inaturalist 987'),"
             "conversions:h.parseObservationInput('motoinat1 moinat2 inatmo3'),"
             "urls:h.parseObservationInput('https://mushroomobserver.org/observations?ids=11 https://bugguide.net/node/view/22'),"
             "mixed:h.parseObservationInput('123 MO456 motoinat789 https://www.inaturalist.org/observations/321 https://mushroomobserver.org/obs/654 BG 987 bugguide 246')"
@@ -549,6 +550,7 @@ class TestAddObservationBrowserHelpers(unittest.TestCase):
         self.assertEqual(result["spaces"], ["123", "456", "789"])
         self.assertEqual(result["commas"], ["123", "456", "789"])
         self.assertEqual(result["bugguide"], ["BG12345"])
+        self.assertEqual(result["spacedPrefixes"], ["MO123", "MO456", "789", "987"])
         self.assertEqual(result["conversions"], ["motoinat1", "moinat2", "inatmo3"])
         self.assertEqual(result["urls"], ["MO11", "BG22"])
         self.assertEqual(
@@ -648,12 +650,12 @@ class TestAddObservationBrowserHelpers(unittest.TestCase):
             "})()"
         )
         self.assertEqual(result["partial"]["selected"], 2)
-        self.assertEqual(result["partial"]["shown"], 4)
+        self.assertEqual(result["partial"]["shown"], 3)
         self.assertEqual(result["partial"]["alreadyOnSheet"], 1)
         self.assertEqual(result["partial"]["visibleEligible"], 2)
         self.assertTrue(result["partial"]["selectIndeterminate"])
         self.assertEqual(result["allVisible"]["selected"], 3)
-        self.assertEqual(result["allVisible"]["shown"], 4)
+        self.assertEqual(result["allVisible"]["shown"], 3)
         self.assertTrue(result["allVisible"]["selectChecked"])
 
     def test_search_and_selection_summaries_keep_count_scopes_distinct(self):
@@ -696,8 +698,8 @@ class TestAddObservationBrowserHelpers(unittest.TestCase):
         )
         self.assertEqual(result["initial"], "500 shown · 497 selected · 3 on sheet")
         self.assertEqual(result["unchecked"], "500 shown · 496 selected · 3 on sheet")
-        self.assertEqual(result["filtered"], result["unchecked"])
-        self.assertEqual(result["sorted"], result["unchecked"])
+        self.assertEqual(result["filtered"], "400 shown · 496 selected · 3 on sheet")
+        self.assertEqual(result["sorted"], result["filtered"])
         self.assertEqual(
             self.run_helpers("h.searchSummary(1)"),
             "1 observation matches",
@@ -738,6 +740,15 @@ class TestAddObservationTemplateIntegration(unittest.TestCase):
             "function selectedAddObsCount", 1
         )[0]
         self.assertIn("countQueuedObservations()", capacity)
+
+    def test_csv_export_sends_active_custom_field_choices(self):
+        csv_handler = self.template.split(
+            '$("#downloadCsvButton").click', 1
+        )[1].split("function collectObservationsFormData", 1)[0]
+        self.assertIn("...addFields.map", csv_handler)
+        self.assertIn("...removeFields.map", csv_handler)
+        self.assertIn('formData.append("use_custom", "on")', csv_handler)
+        self.assertIn('formData.append("custom_args[]", field)', csv_handler)
 
     def test_pasted_group_expands_then_uses_one_batch_request(self):
         normalize = self.template.split("function normalizeAndLookupObservationInput", 1)[1].split(

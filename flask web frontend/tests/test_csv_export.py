@@ -69,6 +69,15 @@ class CsvExportTestCase(unittest.TestCase):
         return patch("app.inat_api_get", side_effect=fake_get)
 
 
+class TestGeneratorPath(unittest.TestCase):
+    def test_parent_checkout_is_used_when_generator_is_not_in_flask_root(self):
+        parent_path = "/repo/inat.label.py"
+
+        with patch.object(labels_app.app, "root_path", "/repo/flask web frontend"):
+            with patch("app.os.path.isfile", side_effect=lambda path: path == parent_path):
+                self.assertEqual(labels_app.inat_label_script_path(), parent_path)
+
+
 class TestCsvSortOrder(CsvExportTestCase):
     """The Sort dropdown drives the CSV, not just the printed labels."""
 

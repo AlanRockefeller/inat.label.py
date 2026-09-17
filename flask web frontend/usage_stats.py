@@ -8,11 +8,9 @@ directories are now pruned after ``JOB_RETENTION_DAYS``.
 
 ``make_graph.py`` derives its usage chart from those directories, so pruning
 would otherwise erase the history behind the graph.  Before a directory is
-deleted its contribution -- one job, plus the label count estimated from the
-output file size -- is folded into a small daily ledger CSV.  The graph then
-reads the ledger for archived days and scans the surviving directories for
-recent ones, which keeps the series continuous while the per-job files (and the
-observation data in them) go away on schedule.
+deleted, a pending per-job entry is written durably to the ledger.  The entry is
+marked committed only after deletion succeeds.  A later sweep can therefore
+finish an interrupted deletion without losing or double-counting its usage.
 
 The app prunes on a timer in its reaper thread, so no cron entry is needed.
 ``--status`` is read-only and safe to run as anyone; run ``--prune`` as the
@@ -47,7 +45,9 @@ PDF_BYTES_PER_LABEL = 2175  # 23926 bytes / 11 labels
 
 JOB_RETENTION_DAYS = int(os.environ.get("LABELS_JOB_RETENTION_DAYS", "30"))
 
-LEDGER_FIELDS = ("date", "jobs", "labels")
+LEDGER_FIELDS = ("date", "jobs", "labels", "job_id", "state")
+ARCHIVE_PENDING = "pending"
+ARCHIVE_COMMITTED = "committed"
 
 # The app writes the ledger as the `labels` service user, but make_graph.py is
 # often run by a person.  Atomic replace would otherwise leave the temp file's
@@ -107,9 +107,10 @@ def iter_job_dirs(jobs_dir: str = JOBS_DIR):
             yield job_id, job_path
 
 
-def load_ledger(ledger_path: str = LEDGER_PATH) -> dict:
-    """Read the daily ledger as ``{date: {"jobs": int, "labels": int}}``."""
-    totals: dict = {}
+def _load_ledger_state(ledger_path: str):
+    """Return legacy daily totals and the latest per-job archive records."""
+    daily_totals: dict = {}
+    job_records: dict = {}
     try:
         with open(ledger_path, "r", newline="") as handle:
             for row in csv.DictReader(handle):
@@ -119,15 +120,48 @@ def load_ledger(ledger_path: str = LEDGER_PATH) -> dict:
                     labels = int(row.get("labels") or 0)
                 except (TypeError, ValueError):
                     continue
-                entry = totals.setdefault(day, {"jobs": 0, "labels": 0})
+                job_id = (row.get("job_id") or "").strip()
+                if job_id:
+                    state = (row.get("state") or ARCHIVE_COMMITTED).strip()
+                    if state not in (ARCHIVE_PENDING, ARCHIVE_COMMITTED):
+                        continue
+                    job_records[job_id] = {
+                        "date": day,
+                        "jobs": jobs,
+                        "labels": labels,
+                        "state": state,
+                    }
+                    continue
+                entry = daily_totals.setdefault(day, {"jobs": 0, "labels": 0})
                 entry["jobs"] += jobs
                 entry["labels"] += labels
     except FileNotFoundError:
-        return {}
+        pass
+    return daily_totals, job_records
+
+
+def _ledger_totals(daily_totals: dict, job_records: dict) -> dict:
+    totals = {
+        day: {"jobs": entry["jobs"], "labels": entry["labels"]}
+        for day, entry in daily_totals.items()
+    }
+    for record in job_records.values():
+        if record["state"] != ARCHIVE_COMMITTED:
+            continue
+        entry = totals.setdefault(record["date"], {"jobs": 0, "labels": 0})
+        entry["jobs"] += record["jobs"]
+        entry["labels"] += record["labels"]
     return totals
 
 
-def _write_ledger_locked(totals: dict, ledger_path: str) -> None:
+def load_ledger(ledger_path: str = LEDGER_PATH) -> dict:
+    """Read committed usage as ``{date: {"jobs": int, "labels": int}}``."""
+    return _ledger_totals(*_load_ledger_state(ledger_path))
+
+
+def _write_ledger_locked(
+    daily_totals: dict, job_records: dict, ledger_path: str
+) -> None:
     """Rewrite the ledger atomically; caller holds the on-disk lock."""
     directory = os.path.dirname(ledger_path) or "."
     handle = tempfile.NamedTemporaryFile(
@@ -137,13 +171,26 @@ def _write_ledger_locked(totals: dict, ledger_path: str) -> None:
         with handle:
             writer = csv.DictWriter(handle, fieldnames=LEDGER_FIELDS)
             writer.writeheader()
-            for day in sorted(totals):
-                entry = totals[day]
+            for day in sorted(daily_totals):
+                entry = daily_totals[day]
                 writer.writerow(
                     {
                         "date": day.isoformat(),
                         "jobs": int(entry["jobs"]),
                         "labels": int(entry["labels"]),
+                        "job_id": "",
+                        "state": ARCHIVE_COMMITTED,
+                    }
+                )
+            for job_id in sorted(job_records):
+                record = job_records[job_id]
+                writer.writerow(
+                    {
+                        "date": record["date"].isoformat(),
+                        "jobs": int(record["jobs"]),
+                        "labels": int(record["labels"]),
+                        "job_id": job_id,
+                        "state": record["state"],
                     }
                 )
             handle.flush()
@@ -174,12 +221,14 @@ def record_daily_totals(daily_totals: dict, ledger_path: str = LEDGER_PATH) -> N
         with open(lock_path, "a+") as lock_handle:
             fcntl.flock(lock_handle, fcntl.LOCK_EX)
             try:
-                totals = load_ledger(ledger_path)
+                stored_totals, job_records = _load_ledger_state(ledger_path)
                 for day, entry in daily_totals.items():
-                    running = totals.setdefault(day, {"jobs": 0, "labels": 0})
+                    running = stored_totals.setdefault(
+                        day, {"jobs": 0, "labels": 0}
+                    )
                     running["jobs"] += int(entry.get("jobs", 0))
                     running["labels"] += int(entry.get("labels", 0))
-                _write_ledger_locked(totals, ledger_path)
+                _write_ledger_locked(stored_totals, job_records, ledger_path)
             finally:
                 fcntl.flock(lock_handle, fcntl.LOCK_UN)
 
@@ -192,53 +241,95 @@ def prune_job_dirs(
 ) -> dict:
     """Delete job directories older than ``retention_days``, keeping the counts.
 
-    Each directory is measured, then removed, then folded into the ledger.  The
-    ledger write happens in a ``finally`` block so an interrupted sweep loses at
-    most the run's counts rather than double-counting directories that were
-    already deleted.
+    Each directory is measured and recorded as pending before deletion.  A
+    successful deletion changes that same idempotent job record to committed.
+    Pending records are reconciled on the next run after an interruption.
     """
     if retention_days <= 0:
         return {"removed": 0, "failed": 0, "labels": 0, "bytes_freed": 0}
 
     cutoff = (now if now is not None else _now()) - retention_days * 86400
-    daily_totals: dict = {}
     removed = 0
     failed = 0
     labels_archived = 0
     bytes_freed = 0
 
-    try:
-        for _job_id, job_path in iter_job_dirs(jobs_dir):
+    os.makedirs(os.path.dirname(ledger_path) or ".", exist_ok=True)
+    lock_path = ledger_path + ".lock"
+
+    with _ledger_lock:
+        with open(lock_path, "a+") as lock_handle:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX)
             try:
-                if os.path.getmtime(job_path) >= cutoff:
-                    continue
-            except OSError:
-                continue
+                daily_totals, job_records = _load_ledger_state(ledger_path)
 
-            stats = job_dir_stats(job_path)
-            if stats is None:
-                continue
-            job_date, label_count = stats
-            size = _dir_size(job_path)
+                # If a prepared job has vanished, its deletion succeeded before
+                # the process could commit the ledger entry.
+                reconciled = False
+                for job_id, record in job_records.items():
+                    if record["state"] != ARCHIVE_PENDING:
+                        continue
+                    if os.path.basename(job_id) != job_id:
+                        continue
+                    if not os.path.isdir(os.path.join(jobs_dir, job_id)):
+                        record["state"] = ARCHIVE_COMMITTED
+                        reconciled = True
 
-            try:
-                shutil.rmtree(job_path)
-            except FileNotFoundError:
-                continue
-            except OSError:
-                # Leave the counts unrecorded so the next sweep retries the
-                # directory instead of counting it twice.
-                failed += 1
-                continue
+                candidates = []
+                pending_added = False
+                for job_id, job_path in iter_job_dirs(jobs_dir):
+                    existing = job_records.get(job_id)
+                    if existing and existing["state"] == ARCHIVE_COMMITTED:
+                        continue
 
-            entry = daily_totals.setdefault(job_date, {"jobs": 0, "labels": 0})
-            entry["jobs"] += 1
-            entry["labels"] += label_count
-            removed += 1
-            labels_archived += label_count
-            bytes_freed += size
-    finally:
-        record_daily_totals(daily_totals, ledger_path)
+                    try:
+                        if os.path.getmtime(job_path) >= cutoff:
+                            continue
+                    except OSError:
+                        continue
+
+                    if existing is None:
+                        stats = job_dir_stats(job_path)
+                        if stats is None:
+                            continue
+                        job_date, label_count = stats
+                        existing = {
+                            "date": job_date,
+                            "jobs": 1,
+                            "labels": label_count,
+                            "state": ARCHIVE_PENDING,
+                        }
+                        job_records[job_id] = existing
+                        pending_added = True
+
+                    candidates.append((job_id, job_path, _dir_size(job_path)))
+
+                # Prepare every candidate durably before deleting any of them.
+                if reconciled or pending_added:
+                    _write_ledger_locked(daily_totals, job_records, ledger_path)
+
+                committed = False
+                for job_id, job_path, size in candidates:
+                    record = job_records[job_id]
+                    try:
+                        shutil.rmtree(job_path)
+                    except FileNotFoundError:
+                        # A prepared deletion completed outside this sweep.
+                        pass
+                    except OSError:
+                        failed += 1
+                        continue
+
+                    record["state"] = ARCHIVE_COMMITTED
+                    committed = True
+                    removed += 1
+                    labels_archived += record["labels"]
+                    bytes_freed += size
+
+                if committed:
+                    _write_ledger_locked(daily_totals, job_records, ledger_path)
+            finally:
+                fcntl.flock(lock_handle, fcntl.LOCK_UN)
 
     return {
         "removed": removed,
@@ -273,9 +364,17 @@ def daily_usage(jobs_dir: str = JOBS_DIR, ledger_path: str = LEDGER_PATH) -> lis
     date.  Pruned directories are gone from ``jobs_dir``, so a directory is
     never counted twice.
     """
-    totals = load_ledger(ledger_path)
+    daily_totals, job_records = _load_ledger_state(ledger_path)
+    totals = _ledger_totals(daily_totals, job_records)
+    committed_job_ids = {
+        job_id
+        for job_id, record in job_records.items()
+        if record["state"] == ARCHIVE_COMMITTED
+    }
 
-    for _job_id, job_path in iter_job_dirs(jobs_dir):
+    for job_id, job_path in iter_job_dirs(jobs_dir):
+        if job_id in committed_job_ids:
+            continue
         stats = job_dir_stats(job_path)
         if stats is None:
             continue

@@ -4,6 +4,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -111,6 +112,93 @@ class TestPruneJobDirs(UsageStatsTestCase):
         )
 
         self.assertEqual(usage_stats.load_ledger(self.ledger)[day]["labels"], 6)
+
+    def test_prepare_failure_leaves_the_job_directory_untouched(self):
+        old_path, _ = self._make_job("old", age_days=40, label_count=6)
+
+        with patch.object(
+            usage_stats, "_write_ledger_locked", side_effect=OSError("disk full")
+        ):
+            with self.assertRaises(OSError):
+                usage_stats.prune_job_dirs(
+                    retention_days=30,
+                    jobs_dir=self.jobs_dir,
+                    ledger_path=self.ledger,
+                    now=self.now,
+                )
+
+        self.assertTrue(os.path.isdir(old_path))
+        self.assertEqual(usage_stats.load_ledger(self.ledger), {})
+
+    def test_interrupted_commit_is_recovered_without_double_counting(self):
+        old_path, day = self._make_job("old", age_days=40, label_count=6)
+        real_write = usage_stats._write_ledger_locked
+        write_count = 0
+
+        def fail_commit(*args):
+            nonlocal write_count
+            write_count += 1
+            if write_count == 2:
+                raise OSError("disk full")
+            return real_write(*args)
+
+        with patch.object(usage_stats, "_write_ledger_locked", side_effect=fail_commit):
+            with self.assertRaises(OSError):
+                usage_stats.prune_job_dirs(
+                    retention_days=30,
+                    jobs_dir=self.jobs_dir,
+                    ledger_path=self.ledger,
+                    now=self.now,
+                )
+
+        self.assertFalse(os.path.exists(old_path))
+        self.assertEqual(usage_stats.load_ledger(self.ledger), {})
+
+        usage_stats.prune_job_dirs(
+            retention_days=30,
+            jobs_dir=self.jobs_dir,
+            ledger_path=self.ledger,
+            now=self.now,
+        )
+        usage_stats.prune_job_dirs(
+            retention_days=30,
+            jobs_dir=self.jobs_dir,
+            ledger_path=self.ledger,
+            now=self.now,
+        )
+
+        self.assertEqual(
+            usage_stats.load_ledger(self.ledger), {day: {"jobs": 1, "labels": 6}}
+        )
+
+    def test_delete_failure_stays_pending_and_counts_as_live(self):
+        old_path, day = self._make_job("old", age_days=40, label_count=4)
+
+        with patch.object(usage_stats.shutil, "rmtree", side_effect=OSError("busy")):
+            result = usage_stats.prune_job_dirs(
+                retention_days=30,
+                jobs_dir=self.jobs_dir,
+                ledger_path=self.ledger,
+                now=self.now,
+            )
+
+        self.assertEqual(result["failed"], 1)
+        self.assertTrue(os.path.isdir(old_path))
+        self.assertEqual(usage_stats.load_ledger(self.ledger), {})
+        self.assertEqual(
+            usage_stats.daily_usage(self.jobs_dir, self.ledger),
+            [{"date": day, "jobs": 1, "labels": 4}],
+        )
+
+        usage_stats.prune_job_dirs(
+            retention_days=30,
+            jobs_dir=self.jobs_dir,
+            ledger_path=self.ledger,
+            now=self.now,
+        )
+        self.assertEqual(
+            usage_stats.load_ledger(self.ledger), {day: {"jobs": 1, "labels": 4}}
+        )
 
 
 class TestDailyUsage(UsageStatsTestCase):

@@ -1,16 +1,22 @@
 import datetime
+import importlib.util
 import unittest
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 try:
-    inat = SourceFileLoader(
-        "inat_label_datetime", str(REPO_ROOT / "inat.label.py")
-    ).load_module()
-except Exception as exc:  # pragma: no cover - dependency guard
-    raise unittest.SkipTest(f"inat.label.py dependencies are unavailable: {exc}")
+    spec = importlib.util.spec_from_file_location(
+        "inat_label_datetime", REPO_ROOT / "inat.label.py"
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load inat.label.py")
+    inat = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(inat)
+except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
+    raise unittest.SkipTest(
+        f"inat.label.py dependencies are unavailable: {exc}"
+    ) from exc
 
 
 def utc(year, month, day, hour=0, minute=0):

@@ -169,7 +169,7 @@ RATE_LIMIT_WRITE_ONLY_ENDPOINTS = {"todo"}
 # allowlist keeps that boundary allowlist-shaped instead of blacklist-shaped.
 SORT_FIELD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ()/&.,'#_-]{0,63}$")
 # Custom label field names travel to the generator the same way.
-CUSTOM_FIELD_RE = re.compile(r"^[+-]?[A-Za-z0-9][A-Za-z0-9 ()/&.,'#_-]{0,63}$")
+CUSTOM_FIELD_RE = re.compile(r"^[+-]?[A-Za-z0-9][A-Za-z0-9 ()/&.'#_-]{0,63}$")
 MAX_CUSTOM_FIELDS = int(os.environ.get("MAX_CUSTOM_FIELDS", "40"))
 
 # Security logging deliberately distinguishes commodity Internet scans from
@@ -1420,6 +1420,18 @@ _inat_label_module_lock = threading.Lock()
 _inat_label_module_failed = False
 
 
+def inat_label_script_path():
+    """Return the generator path in either supported repository layout."""
+    local_path = os.path.join(app.root_path, "inat.label.py")
+    parent_path = os.path.join(os.path.dirname(app.root_path), "inat.label.py")
+    if os.path.isfile(local_path):
+        return local_path
+    if os.path.isfile(parent_path):
+        return parent_path
+    # Keep the usual deployment path in any eventual error message.
+    return local_path
+
+
 def inat_label_module():
     """Load ``inat.label.py`` as a module so other code can reuse its helpers.
 
@@ -1437,10 +1449,14 @@ def inat_label_module():
         if _inat_label_module is not None or _inat_label_module_failed:
             return _inat_label_module
         try:
-            script_path = os.path.join(app.root_path, "inat.label.py")
+            script_path = inat_label_script_path()
             spec = importlib.util.spec_from_file_location(
                 "inat_label_helpers", script_path
             )
+            if spec is None or spec.loader is None:
+                raise ImportError(
+                    f"Could not load module specification from {script_path}"
+                )
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             _inat_label_module = module
@@ -2188,7 +2204,7 @@ def print_start():
             )
         return jsonify({"error": "No valid observations provided"}), 400
 
-    script_path = os.path.join(app.root_path, "inat.label.py")
+    script_path = inat_label_script_path()
     static_dir = os.path.join(app.root_path, "static")
     job_id = str(uuid4())
     job_dir = os.path.join(static_dir, "jobs", job_id)

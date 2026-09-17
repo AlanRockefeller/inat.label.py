@@ -208,7 +208,13 @@ class TestPrintStartArgumentHandling(LimitsTestCase):
 
     @patch("app.subprocess.Popen")
     def test_custom_fields_are_validated(self, popen):
-        for field in ("--file", "--rtf", "$(id)", "x; rm -rf /"):
+        for field in (
+            "--file",
+            "--rtf",
+            "$(id)",
+            "x; rm -rf /",
+            "Voucher, Number",
+        ):
             with self.subTest(field=field):
                 labels_app._rate_limiter.reset()
                 response = self._print(

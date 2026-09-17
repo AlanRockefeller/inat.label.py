@@ -6,8 +6,9 @@ This keeps per-client request rates bounded without adding a dependency or an
 external store; it is per-process state, which is exact for the current
 single-worker deployment and still a useful bound if more workers are added.
 
-Memory is capped: timestamps outside the window are dropped on access, and the
-whole table is swept once it exceeds ``max_tracked`` keys.
+Memory is capped: timestamps outside each key's own window are dropped on
+access.  Once ``max_tracked`` active keys exist, new keys fail closed until a
+slot expires; active quota state is never evicted to make room.
 """
 
 from __future__ import annotations
@@ -37,34 +38,41 @@ class RateLimiter:
         cutoff = now - window
 
         with self._lock:
-            if len(self._hits) > self._max_tracked:
-                self._sweep_locked(now, window)
+            if key not in self._hits and len(self._hits) >= self._max_tracked:
+                self._sweep_locked(now)
+                if len(self._hits) >= self._max_tracked:
+                    if not self._hits:
+                        return False, max(1, int(window))
+                    retry_after = min(
+                        max(1, int(state["timestamps"][0] + state["window"] - now) + 1)
+                        for state in self._hits.values()
+                    )
+                    return False, retry_after
 
-            timestamps = [t for t in self._hits.get(key, ()) if t > cutoff]
+            state = self._hits.get(key)
+            timestamps = [
+                timestamp
+                for timestamp in (state or {}).get("timestamps", ())
+                if timestamp > cutoff
+            ]
 
             if len(timestamps) >= limit:
-                self._hits[key] = timestamps
+                self._hits[key] = {"timestamps": timestamps, "window": window}
                 retry_after = max(1, int(timestamps[0] + window - now) + 1)
                 return False, retry_after
 
             timestamps.append(now)
-            self._hits[key] = timestamps
+            self._hits[key] = {"timestamps": timestamps, "window": window}
             return True, 0
 
-    def _sweep_locked(self, now: float, window: float) -> None:
-        cutoff = now - window
+    def _sweep_locked(self, now: float) -> None:
         for key in list(self._hits):
-            remaining = [t for t in self._hits[key] if t > cutoff]
+            state = self._hits[key]
+            cutoff = now - state["window"]
+            remaining = [t for t in state["timestamps"] if t > cutoff]
             if remaining:
-                self._hits[key] = remaining
+                state["timestamps"] = remaining
             else:
-                del self._hits[key]
-        # Still oversized (many distinct clients inside one window): drop the
-        # coldest keys rather than growing without bound.
-        if len(self._hits) > self._max_tracked:
-            for key in sorted(self._hits, key=lambda k: self._hits[k][-1])[
-                : len(self._hits) - self._max_tracked
-            ]:
                 del self._hits[key]
 
     def reset(self) -> None:
