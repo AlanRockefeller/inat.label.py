@@ -10,7 +10,7 @@
 
 The Herbarium Label Generator is a Python tool designed to create formatted herbarium labels from a iNaturalist and Mushroom Observer observations. This project rapidly creates professional quality labels for herbarium specimens. It is designed to be robust, work on many different platforms and handle errors or unexpected input gracefully.
 
-An easy to use online version is at https://images.mushroomobserver.org/labels
+An easy to use online version is at https://labels.dikarya.us
 
 ## Table of Contents
 
@@ -171,7 +171,7 @@ The script generates herbarium labels to the standard output by default, or labe
 
 ## Installation
 
-Instead of installing this software, consider using the online version: https://images.mushroomobserver.org/labels
+Instead of installing this software, consider using the online version: https://labels.dikarya.us
 
 1. Clone this repository:
 
