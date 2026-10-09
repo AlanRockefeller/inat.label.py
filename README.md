@@ -1,6 +1,6 @@
 # inat.label.py
 
-# iNaturalist Herbarium Label Generator version 3.9.9.1
+# iNaturalist Herbarium Label Generator version 3.9.9.2
 
 # By Alan Rockefeller
 
