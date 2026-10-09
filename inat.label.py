@@ -4,7 +4,7 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: August 10, 2026
+Date: October 9, 2026
 Version: 3.9.9.2
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
