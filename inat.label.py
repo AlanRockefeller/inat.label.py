@@ -5,7 +5,7 @@ iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
 Date: August 10, 2026
-Version: 3.9.9.1
+Version: 3.9.9.2
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -163,6 +163,16 @@ ProcessResult = (
 
 PDF_BASE_FONT = os.environ.get("PDF_BASE_FONT", "Times-Roman")
 LABEL_NUMBER_FIELD = "__label_number__"
+QR_BORDER_MODULES = 4
+QR_LEGACY_BORDER_MODULES = 1
+STANDARD_QR_BOX_SIZE = 2
+PDF_QR_RENDER_SIZE = 0.75 * inch
+PDF_QR_COLUMN_WIDTH = 1.05 * inch
+PDF_NOTES_QR_GUTTER = 10
+# Suppressing a URL field ("-iNaturalist URL") hides only its text line.  The
+# value is kept under this internal name so the QR code, which has its own
+# switch (--no-qr), is still drawn from it.
+QR_URL_FIELD = "__qr_url__"
 RATE_LIMIT_RPM = int(os.environ.get("INAT_RATE_LIMIT_RPM", "60"))
 _DEFAULT_MAX_WORKERS = int(os.environ.get("INAT_MAX_WORKERS", "5"))
 
@@ -463,6 +473,25 @@ RTF_HEADER = r"""{\rtf1\ansi\uc1\deff3\adeflang1025
 """
 
 
+def qr_quiet_zone_scale(qr_size: tuple[int, int] | None, box_size: int) -> float:
+    """Return the factor that keeps QR data modules at their legacy size.
+
+    QR bitmaps now carry the standard four-module quiet zone instead of a single
+    module.  Rendering them at the old footprint would shrink every data module
+    by the ratio of the two bitmaps; growing the footprint by this factor keeps
+    the modules physically unchanged and the quiet zone genuinely additive.
+    """
+    if not qr_size or not qr_size[0]:
+        return 1.0
+    added_quiet_zone_pixels = (
+        2 * (QR_BORDER_MODULES - QR_LEGACY_BORDER_MODULES) * box_size
+    )
+    legacy_pixels = qr_size[0] - added_quiet_zone_pixels
+    if legacy_pixels <= 0:
+        return 1.0
+    return qr_size[0] / legacy_pixels
+
+
 def generate_qr_code(
     url: str,
     minilabel_mode: bool = False,
@@ -486,8 +515,8 @@ def generate_qr_code(
         elif minilabel_mode:
             box = 1
         else:
-            box = 2
-        qr = qrcode.QRCode(version=1, box_size=box, border=1)
+            box = STANDARD_QR_BOX_SIZE
+        qr = qrcode.QRCode(version=1, box_size=box, border=QR_BORDER_MODULES)
         qr.add_data(url)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
@@ -1973,7 +2002,13 @@ def create_inaturalist_label(
 
     if custom_remove:
         remove_set = {n.lower() for n in custom_remove}
-        label = [item for item in label if item[0].lower() not in remove_set]
+        kept = []
+        for field, value in label:
+            if field.lower() not in remove_set:
+                kept.append((field, value))
+            elif field in ("iNaturalist URL", "Mushroom Observer URL"):
+                kept.append((QR_URL_FIELD, value))
+        label = kept
 
     return label, iconic_taxon_name
 
@@ -2102,6 +2137,52 @@ def _label_number(label: LabelFields) -> str | None:
 # ---------------------------------------------------------------------------
 # Rendering -- PDF
 # ---------------------------------------------------------------------------
+
+
+class _NotesQRTable(Table):
+    """A Notes/QR table whose star column re-expands on every wrap.
+
+    ``Table._calc`` resolves ``"*"`` column widths in place the first time the
+    table is wrapped, so an ordinary table can never grow afterwards.
+    ``KeepInFrame(mode="shrink")`` always wraps its content once at ``maxWidth``
+    before re-wrapping it wider and scaling it back down, which would otherwise
+    freeze this table at the unscaled width and leave the QR code well short of
+    the label's right edge on stack-order and oversized labels.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._declared_colWidths = list(self._argW)
+
+    def wrap(self, availWidth: float, availHeight: float) -> tuple[float, float]:
+        self._argW = self._colWidths = list(self._declared_colWidths)
+        self._width_calculated_once = None
+        return super().wrap(availWidth, availHeight)
+
+
+def _pdf_notes_qr_table(text: Any, qr_image: ReportLabImage) -> Table:
+    """Return the standard label's bounded Notes/QR two-column table.
+
+    The Notes column is a star column so the table fills whatever width it is
+    wrapped at, including the widened width ``KeepInFrame(mode="shrink")`` uses.
+    """
+    table = _NotesQRTable(
+        [[text, qr_image]],
+        colWidths=["*", PDF_QR_COLUMN_WIDTH],
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (0, 0), PDF_NOTES_QR_GUTTER),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
+    return table
 
 
 def create_pdf_content(
@@ -2386,7 +2467,8 @@ def create_pdf_content(
                     value
                     for field, value in label
                     if field != LABEL_NUMBER_FIELD
-                    and field in ("iNaturalist URL", "Mushroom Observer URL")
+                    and field
+                    in ("iNaturalist URL", "Mushroom Observer URL", QR_URL_FIELD)
                 ),
                 None,
             )
@@ -2402,7 +2484,7 @@ def create_pdf_content(
                         break
 
             for field, value in label:
-                if field == LABEL_NUMBER_FIELD:
+                if field in (LABEL_NUMBER_FIELD, QR_URL_FIELD):
                     continue
                 if field == "Notes":
                     notes_value = value
@@ -2436,73 +2518,64 @@ def create_pdf_content(
 
             qr_image = None
             if qr_url and not no_qr:
-                qr_hex, _ = generate_qr_code(qr_url, minilabel_mode=False)
+                qr_hex, qr_pixels = generate_qr_code(qr_url, minilabel_mode=False)
                 if qr_hex:
                     qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
+                    qr_render_size = PDF_QR_RENDER_SIZE * qr_quiet_zone_scale(
+                        qr_pixels, STANDARD_QR_BOX_SIZE
+                    )
                     qr_image = ReportLabImage(
-                        qr_img_data, width=0.75 * inch, height=0.75 * inch
+                        qr_img_data,
+                        width=qr_render_size,
+                        height=qr_render_size,
                     )
 
             label_content = pre_notes_content
+            notes_qr_table = None
 
-            # If notes are long, put QR code below, otherwise to the right
-            if len(notes_value) > 200 and notes_paragraph:
-                label_content.append(notes_paragraph)
-                if qr_image:
-                    qr_image.hAlign = "RIGHT"
-                    label_content.append(qr_image)
-            elif notes_paragraph:
+            if notes_paragraph:
                 if qr_image:
                     label_content.append(Spacer(1, 0.1 * inch))
-                    # Set QR image alignment to RIGHT before adding to table
-                    qr_image.hAlign = "RIGHT"
-                    table_data = [[notes_paragraph, qr_image]]
-                    # Using 1.05*inch instead of 0.85*inch moves QR code 0.2 inches to the left
-                    # This positions the QR code to align with the rightmost text on the label
-                    table = Table(table_data, colWidths=["*", 1.05 * inch])
-                    table.setStyle(
-                        TableStyle(
-                            [
-                                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                                ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                                ("TOPPADDING", (0, 0), (-1, -1), 0),
-                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-                            ]
-                        )
-                    )
-                    label_content.append(table)
+                    notes_qr_table = _pdf_notes_qr_table(notes_paragraph, qr_image)
+                    label_content.append(notes_qr_table)
                 else:
                     label_content.append(notes_paragraph)
             elif qr_image:
                 label_content.append(Spacer(1, 0.1 * inch))
-                qr_image.hAlign = "RIGHT"
-                # Create a table with a single cell to position the QR code
                 empty_paragraph = Paragraph("", styles["Normal"])
-                table_data = [[empty_paragraph, qr_image]]
-                # Using 1.05*inch instead of 0.85*inch moves QR code 0.2 inches to the left
-                # This positions the QR code to align with the rightmost text on the label
-                table = Table(table_data, colWidths=["*", 1.05 * inch])
-                table.setStyle(
-                    TableStyle(
-                        [
-                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                            ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                            ("TOPPADDING", (0, 0), (-1, -1), 0),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-                        ]
-                    )
+                label_content.append(
+                    _pdf_notes_qr_table(empty_paragraph, qr_image)
                 )
-                label_content.append(table)
 
             label_content.append(Spacer(1, 0.25 * inch))
 
-            # Estimate height to prevent layout errors with oversized labels
-            height_estimate = len(pre_notes_content) * 14 * font_size_multiplier
-            if notes_paragraph:
-                height_estimate += (
-                    (notes_value.count("\n") + 1) * 14 * font_size_multiplier
+            # A Notes/QR table is a single row and cannot split across frames, so
+            # measure the actual wrapped flowables rather than guessing.
+            height_estimate = sum(
+                flowable.wrap(frame_width, frame_height)[1]
+                for flowable in label_content
+            )
+            if (
+                stack_order_slot_height is None
+                and notes_qr_table is not None
+                and notes_paragraph is not None
+                and height_estimate > frame_height
+            ):
+                # Notes too long for one frame: shrinking them to fit would make
+                # them illegible, so fall back to full-width Notes (which split
+                # across frames normally) with the QR code right-aligned below.
+                table_index = label_content.index(notes_qr_table)
+                replacement: list[Any] = [notes_paragraph]
+                if qr_image is not None:
+                    qr_image.hAlign = "RIGHT"
+                    replacement.append(qr_image)
+                label_content[table_index : table_index + 1] = replacement
+                # The Notes paragraph is now splittable, so only the flowables
+                # around it have to fit the frame together.
+                height_estimate = sum(
+                    flowable.wrap(frame_width, frame_height)[1]
+                    for flowable in label_content
+                    if flowable is not notes_paragraph
                 )
 
         if stack_order_slot_height is not None:
@@ -2569,6 +2642,8 @@ def _minilabel_qr_url(label: LabelFields, allow_fallback: bool = True) -> str | 
     url = next(
         (v for f, v in label if f != LABEL_NUMBER_FIELD and f == preferred), None
     )
+    if url is None:
+        url = next((v for f, v in label if f == QR_URL_FIELD), None)
     if url is None and allow_fallback:
         url = next(
             (v for f, v in label if f != LABEL_NUMBER_FIELD and "URL" in f), None
@@ -2663,7 +2738,7 @@ def create_minilabel_pdf_content(
             continue
 
         # make small QR
-        qr_hex, _ = generate_qr_code(
+        qr_hex, qr_pixels = generate_qr_code(
             qr_url, minilabel_mode=True, qr_box_size=qr_box_size
         )
         if not qr_hex:
@@ -2671,7 +2746,11 @@ def create_minilabel_pdf_content(
             continue
 
         qr_img_data = BytesIO(binascii.unhexlify(qr_hex))
-        qr_size = pdf_qr_inches * inch  # scaled by minilabel size
+        # Scaled by minilabel size, then by the added quiet zone so the data
+        # modules keep the physical size they had before it was widened.
+        qr_size = (
+            pdf_qr_inches * inch * qr_quiet_zone_scale(qr_pixels, qr_box_size)
+        )
         qr_image = ReportLabImage(qr_img_data, width=qr_size, height=qr_size)
 
         # right-hand stacked text
@@ -2983,7 +3062,8 @@ def create_rtf_content(
                         value
                         for field, value in label
                         if field != LABEL_NUMBER_FIELD
-                        and field in ("iNaturalist URL", "Mushroom Observer URL")
+                        and field
+                        in ("iNaturalist URL", "Mushroom Observer URL", QR_URL_FIELD)
                     ),
                     None,
                 )
@@ -2999,7 +3079,7 @@ def create_rtf_content(
 
                 # body fields
                 for field, value in label:
-                    if field == LABEL_NUMBER_FIELD:
+                    if field in (LABEL_NUMBER_FIELD, QR_URL_FIELD):
                         continue
                     if field == "iNaturalist URL":
                         rtf_content += escape_rtf(str(value)) + r" \line "
@@ -3084,6 +3164,9 @@ def create_rtf_content(
                             rtf_content = rtf_content[:-6]
 
                         rtf_content += r"\par" + table_par + r"\qr\ri360\sb57\sa0 "
+                        # \picw/\pich must describe the actual bitmap, which now
+                        # carries a four-module quiet zone; rendering it at its
+                        # full size keeps the data modules as large as before.
                         qr_width_twips = qr_size[0] * 15
                         qr_height_twips = qr_size[1] * 15
                         rtf_content += (
@@ -3160,7 +3243,11 @@ def create_minilabel_rtf_content(
 
             qr_pixel_width = qr_size[0]
             qr_pixel_height = qr_size[1]
-            # desired_twips is set from size_cfg above
+            # desired_twips is set from size_cfg above; grow it with the added
+            # quiet zone so the data modules keep their previous printed size.
+            goal_twips = round(
+                desired_twips * qr_quiet_zone_scale(qr_size, qr_box_size)
+            )
 
             # Build cell content
             cell_content = "{"
@@ -3171,9 +3258,9 @@ def create_minilabel_rtf_content(
                 + r"\pich"
                 + str(qr_pixel_height)
                 + r"\picwgoal"
-                + str(desired_twips)
+                + str(goal_twips)
                 + r"\pichgoal"
-                + str(desired_twips)
+                + str(goal_twips)
                 + r" "
                 + qr_hex
                 + r"}"
@@ -3238,7 +3325,7 @@ def render_plaintext_labels(labels: list[TaggedLabel]) -> None:
         if label_number is not None:
             print(label_number, flush=True)
         for field, value in label:
-            if field == LABEL_NUMBER_FIELD:
+            if field in (LABEL_NUMBER_FIELD, QR_URL_FIELD):
                 continue
             if field == "Notes":
                 value = remove_formatting_tags(value)
