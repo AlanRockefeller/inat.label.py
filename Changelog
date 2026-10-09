@@ -1,7 +1,7 @@
 # Changelog
 
 # 3.9.9.2
-September 17, 2026
+October 9, 2026
 
 - PDF herbarium labels now keep Notes and QR codes in explicit columns with a 10 pt gutter, so short, multi-line, and long Notes cannot crowd or overlap the QR code. The Notes column stretches to the full label width even when a label is scaled down to fit (stack order mode and oversized labels), so the QR code stays on the label's right edge.
 - Notes too long to fit on one label now flow at full size with the QR code below them, as before, instead of being shrunk to fit beside it.
