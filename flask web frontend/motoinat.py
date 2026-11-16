@@ -12,10 +12,36 @@ import requests
 import argparse
 import json
 
+# The web frontend ships inat_shared.py next to this script so conversions obey
+# the same cross-process iNaturalist pacing and cooldowns as lookups and print
+# jobs.  Standalone use works without it.
+try:
+    import inat_shared
+except ImportError:
+    inat_shared = None
+
+# (connect, read) seconds; requests otherwise waits indefinitely.
+REQUEST_TIMEOUT = (5, 15)
+
+
+def _inat_get(url, params):
+    """GET an iNaturalist URL, paced and cooled down through inat_shared if present."""
+    if inat_shared is not None:
+        inat_shared.wait_turn(max_wait=5)
+    response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+    if response.status_code == 429 and inat_shared is not None:
+        inat_shared.cooldown(inat_shared.retry_after(response))
+    return response
+
 
 def find_inaturalist_observation(
     mo_number, debug=False, url_only=False, number_only=False
 ):
+    """Print the matching iNaturalist observation.
+
+    Returns True when a match was found or every query succeeded without one,
+    and False when a query failed, so a failure is never reported as "no match".
+    """
     base_url = "https://api.inaturalist.org/v1/observations"
 
     # All possible URL formats that might be stored in iNaturalist
@@ -28,6 +54,7 @@ def find_inaturalist_observation(
         f"https://mushroomobserver.org/obs/{mo_number}",
     ]
 
+    failed = False
     for mo_url in mo_urls:
         params = {"field:Mushroom Observer URL": mo_url, "verifiable": "any"}
 
@@ -37,7 +64,16 @@ def find_inaturalist_observation(
             print(f"Mushroom Observer URL: {mo_url}")
             print(f"Parameters: {json.dumps(params, indent=2)}")
 
-        response = requests.get(base_url, params=params)
+        try:
+            response = _inat_get(base_url, params)
+        except requests.exceptions.RequestException as exc:
+            failed = True
+            print(
+                f"Error querying iNaturalist for Mushroom Observer #{mo_number}: "
+                f"{type(exc).__name__}",
+                file=sys.stderr,
+            )
+            continue
 
         if debug:
             print(f"\n--- DEBUG: Response Details ---")
@@ -65,12 +101,21 @@ def find_inaturalist_observation(
                     print(f"  Location: {obs['place_guess']}")
                     print(f"  Matched URL: {mo_url}")
                     print()
-                return  # Exit the function after finding a match
+                return True  # Exit the function after finding a match
         else:
+            failed = True
             if debug:
                 print(
                     f"Error fetching data for Mushroom Observer #{mo_number} with URL {mo_url}"
                 )
+
+    if failed:
+        print(
+            f"Could not check every URL form for Mushroom Observer #{mo_number}; "
+            "iNaturalist lookup failed.",
+            file=sys.stderr,
+        )
+        return False
 
     # If we get here, no match was found after trying all URL formats
     if url_only or number_only:
@@ -80,6 +125,7 @@ def find_inaturalist_observation(
     else:
         print(f"No iNaturalist observation found for Mushroom Observer #{mo_number}")
         print()
+    return True
 
 
 if __name__ == "__main__":
@@ -121,5 +167,8 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
+    all_ok = True
     for mo_number in mo_numbers:
-        find_inaturalist_observation(mo_number, args.debug, args.url, args.q)
+        if not find_inaturalist_observation(mo_number, args.debug, args.url, args.q):
+            all_ok = False
+    sys.exit(0 if all_ok else 1)

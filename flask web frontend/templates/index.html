@@ -3188,12 +3188,30 @@
             return $rows;
         }
 
+        const ROW_LOOKUP_TIMEOUT_MS = 60000;
         const rowLookupClient = LabelsLookupClient.create(async (ids) => {
-            const response = await fetch("/labels/lookup_batch", {
-                method: "POST",
-                body: new URLSearchParams(ids.map(id => ["obs_ids[]", id])),
-            });
-            const data = await response.json();
+            // A stalled request would hold the lookup broker forever and queue
+            // every later row behind it, so give each batch a deadline.
+            const controller = new AbortController();
+            const deadline = setTimeout(() => controller.abort(), ROW_LOOKUP_TIMEOUT_MS);
+            let response, data;
+            try {
+                response = await fetch("/labels/lookup_batch", {
+                    method: "POST",
+                    body: new URLSearchParams(ids.map(id => ["obs_ids[]", id])),
+                    signal: controller.signal,
+                });
+                data = await response.json();
+            } catch (err) {
+                if (err && err.name === "AbortError") {
+                    const error = new Error("Lookup timed out. Please try again.");
+                    error.status = 504;
+                    throw error;
+                }
+                throw err;
+            } finally {
+                clearTimeout(deadline);
+            }
             if (!response.ok) {
                 const error = new Error(data.error || "Could not fetch observations");
                 error.status = response.status;
@@ -3483,7 +3501,10 @@
                     let msg =
                         "The server took too long to respond while generating the CSV. This can happen with very large batches. Please try fewer observations per request, split the job, or wait a moment and retry.";
 
-                    if (
+                    if (xhr && xhr.status === 429 && xhr.responseText) {
+                        // Throttling and conversion limits explain themselves.
+                        msg = xhr.responseText;
+                    } else if (
                         xhr &&
                         (xhr.status === 504 ||
                             (xhr.responseText || "").includes("504 Gateway"))
@@ -4123,6 +4144,15 @@
                 let pollDelay = 5000;
                 let streamHealthy = false;
                 let watchdog = null;
+                let polling = false;
+                // At most one poll is pending or in flight.  Stream errors can
+                // repeat faster than pollDelay; rescheduling on each one would
+                // postpone the recovery poll indefinitely.
+                const schedulePoll = () => {
+                    if (settled || polling || pollTimer !== null) return;
+                    pollTimer = setTimeout(() => { pollTimer = null; pollStatus(); }, pollDelay);
+                };
+                const cancelPoll = () => { clearTimeout(pollTimer); pollTimer = null; };
                 const finishPrint = (payload) => {
                     if (settled) return;
                     settled = true;
@@ -4148,7 +4178,8 @@
                     }
                 };
                 const pollStatus = async () => {
-                    if (settled || streamHealthy) return;
+                    if (settled || streamHealthy || polling) return;
+                    polling = true;
                     const controller = new AbortController();
                     const timeout = setTimeout(() => controller.abort(), 15000);
                     try {
@@ -4180,20 +4211,21 @@
                         pollDelay = Math.min(30000, pollDelay * 2);
                     } finally {
                         clearTimeout(timeout);
-                        if (!settled && !streamHealthy) pollTimer = setTimeout(pollStatus, pollDelay);
+                        polling = false;
+                        if (!streamHealthy) schedulePoll();
                     }
                 };
                 const markStreamHealthy = () => {
                     if (settled) return;
                     streamHealthy = true;
-                    clearTimeout(pollTimer);
+                    cancelPoll();
                     clearTimeout(watchdog);
                     watchdog = setTimeout(() => {
                         streamHealthy = false;
                         pollStatus();
                     }, 20000);
                 };
-                pollTimer = setTimeout(pollStatus, pollDelay);
+                schedulePoll();
                 es.onopen = markStreamHealthy;
                 es.addEventListener("progress", (ev) => {
                     markStreamHealthy();
@@ -4260,8 +4292,7 @@
                 es.onerror = function () {
                     streamHealthy = false;
                     clearTimeout(watchdog);
-                    clearTimeout(pollTimer);
-                    if (!settled) pollTimer = setTimeout(pollStatus, pollDelay);
+                    schedulePoll();
                     // EventSource reconnects to the same job and replays new lines.
                 };
             } catch (err) {

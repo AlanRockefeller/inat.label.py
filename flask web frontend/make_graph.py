@@ -139,16 +139,14 @@ def create_usage_graph(df: pd.DataFrame) -> None:
     # Month/day normally, but:
     # - first visible tick includes year
     # - first tick of each subsequent year includes year
-    first_tick_year = None
-
+    # Matplotlib formats the ticks several times (get_xticklabels, layout and
+    # rendering), so decide from the tick position alone, never retained state.
     def _fmt(x, pos=None):
-        nonlocal first_tick_year
         dt = mdates.num2date(x)  # timezone-handled by matplotlib
-        if first_tick_year is None:
-            first_tick_year = dt.year
+        if not pos:
             return dt.strftime("%Y %b %d")
-        if dt.year != first_tick_year:
-            first_tick_year = dt.year
+        locs = ax1.xaxis.get_majorticklocs()
+        if pos < len(locs) and mdates.num2date(locs[pos - 1]).year != dt.year:
             return dt.strftime("%Y %b %d")
         return dt.strftime("%b %d")
 

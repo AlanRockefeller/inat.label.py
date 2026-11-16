@@ -997,11 +997,21 @@ def _superseded(_error):
     return jsonify({"superseded": True, "error": "Search superseded by newer filters."}), 409
 
 
+def _loggable_job_id(value):
+    """Return a job ID safe for a single log line: a canonical UUID or "invalid"."""
+    if not value:
+        return ""
+    try:
+        return value if str(UUID(value)) == value else "invalid"
+    except (ValueError, TypeError, AttributeError):
+        return "invalid"
+
+
 @app.after_request
 def _add_security_headers(response):
     if request.endpoint in {"find_observations", "observation_fields", "lookup_batch", "print_start", "print_status"}:
         performance_logger.info("request_finished request_id=%s endpoint=%s job_id=%s status=%s elapsed_ms=%.1f upstream_attempts=%s",
-                        getattr(g, "request_id", ""), request.endpoint, request.args.get("job_id", ""),
+                        getattr(g, "request_id", ""), request.endpoint, _loggable_job_id(request.args.get("job_id", "")),
                         response.status_code, (time.monotonic()-g.request_started_at)*1000,
                         getattr(g, "upstream_attempts", 0))
     response.headers["X-Request-ID"] = getattr(g, "request_id", "")
@@ -2264,6 +2274,11 @@ def submit():
                     for r in data.get("results", []):
                         if "id" in r:
                             id_to_inat[str(r["id"])] = r
+                except inat_shared.Throttled as e:
+                    # A shared cooldown is temporary.  Continuing would return a
+                    # CSV silently missing these rows, so ask the client to retry.
+                    app.logger.warning("CSV export throttled: %s", e)
+                    return str(e), 429, {"Retry-After": str(e.retry_after)}
                 except requests.exceptions.RequestException as e:
                     app.logger.warning(
                         f"iNat batch fetch failed for chunk starting {chunk[0]}: {e}"
@@ -2527,8 +2542,7 @@ def print_start():
             text=True,
             encoding="utf-8",
             errors="replace",
-            env={**os.environ, "LABELS_PRINT_JOB_ID": job_id,
-                 "LABELS_REQUEST_ID": g.request_id},
+            env=_print_subprocess_env(job_id),
         )
     except OSError:
         _log_job_event("label_job_finished", job_id=job_id, **identity,
@@ -2694,6 +2708,22 @@ def _collect_print_output(job_id, job):
         job["result"] = result
         job["finished_time"] = time.time()
         _jobs_changed.notify_all()
+
+
+def _print_subprocess_env(job_id):
+    """Environment for a print subprocess.
+
+    The generator may be a symlink to a script elsewhere (the GitHub checkout
+    links ``inat.label.py`` from the repository root).  Python puts the resolved
+    script directory on ``sys.path``, so the app directory is prepended here to
+    keep ``inat_shared`` importable; without it the generator silently falls
+    back to unshared, in-process pacing.
+    """
+    python_path = os.pathsep.join(
+        p for p in (app.root_path, os.environ.get("PYTHONPATH")) if p
+    )
+    return {**os.environ, "LABELS_PRINT_JOB_ID": job_id,
+            "LABELS_REQUEST_ID": g.request_id, "PYTHONPATH": python_path}
 
 
 def _start_print_collector(job_id, job):
