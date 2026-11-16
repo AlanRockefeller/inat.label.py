@@ -1082,11 +1082,21 @@ def error_reference(log_context, exc=None, logger=None):
     return reference
 
 
+def _throttled_response_parts(exc):
+    """Return (message, retry seconds) for a Throttled error.
+
+    Built from the integer delay alone so no exception text reaches a response.
+    """
+    seconds = max(1, int(exc.retry_after))
+    return f"iNaturalist is busy; retry in {seconds} seconds", seconds
+
+
 def client_error(message, status=400, exc=None, logger=None, log_context=None):
     """Return a specific client-facing error without leaking internals."""
     if isinstance(exc, inat_shared.Throttled):
-        return jsonify({"error": str(exc), "retryable": True,
-                        "retry_after": exc.retry_after}), 429, {"Retry-After": str(exc.retry_after)}
+        text, seconds = _throttled_response_parts(exc)
+        return jsonify({"error": text, "retryable": True,
+                        "retry_after": seconds}), 429, {"Retry-After": str(seconds)}
     reference = error_reference(log_context or message, exc=exc, logger=logger)
     return (
         jsonify({"error": f"{message} (reference {reference})", "reference": reference}),
@@ -2278,7 +2288,8 @@ def submit():
                     # A shared cooldown is temporary.  Continuing would return a
                     # CSV silently missing these rows, so ask the client to retry.
                     app.logger.warning("CSV export throttled: %s", e)
-                    return str(e), 429, {"Retry-After": str(e.retry_after)}
+                    text, seconds = _throttled_response_parts(e)
+                    return text, 429, {"Retry-After": str(seconds)}
                 except requests.exceptions.RequestException as e:
                     app.logger.warning(
                         f"iNat batch fetch failed for chunk starting {chunk[0]}: {e}"
