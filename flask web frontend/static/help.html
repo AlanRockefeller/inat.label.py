@@ -373,7 +373,7 @@
             <p>3. You'll receive immediate feedback with the organism name and the iNaturalist / MO user who created the observation.</p>
 
             <h2 id="printing">Printing labels</h2>
-            <p>You can make labels for 500 observations at a time.  If you want more, contact Alan Rockefeller or use the command line tool.  When you're ready:</p>
+            <p>You can make labels for 1,000 observations at a time.  If you want more, contact Alan Rockefeller or use the command line tool.  When you're ready:</p>
             <p>1. Click <strong>Print PDF Labels</strong> to download <code>labels.pdf</code>, or <strong>Print RTF Labels</strong> to download <code>labels.rtf</code>.</p>
             <p>2. Open the RTF file in LibreOffice Writer or Microsoft Word; open the PDF in any PDF viewer or web browser.  LibreOffice Writer works better than MS Word because MS Word doesn't wrap the labels properly, so some will be split between pages, requiring manual editing.</p>
             <p>3. The labels will be arranged in two columns with QR codes. Often 8 labels fit on a page - but that depends on your observation fields.</p>
@@ -382,12 +382,13 @@
             <h2 id="batch-add">Add observations in bulk</h2>
             <p>Instead of pasting observations one at a time, <strong>+ Add many at once</strong> finds every observation matching an observer, a date range, and optionally a taxon, and queues them together. It is useful after a field day, a trip, or a batch of recent uploads.</p>
             <div class="instructions">
-                <p>1. On the trailing empty observation row, click <strong>+ Add many at once</strong> to the right of the ID input, then choose <strong>iNaturalist</strong> or <strong>Mushroom Observer</strong>.</p>
+                <p>1. On the trailing empty observation row, click <strong>+ Add many at once</strong> to the right of the ID input, then choose <strong>iNaturalist</strong> or <strong>Mushroom Observer</strong> (or <strong>CSV Upload</strong>, described below).</p>
                 <p>2. Enter the observer's username and a date range. The date presets make recent sessions especially quick; add a taxon if you want to narrow the search.</p>
                 <p>3. Results appear automatically. Review the organisms, filter or sort the list, then select individual observations or use <strong>Select all</strong>.</p>
                 <p>4. Click <strong>Add observations</strong>. The selected records are added to the main page together, ready to print.</p>
             </div>
             <p>For iNaturalist searches, you can switch between the date an observation was <strong>observed</strong> and the date it was <strong>created</strong>.</p>
+            <p><strong>Upload a CSV:</strong> Choose <strong>CSV Upload</strong> in the same panel, then pick a CSV file or drag it onto the panel. iNaturalist observation numbers, or iNaturalist observation URLs, are read from the file and every other column is ignored. A file with only one column of numbers needs no header. If the file has several columns, name the one with observation numbers <code>id</code> (iNaturalist's own CSV export already does). Repeated numbers and observations already in the queue are skipped, and the panel shows how many it found before you click <strong>Add observations</strong>. Each file can contain up to 1,000 observations.</p>
             <p><strong>Require observation field (iNaturalist only):</strong> Start typing an observation field name and choose it from the suggestions. The results will include only observations where that field has a nonempty value. This is useful for finding records with data such as a personal voucher number, herbarium accession number, or DNA barcode. It filters which observations are added; it does not control which fields are printed on the labels.</p>
             <h2 id="url-preloading">One-click URL preloading</h2>
             <p>You can preload observations and label options directly in the URL. This is useful for sharing a link that opens the label generator with the observation list and print settings already filled in.</p>

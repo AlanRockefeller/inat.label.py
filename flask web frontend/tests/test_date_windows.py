@@ -172,7 +172,7 @@ class TestDateWindowEndpoint(unittest.TestCase):
         response.json.return_value = payload
         return response
 
-    @patch.object(labels_app, "MAX_OBS_PER_REQUEST", 3)
+    @patch.object(labels_app, "MAX_SEARCH_RESULTS", 3)
     @patch("app.inat_api_get")
     def test_inaturalist_over_cap_adds_windows_with_one_histogram_request(
         self, inat_api_get
@@ -214,7 +214,7 @@ class TestDateWindowEndpoint(unittest.TestCase):
         self.assertEqual(histogram_call.kwargs["params"]["interval"], "day")
         self.assertEqual(histogram_call.kwargs["params"]["date_field"], "observed")
 
-    @patch.object(labels_app, "MAX_OBS_PER_REQUEST", 3)
+    @patch.object(labels_app, "MAX_SEARCH_RESULTS", 3)
     @patch("app.inat_api_get")
     def test_endpoint_marks_single_day_over_cap(self, inat_api_get):
         observations = [
@@ -256,7 +256,7 @@ class TestDateWindowEndpoint(unittest.TestCase):
             ],
         )
 
-    @patch.object(labels_app, "MAX_OBS_PER_REQUEST", 3)
+    @patch.object(labels_app, "MAX_SEARCH_RESULTS", 3)
     @patch("app.inat_api_get")
     def test_created_mode_uses_created_histogram_semantics(self, inat_api_get):
         observations = [
@@ -293,7 +293,7 @@ class TestDateWindowEndpoint(unittest.TestCase):
         self.assertEqual(histogram_params["created_d2"], "2026-02-02")
         self.assertEqual(payload["windows"][0]["start"], "2026-02-02")
 
-    @patch.object(labels_app, "MAX_OBS_PER_REQUEST", 3)
+    @patch.object(labels_app, "MAX_SEARCH_RESULTS", 3)
     @patch("app.requests.get")
     def test_mo_created_mode_reuses_pages_and_created_dates(
         self, requests_get
@@ -356,7 +356,7 @@ class TestDateWindowEndpoint(unittest.TestCase):
         )
         self.assertEqual(payload["windows"][0]["start"], "2026-04-02")
 
-    @patch.object(labels_app, "MAX_OBS_PER_REQUEST", 3)
+    @patch.object(labels_app, "MAX_SEARCH_RESULTS", 3)
     @patch("app.inat_api_get")
     def test_at_or_below_cap_omits_windows_and_histogram(self, inat_api_get):
         observations = [
@@ -389,7 +389,7 @@ class TestDateWindowEndpoint(unittest.TestCase):
         self.assertNotIn("windows", payload)
         self.assertEqual(inat_api_get.call_count, 3)
 
-    @patch.object(labels_app, "MAX_OBS_PER_REQUEST", 3)
+    @patch.object(labels_app, "MAX_SEARCH_RESULTS", 3)
     @patch("app.inat_api_get")
     def test_histogram_failure_keeps_capped_results_without_windows(
         self, inat_api_get
@@ -429,7 +429,7 @@ class TestDateWindowEndpoint(unittest.TestCase):
         self.assertNotIn("windows", payload)
         warning.assert_called_once()
 
-    @patch.object(labels_app, "MAX_OBS_PER_REQUEST", 3)
+    @patch.object(labels_app, "MAX_SEARCH_RESULTS", 3)
     def test_incomplete_daily_counts_do_not_return_incorrect_windows(self):
         with patch.object(labels_app.app.logger, "warning"):
             windows = labels_app._windows_for_complete_daily_counts(

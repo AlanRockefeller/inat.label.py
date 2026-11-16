@@ -120,22 +120,22 @@ class TestQueueStateHelpers(unittest.TestCase):
         self.assertEqual(stale, [])
 
     def test_both_directions_cap_at_the_request_limit(self):
-        self.assertEqual(labels_app.MAX_OBS_PER_REQUEST, 500)
+        self.assertEqual(labels_app.MAX_OBS_PER_REQUEST, 1000)
 
         serialized = self.run_helpers(
             "h.serializeQueueState("
-            "Array.from({length: 600}, (_, i) => String(i + 1)), 1700000000000"
+            "Array.from({length: 1100}, (_, i) => String(i + 1)), 1700000000000"
             ").observations.length"
         )
-        self.assertEqual(serialized, 500)
+        self.assertEqual(serialized, 1000)
 
         deserialized = self.run_helpers(
             "h.deserializeQueueState("
             "JSON.stringify({v: 1, savedAt: 1700000000000,"
-            " observations: Array.from({length: 600}, (_, i) => String(i + 1))}),"
+            " observations: Array.from({length: 1100}, (_, i) => String(i + 1))}),"
             "1700000000000).length"
         )
-        self.assertEqual(deserialized, 500)
+        self.assertEqual(deserialized, 1000)
 
 
 class TestQueuePersistenceWiring(unittest.TestCase):

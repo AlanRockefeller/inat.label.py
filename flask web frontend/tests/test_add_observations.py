@@ -365,7 +365,7 @@ class TestObservationFieldFiltering(unittest.TestCase):
             self.response({"results": {"day": {"2026-07-03": 42}}}),
         ]
 
-        with patch.object(labels_app, "MAX_OBS_PER_REQUEST", 1):
+        with patch.object(labels_app, "MAX_SEARCH_RESULTS", 1):
             response = self.client.post(
                 "/labels/find_observations", data=self.search_data()
             )
@@ -439,7 +439,7 @@ class TestObservationFieldFiltering(unittest.TestCase):
             self.response({"results": {"day": {"2026-07-02": 2}}}),
         ]
 
-        with patch.object(labels_app, "MAX_OBS_PER_REQUEST", 1):
+        with patch.object(labels_app, "MAX_SEARCH_RESULTS", 1):
             response = self.client.post(
                 "/labels/find_observations",
                 data=self.search_data(date_mode="created"),
@@ -610,9 +610,9 @@ class TestAddObservationBrowserHelpers(unittest.TestCase):
     def test_remaining_capacity_accounts_for_existing_observations(self):
         self.assertEqual(
             self.run_helpers(
-                "[h.remainingRunCapacity(0),h.remainingRunCapacity(2),h.remainingRunCapacity(500),h.remainingRunCapacity(502)]"
+                "[h.remainingRunCapacity(0),h.remainingRunCapacity(2),h.remainingRunCapacity(1000),h.remainingRunCapacity(1002)]"
             ),
-            [500, 498, 0, 0],
+            [1000, 998, 0, 0],
         )
 
     def test_sorting_is_stable_and_missing_dates_are_last(self):
@@ -1048,7 +1048,7 @@ class TestAddObservationTemplateIntegration(unittest.TestCase):
             "async function performAddObsSearch(searchGeneration)", 1
         )[1].split("function updateAddObsSourceControls", 1)[0]
         self.assertIn(
-            ': addObsTotalCount > maxObservations ? "" : undefined',
+            ': addObsTotalCount > maxSearchResults ? "" : undefined',
             perform_search,
         )
         self.assertIn('.prop("hidden", !statusText)', search_state)
@@ -1189,7 +1189,7 @@ class TestFindObservationsTotals(unittest.TestCase):
     def test_inat_total_ignores_shrinking_id_above_page_totals(self, inat_api_get):
         # id_above is a filter, so each later page reports only the matches
         # still ahead of the cursor.  Only the first page knows the total.
-        cap = labels_app.MAX_OBS_PER_REQUEST + 1
+        cap = labels_app.MAX_SEARCH_RESULTS + 1
         first_ids = list(range(1, 401))
         second_ids = list(range(401, 401 + cap))
         histogram = MagicMock()
@@ -1262,7 +1262,7 @@ class TestFindObservationsTotals(unittest.TestCase):
         # MO has no histogram endpoint, so per-day counts come from walking
         # pages.  Past the budget the walk stops and the chips are skipped
         # rather than holding the single worker for tens of seconds.
-        cap = labels_app.MAX_OBS_PER_REQUEST + 1
+        cap = labels_app.MAX_SEARCH_RESULTS + 1
         pages_fetched = []
 
         def fake_get(url, params=None, timeout=None):
