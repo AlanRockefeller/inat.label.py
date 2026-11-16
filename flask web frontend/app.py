@@ -3095,7 +3095,7 @@ def observation_fields():
     try:
         return jsonify({"results": _cached_observation_field_search(query)})
     except inat_shared.Throttled as exc:
-        return client_error(str(exc), exc=exc)
+        return client_error("iNaturalist is busy", exc=exc)
     except (requests.RequestException, ValueError) as exc:
         api_error_logger.warning(
             "Observation field autocomplete failed: %s", str(exc), exc_info=True
