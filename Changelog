@@ -1,5 +1,12 @@
 # Changelog
 
+# 3.9.9.3
+November 16, 2026
+
+- `--custom` field names now ignore case and a trailing colon, so `-Observer:` removes the Observer line and `+"Found by:"` matches an observation field whose name carries its own colon. Added fields print without a doubled colon.
+- When run by the web frontend, iNaturalist requests are paced and observations are fetched in batches of 30 through a cache shared by the web process and every print job (`inat_shared.py`). A 429 sets a shared cooldown instead of being retried independently by each job. HTTP adapter-level retries are disabled so every retry passes the pacer.
+- Command-line use is unchanged: without `inat_shared.py` next to the script, requests are paced in-process and each observation is fetched individually, as before.
+
 # 3.9.9.2
 October 9, 2026
 

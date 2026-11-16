@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>To-Do List</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 2em;
+        }
+        h1 {
+            color: #333;
+        }
+        .todo-list {
+            list-style: none;
+            padding: 0;
+        }
+        .todo-list li {
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            margin-bottom: 5px;
+            padding: 10px;
+        }
+        .add-todo {
+            margin-top: 2em;
+        }
+        .add-todo input[type="text"], .add-todo textarea {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .add-todo button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .add-todo button:hover {
+            background-color: #45a049;
+        }
+        .footer-links {
+            margin-top: 2em;
+            text-align: left;
+        }
+        .footer-links a {
+            margin-right: 15px;
+        }
+        .notice {
+            background: #fff4e5;
+            border: 1px solid #f0c68a;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 1em;
+        }
+    </style>
+</head>
+<body>
+    <h1>Development To-Do List</h1>
+    {% if notice %}
+        <p class="notice">{{ notice }}</p>
+    {% endif %}
+    <ul class="todo-list">
+        {% for todo in todos %}
+            <li>{{ todo }}</li>
+        {% endfor %}
+    </ul>
+    <div class="add-todo">
+        <h2>Add a Suggestion</h2>
+        <form action="{{ url_for('todo') }}" method="post">
+            <input type="text" name="name" placeholder="Your Name" required>
+            <textarea name="suggestion" placeholder="Your suggestion..." required></textarea>
+            <button type="submit">Add</button>
+        </form>
+    </div>
+    <div class="footer-links">
+        <a href="{{ url_for('labels') }}">Back to Main Page</a>
+    </div>
+</body>
+</html>

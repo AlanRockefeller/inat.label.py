@@ -233,7 +233,7 @@ class TestPrintStartArgumentHandling(LimitsTestCase):
 
         self.assertEqual(response.status_code, 200)
         command = popen.call_args.args[0]
-        self.assertEqual(command[command.index("--custom") + 1], "+Habitat")
+        self.assertIn("--custom=+Habitat", command)
 
     @patch("app.subprocess.Popen")
     def test_too_many_custom_fields_are_refused(self, popen):

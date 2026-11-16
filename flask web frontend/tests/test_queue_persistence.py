@@ -224,7 +224,9 @@ class TestQueuePersistenceWiring(unittest.TestCase):
         print_job = self.template.split("async function startPrintJob", 1)[1].split(
             '$("#printRtfButton")', 1
         )[0]
-        self.assertGreaterEqual(print_job.count("recordSuccessfulPrint();"), 3)
+        # SSE and status polling share one idempotent completion handler.
+        self.assertEqual(print_job.count("recordSuccessfulPrint();"), 1)
+        self.assertIn("if (settled) return;", print_job)
 
     def test_changed_queue_is_not_discarded_when_an_older_print_finishes(self):
         remember = self.template.split(
