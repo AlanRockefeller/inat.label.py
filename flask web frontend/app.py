@@ -23,17 +23,20 @@ import json
 import traceback
 import sys
 import importlib.util
-from collections import defaultdict, OrderedDict
+from collections import defaultdict, OrderedDict, deque
 from datetime import date
 from uuid import uuid4
 from functools import partial, cmp_to_key
 
 import threading
+from uuid import UUID
 from logging.handlers import RotatingFileHandler
 
 from date_windows import build_date_windows
 from ratelimit import RateLimiter
 import usage_stats
+import inat_shared
+from job_diagnostics import FailureExcerpt
 
 INAT_HEADERS = {
     "Accept": "application/json",
@@ -79,11 +82,8 @@ def legacy_color_for_taxon_group(color_group):
     return LEGACY_COLORS_BY_TAXON_GROUP.get(color_group, "black")
 
 
-# Rate limiting for iNaturalist API
-api_lock = threading.Lock()
-next_api_call_time = 0.0
+# Pacing is persisted by inat_shared across web and print subprocesses.
 INAT_MIN_REQUEST_INTERVAL = float(os.environ.get("INAT_MIN_REQUEST_INTERVAL", "1.0"))
-
 # Hardening settings
 MAX_OBS_PER_REQUEST = int(os.environ.get("MAX_OBS_PER_REQUEST", "500"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
@@ -124,11 +124,11 @@ MAX_MO_CONVERSIONS_PER_REQUEST = int(
     os.environ.get("MAX_MO_CONVERSIONS_PER_REQUEST", "25")
 )
 MOTOINAT_TIMEOUT_SECONDS = int(os.environ.get("MOTOINAT_TIMEOUT_SECONDS", "45"))
-# An SSE stream occupies a worker thread for the life of the job.  Gunicorn
-# currently runs 1 worker with 4 threads, so this stays at the job cap: three
-# streams can be open and a thread is still free to serve everything else.
+# Keep at most one long SSE response, rotating every 8 seconds. Other prints
+# receive short progress snapshots on reconnect. This also works with the base
+# four-thread unit (the deployed override currently provides twelve threads).
 MAX_CONCURRENT_STREAMS = int(
-    os.environ.get("MAX_CONCURRENT_STREAMS", str(MAX_CONCURRENT_JOBS))
+    os.environ.get("MAX_CONCURRENT_STREAMS", "1")
 )
 # Requests are small forms; anything larger is either a mistake or an attempt to
 # tie up the worker parsing a body that will be rejected anyway.
@@ -167,10 +167,23 @@ RATE_LIMIT_ENDPOINTS = {
 RATE_LIMIT_WRITE_ONLY_ENDPOINTS = {"todo"}
 # Sort field names are forwarded to inat.label.py as a command argument.  An
 # allowlist keeps that boundary allowlist-shaped instead of blacklist-shaped.
-SORT_FIELD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ()/&.,'#_-]{0,63}$")
-# Custom label field names travel to the generator the same way.
-CUSTOM_FIELD_RE = re.compile(r"^[+-]?[A-Za-z0-9][A-Za-z0-9 ()/&.'#_-]{0,63}$")
+SORT_FIELD_RE = re.compile(r"^[^\W_][\w ()/&.,'#–—-]{0,63}\Z")
+# Custom label field names travel to the generator the same way.  A trailing
+# colon is allowed: some iNaturalist observation fields are named with one
+# ("Found by:", rejected twice on 2026-10-30), and people copy "Observer:" off
+# a printed label.  inat.label.py ignores it when matching and printing.
+CUSTOM_FIELD_RE = re.compile(r"^[+-]?[^\W_][\w ()/&.'#–—-]{0,63}:?\Z")
 MAX_CUSTOM_FIELDS = int(os.environ.get("MAX_CUSTOM_FIELDS", "40"))
+# Labels print the iNaturalist link as a bare URL with no field name in front
+# of it, so a user who wants that line gone has nothing to type into the
+# suppress box but the URL itself (2026-10-08: "-https://www.inaturalist.org/
+# observations/").  CUSTOM_FIELD_RE still rejects it; these name the field
+# they meant so the error can say what to type instead.
+SUPPRESSED_URL_RE = re.compile(r"^-\s{0,8}(?:https?://|www\.)", re.IGNORECASE)
+OBSERVATION_URL_FIELDS = (
+    (re.compile(r"inaturalist\.org", re.IGNORECASE), "iNaturalist URL"),
+    (re.compile(r"mushroomobserver\.org", re.IGNORECASE), "Mushroom Observer URL"),
+)
 
 # Security logging deliberately distinguishes commodity Internet scans from
 # requests crafted around labelmaker's real controls.  Values are JSON-escaped
@@ -330,6 +343,7 @@ DEFAULT_LABEL_FIELDS = [
 # In-memory job store for streaming print jobs
 _jobs = {}
 _jobs_lock = threading.Lock()
+_jobs_changed = threading.Condition(_jobs_lock)
 
 # Count of SSE log streams currently held open (one worker thread each).
 _open_streams = [0]
@@ -356,37 +370,76 @@ def _reap_finished_jobs():
         _reap_finished_jobs_locked()
 
 
+def _check_search_current():
+    if has_request_context():
+        key = getattr(g, "search_key", None)
+        if key:
+            with _search_lock:
+                current = _search_versions.get(key)
+            if current and current[0] > g.search_sequence:
+                raise SearchSuperseded()
+
+
 def inat_api_get(url, **kwargs):
-    """A rate-limited GET request helper for the iNaturalist API.
-
-    The outbound pace stays at one request per second across all threads, but
-    only the scheduling is serialized: the lock is released before sleeping and
-    before the request itself.  Holding it across the network call made one slow
-    upstream response block every other request in the process.
-    """
-    global next_api_call_time
-    with api_lock:
-        scheduled_at = max(time.time(), next_api_call_time)
-        next_api_call_time = scheduled_at + INAT_MIN_REQUEST_INTERVAL
-
-    delay = scheduled_at - time.time()
-    if delay > 0:
-        time.sleep(delay)
-
+    """Shared web/print budget. Web requests fail promptly during cooldown."""
+    kwargs.setdefault("headers", INAT_HEADERS)
+    kwargs.setdefault("timeout", 20)
+    started = time.monotonic()
+    waited = 0
+    status = "waiting"
+    attempted = 0
     try:
-        kwargs.setdefault("headers", INAT_HEADERS)
-        kwargs.setdefault("timeout", 20)
+        waited = inat_shared.wait_turn(max_wait=2, check=_check_search_current,
+                                      interval=INAT_MIN_REQUEST_INTERVAL)
+        _check_search_current()
+        attempted = 1
         response = requests.get(url, **kwargs)
+        status = response.status_code
+        if status == 429:
+            wait = inat_shared.retry_after(response)
+            inat_shared.cooldown(wait)
+            raise inat_shared.Throttled(wait, response)
         response.raise_for_status()
+        _check_search_current()
         return response
-    except requests.exceptions.RequestException:
-        app.logger.exception("Error during iNaturalist API request.")
+    except inat_shared.Throttled:
+        status = 429
+        if not attempted:
+            waited = time.monotonic() - started
         raise
+    finally:
+        if has_request_context():
+            g.upstream_attempts = getattr(g, "upstream_attempts", 0) + attempted
+        performance_logger.info("inat_request request_id=%s attempts=%s status=%s wait_ms=%.1f elapsed_ms=%.1f url=%s",
+                        getattr(g, "request_id", "background") if has_request_context() else "background",
+                        attempted, status, waited * 1000, (time.monotonic()-started)*1000, url)
+
+
+def _parse_retry_after_seconds(response):
+    """Return Retry-After as seconds (delta or HTTP-date form), or None."""
+    value = response.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+
+        return max(
+            0.0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        )
+    except (TypeError, ValueError):
+        return None
 
 
 app = Flask(__name__, static_url_path="/labels/static")
+PRINT_JOBS_DIR = os.environ.get("LABELS_JOB_DIR") or os.path.join(app.root_path, "static", "jobs")
 
 cmd_logger = logging.getLogger("cmd_logger")
+performance_logger = logging.getLogger("labelmaker.performance")
 api_error_logger = logging.getLogger("api_error_logger")
 user_problem_logger = logging.getLogger("user_problem_logger")
 internet_scanner_logger = logging.getLogger("internet_scanner_logger")
@@ -419,6 +472,7 @@ def _add_rotating_file_handler(
 
 def configure_file_logging(flask_app):
     flask_app.logger.setLevel(logging.WARNING)
+    performance_logger.setLevel(logging.INFO)
     cmd_logger.setLevel(logging.INFO)
     api_error_logger.setLevel(logging.WARNING)
     user_problem_logger.setLevel(logging.WARNING)
@@ -451,6 +505,7 @@ def configure_file_logging(flask_app):
             logging.WARNING,
         ),
         (cmd_logger, "cmd_log", "app.log", 5, command_formatter, logging.INFO),
+        (performance_logger, "performance_log", "performance.log", 5, warning_formatter, logging.INFO),
         (
             api_error_logger,
             "api_error_log",
@@ -657,6 +712,10 @@ def _looks_like_argument_injection(text):
     """True for option-shaped values the label endpoints would reject."""
     if not ARGUMENT_INJECTION_VALUE_RE.match(text):
         return False
+    # "-https://..." is a URL pasted into the suppress box, not an option.
+    # Metacharacters inside it are still caught by COMMAND_EXECUTION_VALUE_RE.
+    if SUPPRESSED_URL_RE.match(text.strip()):
+        return False
     # Endpoints strip() before validating, so compare on the same footing.
     return not CUSTOM_FIELD_RE.match(text.strip())
 
@@ -758,7 +817,15 @@ def _start_request_diagnostics():
     attacker-controlled bytes, so it must not happen before the rate limiter has
     had its say; it lives in _scan_request_for_attacks, registered below.
     """
-    g.request_id = str(uuid4()).replace("-", "")[:12]
+    # nginx overwrites this header with $request_id. Never trust a remote peer
+    # or malformed value to choose identifiers in our logs.
+    edge_request_id = request.headers.get("X-Request-ID", "")
+    g.request_id = (
+        edge_request_id
+        if request.remote_addr in _TRUSTED_PROXY_ADDRESSES
+        and re.fullmatch(r"[0-9a-f]{32}", edge_request_id)
+        else str(uuid4()).replace("-", "")
+    )
     g.request_started_at = time.monotonic()
     g.security_event_logged = False
     g.user_problem_event_logged = False
@@ -869,9 +936,87 @@ def _scan_request_for_attacks():
     return None
 
 
+# With four Gunicorn threads, at most two slow reads and one SSE stream may
+# be admitted. Other requests get a prompt retry response; status stays cheap.
+_heavy_read = threading.BoundedSemaphore(2)
+_search_lock = threading.Lock()
+_search_versions = OrderedDict()
+
+
+class SearchSuperseded(Exception):
+    pass
+
+
+def _register_search():
+    channel = request.headers.get("X-Search-Channel", "")
+    sequence = request.headers.get("X-Search-Sequence", "")
+    if re.fullmatch(r"[a-zA-Z0-9_-]{8,80}", channel) and re.fullmatch(r"[0-9]{1,11}", sequence):
+        key = (client_ip(), channel)
+        seq = int(sequence)
+        with _search_lock:
+            previous = _search_versions.get(key, (-1, 0))
+            if seq < previous[0]:
+                raise SearchSuperseded()
+            _search_versions[key] = (seq, time.monotonic())
+            _search_versions.move_to_end(key)
+            while len(_search_versions) > 512:
+                _search_versions.popitem(last=False)
+        g.search_key, g.search_sequence = key, seq
+
+
+@app.post("/labels/cancel_search")
+def cancel_search():
+    _register_search()
+    return "", 204
+
+
+@app.before_request
+def _admit_slow_reads():
+    if request.endpoint in {"find_observations", "observation_fields"}:
+        _register_search()
+    if request.endpoint in {"find_observations", "observation_fields", "lookup_batch", "submit", "print_start"}:
+        if not _heavy_read.acquire(blocking=False):
+            return jsonify({"error": "Another observation request is finishing. Please retry shortly.",
+                            "retryable": True, "retry_after": 2}), 503, {"Retry-After": "2"}
+        g.heavy_read_admitted = True
+
+
+@app.teardown_request
+def _release_slow_read(_error):
+    if getattr(g, "heavy_read_admitted", False):
+        g.heavy_read_admitted = False
+        _heavy_read.release()
+
+
+@app.errorhandler(SearchSuperseded)
+def _superseded(_error):
+    performance_logger.info("search_superseded request_id=%s channel=%s sequence=%s elapsed_ms=%.1f",
+                    g.request_id, getattr(g, "search_key", None), getattr(g, "search_sequence", None),
+                    (time.monotonic() - g.request_started_at) * 1000)
+    g.user_problem_event_logged = True
+    return jsonify({"superseded": True, "error": "Search superseded by newer filters."}), 409
+
+
+def _loggable_job_id(value):
+    """Return a job ID safe for a single log line: a canonical UUID or "invalid"."""
+    if not value:
+        return ""
+    try:
+        return value if str(UUID(value)) == value else "invalid"
+    except (ValueError, TypeError, AttributeError):
+        return "invalid"
+
+
 @app.after_request
 def _add_security_headers(response):
-    response.headers.setdefault("X-Request-ID", getattr(g, "request_id", ""))
+    if request.endpoint in {"find_observations", "observation_fields", "lookup_batch", "print_start", "print_status"}:
+        performance_logger.info("request_finished request_id=%s endpoint=%s job_id=%s status=%s elapsed_ms=%.1f upstream_attempts=%s",
+                        getattr(g, "request_id", ""), request.endpoint, _loggable_job_id(request.args.get("job_id", "")),
+                        response.status_code, (time.monotonic()-g.request_started_at)*1000,
+                        getattr(g, "upstream_attempts", 0))
+    response.headers["X-Request-ID"] = getattr(g, "request_id", "")
+    if response.mimetype == "text/html":
+        response.headers.setdefault("Cache-Control", "no-cache")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     # Framing is deliberately left open so the app can be embedded in other
@@ -937,8 +1082,21 @@ def error_reference(log_context, exc=None, logger=None):
     return reference
 
 
+def _throttled_response_parts(exc):
+    """Return (message, retry seconds) for a Throttled error.
+
+    Built from the integer delay alone so no exception text reaches a response.
+    """
+    seconds = max(1, int(exc.retry_after))
+    return f"iNaturalist is busy; retry in {seconds} seconds", seconds
+
+
 def client_error(message, status=400, exc=None, logger=None, log_context=None):
     """Return a specific client-facing error without leaking internals."""
+    if isinstance(exc, inat_shared.Throttled):
+        text, seconds = _throttled_response_parts(exc)
+        return jsonify({"error": text, "retryable": True,
+                        "retry_after": seconds}), 429, {"Retry-After": str(seconds)}
     reference = error_reference(log_context or message, exc=exc, logger=logger)
     return (
         jsonify({"error": f"{message} (reference {reference})", "reference": reference}),
@@ -1156,6 +1314,104 @@ def favicon():
     )
 
 
+# iNaturalist observation and taxon IDs share one number space (48419 is both an
+# observation and the genus Amanita), so a taxon hint is only offered for an ID
+# already known not to be an observation, and the reverse only when the number is
+# not a taxon.  The hints are best effort: a failed lookup just omits them.
+INAT_ID_HINT_CHUNK = 30
+
+
+def _describe_inat_taxon(taxon):
+    name = taxon.get("name") or f"taxon {taxon.get('id')}"
+    rank = taxon.get("rank")
+    return f"{name} ({rank})" if rank else name
+
+
+def _inat_taxa_by_id(ids):
+    """Return {id: description} for the IDs in ``ids`` that are iNaturalist taxa."""
+    ids = list(dict.fromkeys(str(i) for i in ids if str(i).isdigit()))
+    found = {}
+    for i in range(0, len(ids), INAT_ID_HINT_CHUNK):
+        chunk = ids[i : i + INAT_ID_HINT_CHUNK]
+        try:
+            response = inat_api_get(
+                "https://api.inaturalist.org/v1/taxa/" + ",".join(chunk), timeout=15
+            )
+            results = response.json().get("results") or []
+        except (requests.RequestException, ValueError) as e:
+            api_error_logger.warning("Taxon ID hint lookup failed for %s: %s", chunk, e)
+            break
+        for taxon in results:
+            if isinstance(taxon, dict) and str(taxon.get("id")) in chunk:
+                found[str(taxon["id"])] = _describe_inat_taxon(taxon)
+    return found
+
+
+def _missing_observation_taxon_hints(ids):
+    """Return {id: hint} for bare IDs that are not observations but are taxa."""
+    ids = list(dict.fromkeys(str(i) for i in ids if str(i).isdigit()))
+    existing = set()
+    for i in range(0, len(ids), INAT_ID_HINT_CHUNK):
+        chunk = ids[i : i + INAT_ID_HINT_CHUNK]
+        try:
+            response = inat_api_get(
+                "https://api.inaturalist.org/v1/observations",
+                params={"id": ",".join(chunk), "only_id": "true", "per_page": len(chunk)},
+                timeout=15,
+            )
+            results = response.json().get("results") or []
+        except (requests.RequestException, ValueError) as e:
+            api_error_logger.warning("Observation ID hint lookup failed for %s: %s", chunk, e)
+            return {}
+        existing.update(str(r.get("id")) for r in results if isinstance(r, dict))
+    taxa = _inat_taxa_by_id([i for i in ids if i not in existing])
+    return {i: taxon_id_hint(i, description) for i, description in taxa.items()}
+
+
+def taxon_id_hint(inat_id, description):
+    return (
+        f"{inat_id} is the iNaturalist taxon ID for {description}, not an "
+        f"observation ID. To label observations of a taxon, use Add Observations "
+        f"and enter it under Taxon."
+    )
+
+
+def _observation_used_as_taxon_error(taxon_id):
+    """Explain a numeric taxon ID that iNaturalist rejected, or return None.
+
+    Returns None when the number is a real taxon (or the check itself fails), so
+    the caller falls back to its generic upstream error.
+    """
+    try:
+        taxa = inat_api_get(
+            f"https://api.inaturalist.org/v1/taxa/{taxon_id}", timeout=15
+        ).json().get("results")
+        if taxa:
+            return None
+        observations = inat_api_get(
+            f"https://api.inaturalist.org/v1/observations/{taxon_id}", timeout=15
+        ).json().get("results")
+    except (requests.RequestException, ValueError) as e:
+        api_error_logger.warning("Taxon ID check failed for %s: %s", taxon_id, e)
+        return None
+    observation = observations[0] if observations and isinstance(observations[0], dict) else None
+    if observation is None:
+        return f"No iNaturalist taxon has ID {taxon_id}. Enter a taxon name or taxon ID under Taxon."
+    taxon = observation.get("taxon") or {}
+    login = (observation.get("user") or {}).get("login")
+    message = f"{taxon_id} is an iNaturalist observation ID, not a taxon ID"
+    details = ([f"of {taxon['name']}"] if taxon.get("name") else []) + (
+        [f"by {login}"] if login else []
+    )
+    if details:
+        message += f" (it is an observation {' '.join(details)})"
+    message += ". Enter a taxon name or taxon ID under Taxon"
+    if taxon.get("id"):
+        message += f"; that observation's taxon is {_describe_inat_taxon(taxon)}, ID {taxon['id']}"
+    message += f". To label that one observation, add {taxon_id} to the observation list instead."
+    return message
+
+
 def lookup_batch_internal(obs_inputs):
     # Prepare containers
     results = [{"input": oi} for oi in obs_inputs]
@@ -1204,46 +1460,31 @@ def lookup_batch_internal(obs_inputs):
 
     # Batch fetch iNat observations in chunks to avoid throttling
     if inat_ids:
-        global next_api_call_time
-        id_to_result = {}
-        chunk_size = 30  # Max 30 IDs per request is a safe bet
-        for i in range(0, len(inat_ids), chunk_size):
-            chunk = inat_ids[i : i + chunk_size]
-
-            try:
-                params = {"id": ",".join(chunk)}
-                response = inat_api_get(
-                    "https://api.inaturalist.org/v1/observations", params=params
-                )
-                data = response.json()
-                for r in data.get("results", []):
-                    if "id" in r:
-                        id_to_result[str(r["id"])] = r
-            except requests.exceptions.RequestException as e:
-                # Apply a generic error to all inat IDs in the failed chunk
-                reference = error_reference(
-                    f"iNaturalist batch fetch failed for IDs {chunk}",
-                    exc=e,
-                    logger=api_error_logger,
-                )
-                msg = (
-                    "Could not fetch this observation from iNaturalist "
-                    f"(reference {reference})"
-                )
-                for inat_id in chunk:
-                    for idx in inat_map_indices.get(inat_id, []):
-                        if (
-                            "error" not in results[idx]
-                        ):  # Avoid overwriting previous errors
-                            results[idx]["error"] = msg
-                            results[idx]["status"] = 500
-                continue
+        inat_ids = list(dict.fromkeys(inat_ids))
+        def fetch_observations(chunk):
+            return inat_api_get("https://api.inaturalist.org/v1/observations",
+                                params={"id": ",".join(chunk), "per_page": 30}).json()
+        id_to_result, failures = inat_shared.observations(
+            inat_ids, fetch_observations, check=_check_search_current)
+        for oid, failure in failures.items():
+            for idx in inat_map_indices[oid]:
+                results[idx].update(failure)
+        performance_logger.info("lookup_batch request_id=%s requested=%s unique=%s successful=%s failed=%s statuses=%s ids=%s",
+                        getattr(g, "request_id", "internal") if has_request_context() else "internal",
+                        len(obs_inputs), len(inat_ids), len(id_to_result), len(failures),
+                        dict((code, sum(f.get("status") == code for f in failures.values()))
+                             for code in {f.get("status") for f in failures.values()}), inat_ids)
 
         # Fill results from the fetched data
+        missing_bare_ids = []
         for inat_id in inat_ids:
             indices = inat_map_indices.get(inat_id, [])
             # Skip if an error was already recorded for this chunk
             if any("error" in results[idx] for idx in indices):
+                if results[indices[0]].get("status") == 404 and any(
+                    obs_inputs[idx].strip().isdigit() for idx in indices
+                ):
+                    missing_bare_ids.append(inat_id)
                 continue
             r = id_to_result.get(inat_id)
             if not r:
@@ -1252,6 +1493,10 @@ def lookup_batch_internal(obs_inputs):
                         "error"
                     ] = f"iNaturalist Observation #{inat_id} does not exist"
                     results[idx]["status"] = 404
+                if inat_id not in missing_bare_ids and any(
+                    obs_inputs[idx].strip().isdigit() for idx in indices
+                ):
+                    missing_bare_ids.append(inat_id)
                 continue
             taxon = r.get("taxon") or {}
             user = r.get("user") or {}
@@ -1274,8 +1519,17 @@ def lookup_batch_internal(obs_inputs):
                     }
                 )
 
+        # A bare number that is not an observation may be a taxon ID typed into
+        # the observation list.  The observation lookup above already ruled out
+        # the overlap, so only the taxa need checking.
+        for inat_id, description in _inat_taxa_by_id(missing_bare_ids).items():
+            for idx in inat_map_indices.get(inat_id, []):
+                results[idx]["error"] += ". " + taxon_id_hint(inat_id, description)
+            log_user_problem("observation_id_is_taxon_id", observation_id=inat_id,
+                             taxon=description)
+
     # Fetch MO observations (API supports detail=high, ids= may support multiple; use per-ID for safety)
-    for mo_num in mo_numbers:
+    for mo_num in dict.fromkeys(mo_numbers):
         try:
             api_url = f"https://mushroomobserver.org/api2/observations/{mo_num}.json?detail=high"
             mo_response = requests.get(api_url, timeout=20)
@@ -1379,6 +1633,8 @@ def lookup_batch_internal(obs_inputs):
                     "input": obs_inputs[idx],
                     "error": base["error"],
                     "status": base.get("status", 400),
+                    "retryable": base.get("retryable", base.get("status", 400) >= 500),
+                    "retry_after": base.get("retry_after", 0),
                 }
             )
         else:
@@ -1513,7 +1769,13 @@ def read_custom_fields_request(form):
         )
         return [], f"Too many custom label fields (max {MAX_CUSTOM_FIELDS})"
 
-    invalid_fields = [f for f in custom_fields if not CUSTOM_FIELD_RE.match(f)]
+    # A pasted observation URL without its scheme ("-www.inaturalist.org/...")
+    # passes CUSTOM_FIELD_RE but would match no field and silently do nothing.
+    invalid_fields = [
+        f
+        for f in custom_fields
+        if not CUSTOM_FIELD_RE.match(f) or _suppressed_url_hint(f)
+    ]
     if invalid_fields:
         if not any(_looks_like_injection(field) for field in invalid_fields):
             # A crafted value is already recorded by _scan_request_for_attacks,
@@ -1522,9 +1784,26 @@ def read_custom_fields_request(form):
             log_user_problem(
                 "invalid_custom_fields", submitted_values=invalid_fields
             )
-        return [], f"Invalid custom label field name: {invalid_fields[0][:64]!r}"
+        message = f"Invalid custom label field name: {invalid_fields[0][:64]!r}"
+        hint = next(filter(None, map(_suppressed_url_hint, invalid_fields)), None)
+        return [], f"{message}. {hint}" if hint else message
 
     return custom_fields, None
+
+
+def _suppressed_url_hint(field):
+    """Name the field to suppress when *field* is a pasted observation URL."""
+    field = field[:256]
+    if not SUPPRESSED_URL_RE.match(field):
+        return None
+    for pattern, field_name in OBSERVATION_URL_FIELDS:
+        if pattern.search(field):
+            return (
+                f"To hide the observation link, suppress the field "
+                f"\"{field_name}\" instead. The QR code stays; use "
+                f"\"Omit QR codes\" to remove it."
+            )
+    return None
 
 
 def _split_custom_fields(custom_fields):
@@ -2005,6 +2284,12 @@ def submit():
                     for r in data.get("results", []):
                         if "id" in r:
                             id_to_inat[str(r["id"])] = r
+                except inat_shared.Throttled as e:
+                    # A shared cooldown is temporary.  Continuing would return a
+                    # CSV silently missing these rows, so ask the client to retry.
+                    app.logger.warning("CSV export throttled: %s", e)
+                    text, seconds = _throttled_response_parts(e)
+                    return text, 429, {"Retry-After": str(seconds)}
                 except requests.exceptions.RequestException as e:
                     app.logger.warning(
                         f"iNat batch fetch failed for chunk starting {chunk[0]}: {e}"
@@ -2205,9 +2490,8 @@ def print_start():
         return jsonify({"error": "No valid observations provided"}), 400
 
     script_path = inat_label_script_path()
-    static_dir = os.path.join(app.root_path, "static")
     job_id = str(uuid4())
-    job_dir = os.path.join(static_dir, "jobs", job_id)
+    job_dir = os.path.join(PRINT_JOBS_DIR, job_id)
     filename = "labels.rtf" if fmt == "rtf" else "labels.pdf"
     output_path = os.path.join(job_dir, filename)
     os.makedirs(job_dir, exist_ok=True)
@@ -2243,9 +2527,10 @@ def print_start():
         if sort_mode == "custom":
             command.extend(["--sort-field", sort_field])
     if custom_fields:
-        command.append("--custom")
-        # Join all custom fields with commas as inat.label.py expects a comma-separated list
-        command.append(", ".join(custom_fields))
+        # Join all custom fields with commas as inat.label.py expects a comma-separated list.
+        # Attach the value with "=": a lone suppression such as "-Observer" would
+        # otherwise be read by argparse as an option and the job would exit 2.
+        command.append("--custom=" + ", ".join(custom_fields))
     # Everything after "--" is a positional observation ID, so no validated
     # value can be re-read as an option by the generator's argument parser.
     command.append("--")
@@ -2253,23 +2538,48 @@ def print_start():
     cmd_logger.info(" ".join(command))
     app.logger.debug(f"Starting streaming command: {' '.join(command)}")
 
-    # Start subprocess for streaming
-    proc = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,  # line-buffered
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    # Persist launch identity in private logs before spawning. Never put client
+    # metadata in result.json, which lives under publicly served static/jobs.
+    identity = {"request_id": g.request_id, "client_ip": client_ip()}
+    started_time = time.time()
+    _log_job_event("label_job_started", job_id=job_id, **identity,
+                   observations=len(inat_ids), format=fmt)
+    try:
+        proc = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,  # line-buffered
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=_print_subprocess_env(job_id),
+        )
+    except OSError:
+        _log_job_event("label_job_finished", job_id=job_id, **identity,
+                       status="failed", reason="launch_failed", exit_code=None,
+                       output_bytes=0, result_persisted=False,
+                       elapsed_s=round(time.time()-started_time, 3),
+                       failure_excerpt="process launch failed (details redacted)",
+                       failure_excerpt_redacted=True, suppressed_output_lines=0)
+        raise
+    performance_logger.info("print_started request_id=%s job_id=%s observations=%s format=%s",
+                    g.request_id, job_id, len(inat_ids), fmt)
 
     with _jobs_lock:
         _jobs[job_id] = {
             "proc": proc,
+            **identity,
             "output_path": output_path,
             "filename": filename,
+            "started_time": started_time,
+            "observation_count": len(inat_ids),
+            "bare_inat_ids": [o.strip() for o in raw_observations if o.strip().isdigit()],
+            "logs": deque(maxlen=1000),
+            "log_cursor": 0,
         }
+        job = _jobs[job_id]
+    _start_print_collector(job_id, job)
 
     return jsonify(
         {
@@ -2283,156 +2593,245 @@ def print_start():
     )
 
 
+def _print_result(job):
+    """A result is published only after the generator has closed its file."""
+    if "result" in job:
+        return job["result"]
+    return {"status": "running", "elapsed_seconds": max(
+        0, int(time.time() - job.get("started_time", time.time()))
+    ), "observation_count": job.get("observation_count", 0)}
+
+
+def _log_job_event(event, **fields):
+    # Explicit fields only: no form values, observation IDs or request URLs.
+    # JSON keeps one physical log record even with control characters in input.
+    performance_logger.info(json.dumps({"event": event, **fields}, ensure_ascii=True,
+                                       sort_keys=True))
+
+
+def _job_identity(job):
+    return {key: job.get(key) for key in ("request_id", "client_ip")}
+
+
+def _collect_print_output(job_id, job):
+    # Drain stdout even without an SSE reader: a full pipe must never stall
+    # generation. Keep bounded logs for reconnecting streams.
+    proc = job["proc"]
+    excerpt = FailureExcerpt()
+    output_bytes = 0
+    exit_code = None
+    reason = "collector_error"
+    try:
+        for line in iter(proc.stdout.readline, ""):
+            if line.startswith("upstream "):
+                performance_logger.info("%s", line.rstrip("\n")[:4000])
+                continue
+            excerpt.add(line)
+            with _jobs_changed:
+                if "limiting requests" in line or "HTTP 429" in line:
+                    job["upstream_throttled"] = True
+                job["log_cursor"] += 1
+                job["logs"].append((job["log_cursor"], line.rstrip("\n")[:4000]))
+                _jobs_changed.notify_all()
+        exit_code = proc.wait()
+        # A nonempty file with the process finished is safe to download.
+        if os.path.isfile(job["output_path"]):
+            output_bytes = os.path.getsize(job["output_path"])
+        if output_bytes > 0:
+            reason = "nonzero_exit_with_output" if exit_code else "completed"
+            result = {"status": "completed", "success": True,
+                      "download_url": f"/labels/static/jobs/{job_id}/{job['filename']}",
+                      "exit_code": exit_code}
+            if exit_code:
+                log_user_problem("label_generator_nonzero_exit", job_id=job_id,
+                                 **_job_identity(job), exit_code=exit_code)
+        else:
+            reason = "no_output_exit_zero" if exit_code == 0 else "nonzero_exit"
+            if exit_code == 0:
+                error = ("No labels were generated from these observations. Check that the "
+                         "observation IDs exist and are accessible, then try again.")
+                hints = _missing_observation_taxon_hints(job.get("bare_inat_ids") or [])
+                if hints:
+                    reason = "invalid_observation_ids"
+                    error += " " + " ".join(list(hints.values())[:3])
+                    log_user_problem("observation_id_is_taxon_id", job_id=job_id,
+                                     **_job_identity(job), observation_ids=list(hints))
+            else:
+                error = ("Label generation stopped before creating a file. Check the "
+                         "generation output below for the observations that could not be processed, then try again.")
+            if job.get("upstream_throttled"):
+                error += " iNaturalist was limiting requests. Wait a few minutes before retrying."
+            result = {"status": "failed", "success": False, "error": error,
+                      "exit_code": exit_code}
+            log_user_problem("label_generator_output_missing", job_id=job_id,
+                             **_job_identity(job), exit_code=exit_code,
+                             output_path=job["output_path"])
+    except Exception:
+        reason = "collector_error"
+        app.logger.exception("Label generation output collection failed for %s", job_id)
+        result = {"status": "failed", "success": False,
+                  "error": "Label generation was interrupted. Please try again."}
+        try:
+            exit_code = proc.poll()
+            if exit_code is None:
+                proc.terminate()
+                try:
+                    exit_code = proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    exit_code = proc.wait(timeout=5)
+        except Exception:
+            app.logger.exception("Could not stop interrupted label job %s", job_id)
+    finally:
+        if proc.stdout:
+            try:
+                proc.stdout.close()
+            except Exception:
+                app.logger.exception("Could not close output of label job %s", job_id)
+    if reason == "collector_error":
+        try:
+            output_bytes = os.path.getsize(job["output_path"]) if os.path.isfile(job["output_path"]) else 0
+        except OSError:
+            output_bytes = None  # Unknown is different from a verified empty file.
+    result_persisted = False
+    try:
+        marker = os.path.join(os.path.dirname(job["output_path"]), "result.json")
+        with open(marker + ".tmp", "w") as handle:
+            json.dump(result, handle)
+        os.replace(marker + ".tmp", marker)
+        result_persisted = True
+    except OSError:
+        app.logger.exception("Could not persist print result for job %s", job_id)
+    terminal_fields = {
+        "job_id": job_id, **_job_identity(job), "status": result["status"],
+        "reason": reason, "exit_code": exit_code,
+        "output_bytes": output_bytes,
+        "result_persisted": result_persisted,
+        "elapsed_s": round(max(0, time.time()-job.get("started_time", time.time())), 3),
+    }
+    if reason != "completed":
+        terminal_fields.update(excerpt.fields())
+    _log_job_event("label_job_finished", **terminal_fields)
+    performance_logger.info("print_finished request_id=%s job_id=%s status=%s exit=%s elapsed_s=%.1f",
+                    job.get("request_id"), job_id, result["status"], result.get("exit_code"),
+                    time.time() - job.get("started_time", time.time()))
+    with _jobs_changed:
+        job["result"] = result
+        job["finished_time"] = time.time()
+        _jobs_changed.notify_all()
+
+
+def _print_subprocess_env(job_id):
+    """Environment for a print subprocess.
+
+    The generator may be a symlink to a script elsewhere (the GitHub checkout
+    links ``inat.label.py`` from the repository root).  Python puts the resolved
+    script directory on ``sys.path``, so the app directory is prepended here to
+    keep ``inat_shared`` importable; without it the generator silently falls
+    back to unshared, in-process pacing.
+    """
+    python_path = os.pathsep.join(
+        p for p in (app.root_path, os.environ.get("PYTHONPATH")) if p
+    )
+    return {**os.environ, "LABELS_PRINT_JOB_ID": job_id,
+            "LABELS_REQUEST_ID": g.request_id, "PYTHONPATH": python_path}
+
+
+def _start_print_collector(job_id, job):
+    threading.Thread(target=_collect_print_output, args=(job_id, job), daemon=True,
+                     name=f"labels-{job_id}").start()
+
+
+def _saved_print_result(job_id):
+    try:
+        if str(UUID(job_id)) != job_id:
+            return None
+        directory = os.path.join(PRINT_JOBS_DIR, job_id)
+        with open(os.path.join(directory, "result.json")) as handle:
+            result = json.load(handle)
+        if result.get("status") not in {"completed", "failed"}:
+            return None
+        return result
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+@app.route("/labels/print_status")
+def print_status():
+    job_id = request.args.get("job_id", "")
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None and (saved := _saved_print_result(job_id)):
+            response = jsonify(saved)
+        elif job is None:
+            response = jsonify({"status": "failed", "success": False,
+                "error": "This label job is no longer available. The server may have restarted; please generate the labels again."})
+            response.status_code = 410
+        else:
+            response = jsonify(_print_result(job))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.route("/labels/print_stream")
 def print_stream():
     job_id = request.args.get("job_id")
-
-    if job_id and not re.fullmatch(
-        r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
-        job_id,
-        re.IGNORECASE,
-    ):
-        if not getattr(g, "security_event_logged", False):
-            log_user_problem("malformed_print_job_id", submitted_value=job_id)
-
     with _jobs_lock:
-        if not job_id or job_id not in _jobs:
-            if (
-                not getattr(g, "security_event_logged", False)
-                and not getattr(g, "user_problem_event_logged", False)
-            ):
-                log_user_problem("print_job_not_found", submitted_value=job_id)
-            # Job is already gone, possibly reaped.
-            # Return an immediate SSE 'done' event with an error.
-            def generate_reaped_error():
-                error_payload = json.dumps(
-                    {
-                        "success": False,
-                        "error": "Job not found. It may have been completed and cleaned up.",
-                        "exit_code": -1,
-                    }
-                )
-                yield f"event: done\ndata: {error_payload}\n\n"
+        job = _jobs.get(job_id)
+    saved = _saved_print_result(job_id) if job is None else None
+    if saved is not None:
+        return app.response_class("event: done\ndata: " + json.dumps(saved) + "\n\n",
+                                  mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    if job is None:
+        if not getattr(g, "security_event_logged", False):
+            log_user_problem("print_job_not_found", submitted_value=job_id)
+        payload = json.dumps({"success": False,
+            "error": "This label job is no longer available. Please generate the labels again."})
+        return app.response_class(f"event: done\ndata: {payload}\n\n",
+            mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-            return app.response_class(
-                generate_reaped_error(),
-                mimetype="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        job = _jobs[job_id]
-        proc = job["proc"]
-        output_path = job["output_path"]
-
-    # Each open stream pins a worker thread until its job ends, so refuse new
-    # ones past the cap instead of letting them exhaust the thread pool.  The
-    # client falls back to polling for the finished file.
     with _stream_count_lock:
-        if _open_streams[0] >= MAX_CONCURRENT_STREAMS:
-            app.logger.warning(
-                "print_stream: refusing stream, %s already open (max %s)",
-                _open_streams[0],
-                MAX_CONCURRENT_STREAMS,
-            )
-            return (
-                jsonify(
-                    {
-                        "error": (
-                            f"Too many log streams open ({_open_streams[0]}, max "
-                            f"{MAX_CONCURRENT_STREAMS}). The label job is still running; "
-                            f"the download will appear when it finishes."
-                        )
-                    }
-                ),
-                429,
-            )
+        if _open_streams[0] >= min(MAX_CONCURRENT_STREAMS, 1):
+            # A short successful SSE response lets native EventSource reconnect
+            # (HTTP 429 can permanently close it). Include status while busy.
+            result = _print_result(job)
+            event = "progress" if result["status"] == "running" else "done"
+            payload = "retry: 5000\nevent: " + event + "\ndata: " + json.dumps(result) + "\n\n"
+            return app.response_class(payload, mimetype="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         _open_streams[0] += 1
-
-    rel_path = os.path.relpath(
-        output_path, os.path.join(app.root_path, "static")
-    ).replace("\\", "/")
-    download_url = url_for("static", filename=rel_path)
+    try:
+        cursor = max(0, int(request.headers.get("Last-Event-ID", 0)))
+    except ValueError:
+        cursor = 0
 
     def generate():
+        nonlocal cursor
         try:
-            # Stream already-written and future output
-            for line in iter(proc.stdout.readline, ""):
-                line = line.rstrip("\n")
-                # Small debug hook if you want:
-                # app.logger.debug(f"SSE log line: {line!r}")
-
-                yield f"event: log\ndata: {json.dumps(line)}\n\n"
-
-            # When the loop ends, the process has finished
-            exit_code = proc.wait()
-
-            if os.path.exists(output_path):
-                if exit_code != 0:
-                    log_user_problem(
-                        "label_generator_nonzero_exit",
-                        job_id=job_id,
-                        exit_code=exit_code,
-                        output_path=output_path,
-                    )
-                done_payload = json.dumps(
-                    {
-                        "success": True,
-                        "download_url": download_url,
-                        "exit_code": exit_code,
-                    }
-                )
-            else:
-                error_message = (
-                    f"Output file was not created. "
-                    f"Process exited with code {exit_code}."
-                )
-                done_payload = json.dumps(
-                    {
-                        "success": False,
-                        "error": error_message,
-                        "exit_code": exit_code,
-                    }
-                )
-                log_user_problem(
-                    "label_generator_output_missing",
-                    job_id=job_id,
-                    exit_code=exit_code,
-                    output_path=output_path,
-                )
-
-            yield f"event: done\ndata: {done_payload}\n\n"
-
+            deadline = time.monotonic() + 8
+            yield "retry: 5000\n\n"
+            while time.monotonic() < deadline:
+                with _jobs_changed:
+                    lines = [(n, line) for n, line in job["logs"] if n > cursor]
+                    result = job.get("result")
+                    if not lines and result is None:
+                        _jobs_changed.wait(timeout=max(0, min(2, deadline - time.monotonic())))
+                        lines = [(n, line) for n, line in job["logs"] if n > cursor]
+                        result = job.get("result")
+                for n, line in lines:
+                    cursor = n
+                    yield f"id: {n}\nevent: log\ndata: {json.dumps(line)}\n\n"
+                if result is not None:
+                    yield f"event: done\ndata: {json.dumps(result)}\n\n"
+                    return
+                yield "event: progress\ndata: " + json.dumps(_print_result(job)) + "\n\n"
         finally:
-            try:
-                if proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except Exception as e:
-                        app.logger.debug(f"Error waiting for process termination: {e}")
-                        pass
-            except Exception as e:
-                app.logger.debug(f"Error terminating process: {e}")
-            try:
-                if proc.stdout:
-                    proc.stdout.close()
-            except Exception as e:
-                app.logger.debug(f"Error closing stdout: {e}")
-
-            with _jobs_lock:
-                if job_id in _jobs:
-                    _jobs[job_id]["finished_time"] = time.time()
-
+            # Closing a tab or losing SSE must not terminate its generator.
             with _stream_count_lock:
-                _open_streams[0] = max(0, _open_streams[0] - 1)
+                _open_streams[0] -= 1
 
-    return app.response_class(
-        generate(),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # nginx hint; harmless even if not used
-        },
-    )
+    return app.response_class(generate(), mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 def _clean_locality_text(value):
@@ -2695,6 +3094,8 @@ def observation_fields():
         return jsonify({"error": "Observation field query is too long"}), 400
     try:
         return jsonify({"results": _cached_observation_field_search(query)})
+    except inat_shared.Throttled as exc:
+        return client_error("iNaturalist is busy", exc=exc)
     except (requests.RequestException, ValueError) as exc:
         api_error_logger.warning(
             "Observation field autocomplete failed: %s", str(exc), exc_info=True
@@ -3027,6 +3428,13 @@ def find_observations():
                     )
         except requests.RequestException as e:
             status_code = getattr(getattr(e, "response", None), "status_code", None)
+            # iNaturalist answers an unknown taxon_id with 422.  The usual cause
+            # is an observation ID typed under Taxon, so say so instead of 502.
+            if status_code == 422 and taxon_input.isdigit():
+                message = _observation_used_as_taxon_error(taxon_id)
+                if message:
+                    log_user_problem("taxon_id_is_observation_id", taxon_input=taxon_input)
+                    return jsonify({"error": message}), 400
             detail = (
                 f"iNaturalist returned HTTP {status_code}."
                 if status_code
@@ -3070,6 +3478,7 @@ def find_observations():
             mo_dates_complete = True
             page = 1
             while True:
+                _check_search_current()
                 try:
                     resp = requests.get(
                         "https://mushroomobserver.org/api2/observations",
@@ -3077,6 +3486,7 @@ def find_observations():
                         timeout=30,
                     )
                     resp.raise_for_status()
+                    _check_search_current()
                     data = resp.json()
                 except requests.RequestException as e:
                     if len(current_batch) < cap:
@@ -3288,7 +3698,7 @@ def _prune_job_output(now=None):
     try:
         result = usage_stats.prune_job_dirs(
             retention_days=usage_stats.JOB_RETENTION_DAYS,
-            jobs_dir=os.path.join(app.root_path, "static", "jobs"),
+            jobs_dir=PRINT_JOBS_DIR,
             now=now,
         )
     except Exception:

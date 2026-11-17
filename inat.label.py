@@ -4,8 +4,8 @@
 iNaturalist and Mushroom Observer Herbarium Label Generator
 
 Author: Alan Rockefeller
-Date: October 9, 2026
-Version: 3.9.9.2
+Date: November 16, 2026
+Version: 3.9.9.3
 
 This script creates herbarium labels from iNaturalist or Mushroom Observer observation numbers or URLs.
 It fetches data from the respective APIs and formats it into printable labels suitable for
@@ -99,6 +99,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import colorama
 import qrcode
 import requests
+from urllib.parse import urlparse, urlencode
 from bs4 import BeautifulSoup
 from colorama import Fore, Style
 from dateutil import parser as dateutil_parser
@@ -157,6 +158,22 @@ ProcessResult = (
     | tuple[Literal["skip"], None]
 )
 
+# The web frontend ships inat_shared.py next to this script.  It paces iNaturalist
+# requests and caches observations across the web process and every print
+# subprocess (SQLite).  Standalone command-line use does not need it: without it,
+# requests are paced in-process and each observation is fetched individually.
+try:
+    import inat_shared
+except ImportError:
+    inat_shared = None
+
+
+class _NoSharedThrottle(Exception):
+    """Placeholder for ``inat_shared.Throttled`` that is never raised."""
+
+
+_Throttled = inat_shared.Throttled if inat_shared is not None else _NoSharedThrottle
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -181,7 +198,8 @@ _MIN_INTERVAL = 0.0
 if RATE_LIMIT_RPM > 0:
     _MIN_INTERVAL = 60.0 / RATE_LIMIT_RPM
 
-# Begin smoothing only after this many recent requests in the window (burst allowance for small jobs)
+# Begin smoothing only after this many recent requests in the window (burst
+# allowance for small jobs).  Used only when inat_shared is unavailable.
 _SMOOTH_THRESHOLD = int(
     os.environ.get("INAT_SMOOTH_THRESHOLD", str(max(1, RATE_LIMIT_RPM // 4)))
 )
@@ -220,7 +238,7 @@ _fonts_lock = threading.Lock()
 # Global session with connection pooling
 _thread_local = threading.local()
 
-# Simple thread-safe rate limiter: max 60 requests per 60 seconds (configurable via env)
+# In-process rate limiter state, used only when inat_shared is unavailable.
 _rate_lock = threading.Lock()
 _request_times = deque()
 _next_allowed_time = 0.0
@@ -235,6 +253,21 @@ _request_semaphore = threading.BoundedSemaphore(_DEFAULT_MAX_WORKERS)
 
 
 def _rate_limit_wait() -> None:
+    """Wait for this process's turn to call the iNaturalist API."""
+    if inat_shared is not None:
+        # The database is shared by the web process and every print subprocess.
+        inat_shared.wait_turn(
+            max_wait=max(0, _MAX_WAIT_SECONDS),
+            interval=max(
+                _MIN_INTERVAL,
+                float(os.environ.get("INAT_MIN_REQUEST_INTERVAL", "1")),
+            ),
+        )
+        return
+    _local_rate_limit_wait()
+
+
+def _local_rate_limit_wait() -> None:
     """Respect RPM window with smoothing only after a small burst threshold.
 
     - Allows a small initial burst (< _SMOOTH_THRESHOLD in the last 60s) with no artificial spacing
@@ -267,8 +300,6 @@ def _rate_limit_wait() -> None:
         _next_allowed_time = max(_next_allowed_time, now)
 
         # Burst mode: minimal wait (just the hard cap wait, if any).
-        # Do not increment _next_allowed_time to create debt; just keep it current.
-        # This allows the *next* request to also burst or start smoothing from now.
         # Smoothing mode: respect the schedule.
         smoothing_target = (
             now if len(_request_times) < _SMOOTH_THRESHOLD else _next_allowed_time
@@ -279,8 +310,6 @@ def _rate_limit_wait() -> None:
         wait = final_time - now
 
         # 5. Update State
-        # If we are bursting, we don't space out the *next* allowed time (it stays at final_time).
-        # If we are smoothing, we push the *next* allowed time out by min_interval.
         if len(_request_times) < _SMOOTH_THRESHOLD:
             _next_allowed_time = final_time
         else:
@@ -303,12 +332,10 @@ def get_session() -> requests.Session:
     """
     if not hasattr(_thread_local, "session"):
         _thread_local.session = requests.Session()
-        # Let our own code handle 429s with Retry-After; adapter will only retry on transient 5xx
+        # Every retry passes the shared pacer; the adapter must never retry on its own.
         retry_strategy = Retry(
-            total=2,
-            backoff_factor=0.5,
-            status_forcelist=[500, 502, 503, 504],
-            allowed_methods=["GET"],
+            total=0,
+            respect_retry_after_header=False,
         )
         adapter = HTTPAdapter(
             max_retries=retry_strategy, pool_connections=10, pool_maxsize=20
@@ -721,7 +748,7 @@ def _parse_retry_after(resp: requests.Response) -> float | None:
             return None
 
 
-def fetch_api_data(url: str, retries: int = 6) -> tuple[ObsData | None, str | None]:
+def fetch_api_data(url: str, retries: int = 6, *, raise_throttled: bool = False) -> tuple[ObsData | None, str | None]:
     """Fetch data from a URL with robust retries and friendly errors.
 
     Uses Retry-After header for 429s and exponential backoff with jitter.
@@ -749,9 +776,25 @@ def fetch_api_data(url: str, retries: int = 6) -> tuple[ObsData | None, str | No
                 "User-Agent": "inat.label.py (label generator)",
             }
 
-            _rate_limit_wait()
+            is_inat = urlparse(url).hostname in {"api.inaturalist.org", "www.inaturalist.org", "inaturalist.org"}
+            shared_pacing = is_inat and inat_shared is not None
+            started = time.monotonic()
+            # Acquire the semaphore first: no request can wait past admission
+            # and then bypass a cooldown imposed by another thread/process.
             with _request_semaphore:
+                # The shared pacer covers iNaturalist only; the in-process
+                # limiter has always paced every host.
+                if is_inat or inat_shared is None:
+                    _rate_limit_wait()
+                waited = time.monotonic() - started
                 response = get_session().get(url, headers=headers, timeout=20)
+            # The web frontend parses this line from print subprocesses; it is
+            # noise on the command line, so only emit it for web print jobs.
+            if os.environ.get("LABELS_PRINT_JOB_ID"):
+                print(f"upstream job_id={os.environ.get('LABELS_PRINT_JOB_ID', 'cli')} "
+                      f"request_id={os.environ.get('LABELS_REQUEST_ID', 'cli')} attempt={attempt} "
+                      f"status={response.status_code} wait_s={waited:.2f} "
+                      f"elapsed_s={time.monotonic()-started:.2f} url={url}", flush=True)
 
             if response.status_code == 200:
                 if not response.text.strip():
@@ -764,7 +807,7 @@ def fetch_api_data(url: str, retries: int = 6) -> tuple[ObsData | None, str | No
             if response.status_code == 404:
                 return None, "Not found (404)"
 
-            if response.status_code == 429:
+            if response.status_code == 429 and inat_shared is None:
                 wait = _parse_retry_after(response)
                 if wait is None:
                     wait = min(60, 2**attempt)  # exponential backoff
@@ -800,6 +843,21 @@ def fetch_api_data(url: str, retries: int = 6) -> tuple[ObsData | None, str | No
                 total_wait += wait
                 continue
 
+            if response.status_code == 429:
+                wait = inat_shared.retry_after(response, default=min(60, 2**attempt))
+                if shared_pacing:
+                    inat_shared.cooldown(wait)
+                print(f"Upstream is limiting requests; waiting {wait:.1f}s before retry "
+                      f"(attempt {attempt}/{retries}).", flush=True)
+                if wait > max_total_wait - total_wait or attempt >= retries:
+                    if shared_pacing and raise_throttled:
+                        raise inat_shared.Throttled(wait, response)
+                    return None, f"Upstream is limiting requests. Retry in {int(wait)+1} seconds."
+                if not shared_pacing:
+                    time.sleep(wait)
+                total_wait += wait
+                continue
+
             if 500 <= response.status_code < 600:
                 wait = min(30, 1.5**attempt)
                 wait *= random.uniform(0.8, 1.2)
@@ -822,6 +880,10 @@ def fetch_api_data(url: str, retries: int = 6) -> tuple[ObsData | None, str | No
 
             return None, f"HTTP error {response.status_code}"
 
+        except _Throttled as exc:
+            if raise_throttled:
+                raise
+            return None, str(exc)
         except (requests.exceptions.Timeout, requests.exceptions.SSLError):
             wait = min(20, 1.5**attempt)
             wait *= random.uniform(0.8, 1.2)
@@ -1197,6 +1259,19 @@ def get_mushroom_observer_data(
     return None, "Life"
 
 
+_prefetched_observations = {}
+_prefetched_failures = {}
+
+
+def _fetch_observation_batch(ids, retries=6):
+    data, error = fetch_api_data("https://api.inaturalist.org/v1/observations?" +
+                                 urlencode({"id": ",".join(ids), "per_page": 30}), retries,
+                                 raise_throttled=True)
+    if error:
+        raise requests.HTTPError(error)
+    return data
+
+
 def get_observation_data(
     observation_id: int | str, retries: int = 6
 ) -> tuple[ObsData | None, str]:
@@ -1211,8 +1286,22 @@ def get_observation_data(
         return get_mushroom_observer_data(observation_id, retries)
 
     # Continue with iNaturalist API for regular observation IDs
-    url = f"https://api.inaturalist.org/v1/observations/{observation_id}"
-    data, error = fetch_api_data(url, retries)
+    oid = str(observation_id)
+    if oid in _prefetched_observations or oid in _prefetched_failures:
+        found, failures = _prefetched_observations, _prefetched_failures
+        data = {"results": [found[oid]]} if oid in found else None
+        error = failures.get(oid, {}).get("error")
+    elif inat_shared is not None:
+        found, failures = inat_shared.observations(
+            [oid],
+            lambda ids: _fetch_observation_batch(ids, retries),
+            max_wait=max(0, _MAX_WAIT_SECONDS),
+        )
+        data = {"results": [found[oid]]} if oid in found else None
+        error = failures.get(oid, {}).get("error")
+    else:
+        url = f"https://api.inaturalist.org/v1/observations/{observation_id}"
+        data, error = fetch_api_data(url, retries)
 
     if error:
         print_error(f"Error fetching observation {observation_id}: {error}")
@@ -1260,6 +1349,40 @@ def get_field_value(observation_data: ObsData, field_name: str) -> str | None:
     for field in observation_data.get("ofvs", []):
         if field["name"].lower() == field_name.lower():
             return field["value"]
+    return None
+
+
+# Labels print every field as "Name: value", so people copy the colon along with
+# the name ("-Observer:"), and some iNaturalist observation fields carry one in
+# their own name: "Found by:" (2026-10-30, observations 295816106 and others).
+# For --custom names, case and a trailing colon are not significant.
+def custom_field_key(field_name: str) -> str:
+    """Return the comparison key for a --custom field name."""
+    return field_name.strip().rstrip(":").rstrip().lower()
+
+
+def custom_field_label(field_name: str) -> str:
+    """Return a --custom field name as printed, without its trailing colon.
+
+    Printing adds the colon itself, so "Found by:" would otherwise print as
+    "Found by::".
+    """
+    return field_name.strip().rstrip(":").rstrip() or field_name
+
+
+def get_custom_field_value(observation_data: ObsData, field_name: str) -> str | None:
+    """Return a --custom field's value, ignoring a trailing colon on either side.
+
+    An exact (case-insensitive) match wins, so an observation that carries both
+    "Found by" and "Found by:" still gets the one that was asked for.
+    """
+    value = get_field_value(observation_data, field_name)
+    if value is not None:
+        return value
+    wanted = custom_field_key(field_name)
+    for field in observation_data.get("ofvs", []):
+        if custom_field_key(str(field.get("name") or "")) == wanted:
+            return field.get("value")
     return None
 
 
@@ -1996,15 +2119,15 @@ def create_inaturalist_label(
 
     if custom_add:
         for field_name in custom_add:
-            value = get_field_value(observation_data, field_name)
+            value = get_custom_field_value(observation_data, field_name)
             if value:
-                label.append((field_name, value))
+                label.append((custom_field_label(field_name), value))
 
     if custom_remove:
-        remove_set = {n.lower() for n in custom_remove}
+        remove_set = {custom_field_key(n) for n in custom_remove}
         kept = []
         for field, value in label:
-            if field.lower() not in remove_set:
+            if custom_field_key(field) not in remove_set:
                 kept.append((field, value))
             elif field in ("iNaturalist URL", "Mushroom Observer URL"):
                 kept.append((QR_URL_FIELD, value))
@@ -4082,14 +4205,6 @@ def _get_output_modes(args: argparse.Namespace) -> tuple[bool, bool]:
     return bool(args.rtf), bool(args.pdf)
 
 
-def _reset_rate_limiter_state() -> None:
-    # Reset rate limiter state to ensure monotonic time consistency
-    global _next_allowed_time
-    with _rate_lock:
-        _request_times.clear()
-        _next_allowed_time = 0.0
-
-
 def _apply_cli_controls(args: argparse.Namespace) -> None:
     # Apply global controls from CLI
     global _MAX_WAIT_SECONDS, _QUIET
@@ -4340,6 +4455,17 @@ def _process_observation_ids(
     global _request_semaphore
     _request_semaphore = threading.BoundedSemaphore(max_workers)
 
+    inat_ids = []
+    for value in observation_ids:
+        resolved = extract_observation_id(value)
+        if resolved and str(resolved).isdigit():
+            inat_ids.append(str(resolved))
+    global _prefetched_observations, _prefetched_failures
+    if inat_shared is not None:
+        _prefetched_observations, _prefetched_failures = inat_shared.observations(
+            inat_ids, _fetch_observation_batch, max_wait=max(0, _MAX_WAIT_SECONDS)
+        )
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(
@@ -4443,7 +4569,6 @@ def main() -> None:
 
     _validate_cli_args(parser, args)
     rtf_mode, pdf_mode = _get_output_modes(args)
-    _reset_rate_limiter_state()
     _apply_cli_controls(args)
     _validate_output_filenames(parser, args, rtf_mode, pdf_mode)
 

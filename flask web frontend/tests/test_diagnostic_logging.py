@@ -1,6 +1,7 @@
 """Tests for user-problem, commodity-scanner, and targeted-attack logging."""
 
 import json
+from collections import deque
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -153,7 +154,7 @@ class DiagnosticLoggingTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         request_id = response.headers["X-Request-ID"]
-        self.assertEqual(len(request_id), 12)
+        self.assertEqual(len(request_id), 32)
         event = json.loads(problem.call_args.args[0])
         self.assertEqual(event["request_id"], request_id)
 
@@ -167,10 +168,12 @@ class DiagnosticLoggingTestCase(unittest.TestCase):
             "proc": proc,
             "output_path": "/tmp/labels-test-output-that-does-not-exist.rtf",
             "filename": "labels.rtf",
+            "logs": deque(maxlen=1000), "log_cursor": 0,
         }
         self.addCleanup(labels_app._jobs.pop, job_id, None)
 
         with patch.object(labels_app.user_problem_logger, "warning") as problem:
+            labels_app._collect_print_output(job_id, labels_app._jobs[job_id])
             response = self.client.get(f"/labels/print_stream?job_id={job_id}")
             response.get_data()
 
@@ -321,6 +324,71 @@ class DiagnosticHardeningTestCase(unittest.TestCase):
                 self.assertEqual(
                     labels_app._exploit_techniques(value), ["command_execution"]
                 )
+
+    def test_pasted_observation_url_is_a_user_problem_not_an_attack(self):
+        """2026-10-08: "-https://www.inaturalist.org/observations/" was filed
+        as command_execution because "-https" is option-shaped."""
+        for value in (
+            "-https://www.inaturalist.org/observations/",
+            "-https://www.inaturalist.org/observations/123456",
+            "- http://mushroomobserver.org/obs/585855",
+            "-www.inaturalist.org/observations/1",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(labels_app._exploit_techniques(value), [])
+        # The exemption covers the option shape only, not what is inside it.
+        self.assertEqual(
+            labels_app._exploit_techniques("-https://x.org/$(id)"),
+            ["command_execution"],
+        )
+
+    @patch("app.subprocess.Popen")
+    def test_pasted_observation_url_names_the_field_to_suppress(self, popen):
+        with patch.object(labels_app.targeted_attack_logger, "warning") as targeted:
+            with patch.object(labels_app.user_problem_logger, "warning") as problem:
+                response = self.client.post(
+                    "/labels/print_start",
+                    data={
+                        "format": "rtf",
+                        "observations[]": ["123"],
+                        "use_custom": "on",
+                        "custom_args[]": [
+                            "+Collector",
+                            "-https://www.inaturalist.org/observations/",
+                        ],
+                    },
+                )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('suppress the field "iNaturalist URL"', response.get_json()["error"])
+        popen.assert_not_called()
+        targeted.assert_not_called()
+        events = [json.loads(c.args[0])["event"] for c in problem.call_args_list]
+        self.assertIn("invalid_custom_fields", events)
+
+    @patch("app.subprocess.Popen")
+    def test_schemeless_observation_url_is_rejected_with_the_hint(self, popen):
+        """It matches CUSTOM_FIELD_RE, so it used to print with nothing removed."""
+        response = self.client.post(
+            "/labels/print_start",
+            data={
+                "format": "rtf",
+                "observations[]": ["123"],
+                "use_custom": "on",
+                "custom_args[]": "-www.inaturalist.org/observations/1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('"iNaturalist URL"', response.get_json()["error"])
+        popen.assert_not_called()
+
+    def test_url_hint_only_for_suppressed_observation_urls(self):
+        hint = labels_app._suppressed_url_hint
+        self.assertIn("Mushroom Observer URL", hint("-https://mushroomobserver.org/obs/1"))
+        self.assertIsNone(hint("+https://www.inaturalist.org/observations/1"))
+        self.assertIsNone(hint("-https://example.com/page"))
+        self.assertIsNone(hint("-Habitat: oak"))
 
     def test_suppressed_field_error_still_records_its_http_error_response(self):
         """log_targeted_attack suppresses this record, so it must not fire here."""

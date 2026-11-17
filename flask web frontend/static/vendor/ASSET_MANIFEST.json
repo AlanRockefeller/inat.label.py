@@ -1,0 +1,92 @@
+[
+  {
+    "file": "THIRD_PARTY_NOTICES.md",
+    "sha256": "b4915fa70a86314e3c595b31c50406a212fa777a95ed3ee6d87b77ab26666a71",
+    "source": "local documentation"
+  },
+  {
+    "file": "fonts/01170409e32e22123a35.ttf",
+    "sha256": "01170409e32e22123a354fbaa7dcb5ca5300790bb77c05d569ec8fdc394e78c9",
+    "source": "https://fonts.gstatic.com/s/archivo/v25/k3k6o8UDI-1M0wlSV9XAw6lQkqWY8Q82sJaRE-NWIDdgffTTNDNp8A.ttf"
+  },
+  {
+    "file": "fonts/04188d5295f4e1100ce9.ttf",
+    "sha256": "04188d5295f4e1100ce91a96b864f15b7af5be976e9fb9cc279af737be804272",
+    "source": "https://fonts.gstatic.com/s/newsreader/v26/cY9qfjOCX1hbuyalUrK49dLac06G1ZGsZBtoBCzBDXXD9JVF438wpojADA.ttf"
+  },
+  {
+    "file": "fonts/3a975c5d7533e6dafd1b.ttf",
+    "sha256": "3a975c5d7533e6dafd1ba90a33a1c77cac1bab0dfcf411547128a353f2a8b85e",
+    "source": "https://fonts.gstatic.com/s/newsreader/v26/cY9kfjOCX1hbuyalUrK439vogqC9yFZCYg7oRZaLP4obnf7fTXglsMz2SOZA.ttf"
+  },
+  {
+    "file": "fonts/4fc14a73ca53ba9d32fd.ttf",
+    "sha256": "4fc14a73ca53ba9d32fd759ae1ca1a3133326035d0dd337862b3ee1633cc156e",
+    "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3twJ8lc.ttf"
+  },
+  {
+    "file": "fonts/5f4c8787a65ca5ec7595.ttf",
+    "sha256": "5f4c8787a65ca5ec7595b8146c7366e436097aab682e5764db67177fb20584d3",
+    "source": "https://fonts.gstatic.com/s/newsreader/v26/cY9kfjOCX1hbuyalUrK439vogqC9yFZCYg7oRZaLP4obnf7fTXglsMwaT-ZA.ttf"
+  },
+  {
+    "file": "fonts/68c4493c7c6c9aaff48d.ttf",
+    "sha256": "68c4493c7c6c9aaff48defeeb6408e7ce705efc4c33363de4d9d6f5e07775064",
+    "source": "https://fonts.gstatic.com/s/newsreader/v26/cY9qfjOCX1hbuyalUrK49dLac06G1ZGsZBtoBCzBDXXD9JVF438wSo_ADA.ttf"
+  },
+  {
+    "file": "fonts/a7a0a9114e29fbf6e83a.ttf",
+    "sha256": "a7a0a9114e29fbf6e83a339ed930d5d8ae69fe4217c34fdd95386d995929d6e8",
+    "source": "https://fonts.gstatic.com/s/newsreader/v26/cY9kfjOCX1hbuyalUrK439vogqC9yFZCYg7oRZaLP4obnf7fTXglsMwoT-ZA.ttf"
+  },
+  {
+    "file": "fonts/a7fdc993f9f0387caedb.ttf",
+    "sha256": "a7fdc993f9f0387caedba4e42521136fa97e4c0837ae6239bf0413ccf8af00c2",
+    "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F63fjptAgt5VM-kVkqdyU8n5ig.ttf"
+  },
+  {
+    "file": "fonts/b8f5e0a8bdd6a12c722c.ttf",
+    "sha256": "b8f5e0a8bdd6a12c722ca5635d9da87e77ccbb2d0172112e34e00c4e55f2cd5a",
+    "source": "https://fonts.gstatic.com/s/newsreader/v26/cY9qfjOCX1hbuyalUrK49dLac06G1ZGsZBtoBCzBDXXD9JVF438weI_ADA.ttf"
+  },
+  {
+    "file": "fonts/bf52802dc93c0d9933f9.ttf",
+    "sha256": "bf52802dc93c0d9933f92a8d0da0126124f8c37a838b3cc513190036df14587d",
+    "source": "https://fonts.gstatic.com/s/archivo/v25/k3k6o8UDI-1M0wlSV9XAw6lQkqWY8Q82sJaRE-NWIDdgffTTBjNp8A.ttf"
+  },
+  {
+    "file": "fonts/f3a513d89abf3bf1d5aa.ttf",
+    "sha256": "f3a513d89abf3bf1d5aa906b15f21eefe7a7c98a6cf6463929a0a4032639d264",
+    "source": "https://fonts.gstatic.com/s/archivo/v25/k3k6o8UDI-1M0wlSV9XAw6lQkqWY8Q82sJaRE-NWIDdgffTT6jRp8A.ttf"
+  },
+  {
+    "file": "jquery-3.6.0.min.js",
+    "sha256": "ff1523fb7389539c84c65aba19260648793bb4f5e29329d2ee8804bc37a3fe6e",
+    "source": "https://code.jquery.com/jquery-3.6.0.min.js"
+  },
+  {
+    "file": "label-fonts.css",
+    "sha256": "b81e924ff7a47c0b10fd433b9ddaf72af69564d0173e9db4efbdaf8bae7e0df1",
+    "source": "https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500;1,6..72,600&display=swap"
+  },
+  {
+    "file": "licenses/archivo-OFL.txt",
+    "sha256": "108b4e57c9c796d3d38d0428ca7ee39de47ad93187302718d9b2d8864b9b716b",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/archivo/OFL.txt"
+  },
+  {
+    "file": "licenses/ibmplexmono-OFL.txt",
+    "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexmono/OFL.txt"
+  },
+  {
+    "file": "licenses/jquery-LICENSE.txt",
+    "sha256": "d4db9ebe6f29f5168eac45ad713f055623ac5d0dcd5ba92da23d650ae012020d",
+    "source": "https://raw.githubusercontent.com/jquery/jquery/3.6.0/LICENSE.txt"
+  },
+  {
+    "file": "licenses/newsreader-OFL.txt",
+    "sha256": "fdfad38143ec470553cae82a1e45320bdd1b9ec70415d37bd0171051d8a4ded8",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/newsreader/OFL.txt"
+  }
+]

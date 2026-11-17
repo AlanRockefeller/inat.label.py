@@ -763,7 +763,8 @@ class TestAddObservationTemplateIntegration(unittest.TestCase):
             normalize.index('["loading", "complete"].includes'),
             normalize.index("lookupObservationRows($inputs, obsIds)"),
         )
-        self.assertEqual(batch.count('url: "/labels/lookup_batch"'), 1)
+        self.assertEqual(batch.count('requestRowLookups({'), 1)
+        self.assertIn('LabelsLookupClient.create', self.template)
         self.assertIn("const item = items[index]", batch)
         self.assertIn("allObservationData[state.inputId] = [item]", batch)
         self.assertIn('data("lookupStatus", "loading")', batch)

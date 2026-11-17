@@ -16,12 +16,11 @@
         })();
     </script>
     <script src="{{ static_asset_url('browser_telemetry.js') }}"></script>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="{{ static_asset_url('vendor/jquery-3.6.0.min.js') }}" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script>
     <script src="{{ static_asset_url('addobs_helpers.js') }}"></script>
+    <script src="{{ url_for('static', filename='lookup_client.js') }}"></script>
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500;1,6..72,600&display=swap" rel="stylesheet">
+    <link href="{{ static_asset_url('vendor/label-fonts.css') }}" rel="stylesheet">
     <style>
         :root {
             --paper: #15120e;
@@ -2449,6 +2448,7 @@
                 <button id="logModalCloseX" class="btn btn-outline btn-icon" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body">
+                <p id="printProgress" role="status" aria-live="polite"></p>
                 <div id="logContent" class="ansi-log"></div>
             </div>
             <div class="modal-footer">
@@ -3016,6 +3016,9 @@
             if (data.error) {
                 const errorLine = $("<div>", { class: "slip-meta err" })
                     .text(data.error || "Could not fetch observation");
+                if (Number(data.retry_after) > 0) {
+                    errorLine.append(document.createTextNode(` Try again in ${Math.ceil(Number(data.retry_after))} seconds.`));
+                }
                 const status = Number(data.status);
                 const retryable = data.retryable === true || status === 429 || status >= 500;
 
@@ -3108,7 +3111,12 @@
                     )
                     .forEach((field) => {
                         const locus = String(field.name).replace(/^DNA Barcode\s+/i, "");
-                        metadata.push(`${locus} ${field.value}`);
+                        // iNat stores the full sequence; MO lookups already arrive as "603 bp".
+                        const value = String(field.value).trim();
+                        const length = /^\d+\s*bp$/i.test(value)
+                            ? value
+                            : `${value.replace(/\s+/g, "").length} bp`;
+                        metadata.push(`${locus} barcode found (${length})`);
                     });
 
                 const extraBadge = (data.inat_id || "").toLowerCase().startsWith("bg")
@@ -3180,6 +3188,45 @@
             return $rows;
         }
 
+        const ROW_LOOKUP_TIMEOUT_MS = 60000;
+        const rowLookupClient = LabelsLookupClient.create(async (ids) => {
+            // A stalled request would hold the lookup broker forever and queue
+            // every later row behind it, so give each batch a deadline.
+            const controller = new AbortController();
+            const deadline = setTimeout(() => controller.abort(), ROW_LOOKUP_TIMEOUT_MS);
+            let response, data;
+            try {
+                response = await fetch("/labels/lookup_batch", {
+                    method: "POST",
+                    body: new URLSearchParams(ids.map(id => ["obs_ids[]", id])),
+                    signal: controller.signal,
+                });
+                data = await response.json();
+            } catch (err) {
+                if (err && err.name === "AbortError") {
+                    const error = new Error("Lookup timed out. Please try again.");
+                    error.status = 504;
+                    throw error;
+                }
+                throw err;
+            } finally {
+                clearTimeout(deadline);
+            }
+            if (!response.ok) {
+                const error = new Error(data.error || "Could not fetch observations");
+                error.status = response.status;
+                throw error;
+            }
+            return data;
+        });
+        function requestRowLookups(options) {
+            const request = {cancelled: false, abort() { this.cancelled = true; }};
+            rowLookupClient.lookup(options.ids).then(items => {
+                if (!request.cancelled) options.success({items});
+            }).finally(() => options.complete());
+            return request;
+        }
+
         function lookupObservationRows($inputs, obsIds) {
             if (!$inputs.length || !obsIds.length) return;
 
@@ -3200,10 +3247,8 @@
                 return { $input, inputId, token, obsId: obsIds[index] };
             });
 
-            const request = $.ajax({
-                url: "/labels/lookup_batch",
-                type: "POST",
-                data: $.param({ "obs_ids[]": obsIds }),
+            const request = requestRowLookups({
+                ids: obsIds,
                 success: function (resp) {
                     const items = resp && Array.isArray(resp.items) ? resp.items : [];
                     rowStates.forEach(function (state, index) {
@@ -3456,7 +3501,10 @@
                     let msg =
                         "The server took too long to respond while generating the CSV. This can happen with very large batches. Please try fewer observations per request, split the job, or wait a moment and retry.";
 
-                    if (
+                    if (xhr && xhr.status === 429 && xhr.responseText) {
+                        // Throttling and conversion limits explain themselves.
+                        msg = xhr.responseText;
+                    } else if (
                         xhr &&
                         (xhr.status === 504 ||
                             (xhr.responseText || "").includes("504 Gateway"))
@@ -3565,6 +3613,7 @@
         }
 
         function showErrorModal(messageHtml, title = "Error") {
+            $("#printProgress").text("");
             $("#logModalTitle").text(title);
 
             $("#logContent").html(`<div class="modal-error">${messageHtml}</div>`);
@@ -4057,6 +4106,7 @@
                 .prop("disabled", true);
             // Open the modal immediately
             $("#logModalTitle").text("Starting Label Generation...");
+            $("#printProgress").text("Preparing observations…");
             $("#logContent").html("");
             $("#logModal").css("display", "flex");
             let firstLogMessageReceived = false;
@@ -4087,41 +4137,110 @@
                     `/labels/print_stream?job_id=${encodeURIComponent(job_id)}`,
                 );
 
-                // Fallback polling in case SSE 'done' is blocked by proxies
-                const expectedUrl = `/labels/static/jobs/${job_id}/labels.${format}`;
-                let downloaded = false;
-
-                const poller = setInterval(async () => {
-                    try {
-                        const resp = await fetch(expectedUrl, {
-                            method: "HEAD",
-                            cache: "no-store",
-                        });
-
-                        if (resp.ok && !downloaded) {
-                            downloaded = true;
-                            recordSuccessfulPrint();
-                            btn.html(originalText).removeClass("is-busy").prop("disabled", false);
-                            const a = document.createElement("a");
-                            a.href = expectedUrl;
-                            a.download = downloadName;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            const cont = $("#logContent");
-
-                            cont.append(
-                                `\n<div style="margin-top:8px;"><a class="download-link" href="${expectedUrl}" download="${downloadName}">Download ${downloadName}</a></div>`,
-                            );
-                            showToast(successMsg);
-                            clearInterval(poller);
-                        }
-                    } catch (e) {
-                        console.debug("Fallback poll error:", e);
+                // Poll job state, not a file that is expected not to exist yet.
+                // Completion is shared by SSE and polling to prevent double downloads.
+                let settled = false;
+                let pollTimer = null;
+                let pollDelay = 5000;
+                let streamHealthy = false;
+                let watchdog = null;
+                let polling = false;
+                // At most one poll is pending or in flight.  Stream errors can
+                // repeat faster than pollDelay; rescheduling on each one would
+                // postpone the recovery poll indefinitely.
+                const schedulePoll = () => {
+                    if (settled || polling || pollTimer !== null) return;
+                    pollTimer = setTimeout(() => { pollTimer = null; pollStatus(); }, pollDelay);
+                };
+                const cancelPoll = () => { clearTimeout(pollTimer); pollTimer = null; };
+                const finishPrint = (payload) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(pollTimer);
+                    clearTimeout(watchdog);
+                    es.close();
+                    btn.html(originalText).removeClass("is-busy").prop("disabled", false);
+                    if (payload.success && payload.download_url) {
+                        recordSuccessfulPrint();
+                        $("#printProgress").text("Labels are ready.");
+                        const a = document.createElement("a");
+                        a.href = payload.download_url;
+                        a.download = downloadName;
+                        a.className = "download-link";
+                        a.textContent = `Download ${downloadName}`;
+                        $("#logContent").append(document.createElement("br"), a);
+                        a.click();
+                        showToast(successMsg);
+                    } else {
+                        $("#logModalTitle").text("Label Generation Failed");
+                        $("#printProgress").text(payload.error || "The label file could not be generated. Please try again.");
+                        $("#logModal").css("display", "flex");
                     }
-                }, 2000);
+                };
+                const pollStatus = async () => {
+                    if (settled || streamHealthy || polling) return;
+                    polling = true;
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 15000);
+                    try {
+                        const resp = await fetch(`/labels/print_status?job_id=${encodeURIComponent(job_id)}`, {
+                            cache: "no-store", signal: controller.signal,
+                        });
+                        if (settled) return;
+                        if (resp.status === 429) {
+                            const retryAfter = resp.headers.get('Retry-After');
+                            const seconds = retryAfter ? Number(retryAfter) : NaN;
+                            const retryMs = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter || '') - Date.now();
+                            pollDelay = Number.isFinite(retryMs) && retryMs > 0 ? Math.max(2000, retryMs) : Math.min(30000, pollDelay * 2);
+                        } else if (resp.ok || resp.status === 410) {
+                            const payload = await resp.json();
+                            if (settled) return;
+                            pollDelay = 5000;
+                            if (payload.status === 'completed' || payload.status === 'failed') {
+                                finishPrint(payload);
+                                return;
+                            }
+                            const elapsed = Math.max(0, Number(payload.elapsed_seconds) || 0);
+                            const time = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
+                            $("#printProgress").text(`Generating ${payload.observation_count || ''} labels · ${time} elapsed. Large batches can take several minutes.`);
+                        } else {
+                            pollDelay = Math.min(30000, pollDelay * 2);
+                        }
+                    } catch (_) {
+                        if (!settled) $("#printProgress").text("Reconnecting to check progress. Label generation continues on the server.");
+                        pollDelay = Math.min(30000, pollDelay * 2);
+                    } finally {
+                        clearTimeout(timeout);
+                        polling = false;
+                        if (!streamHealthy) schedulePoll();
+                    }
+                };
+                const markStreamHealthy = () => {
+                    if (settled) return;
+                    streamHealthy = true;
+                    cancelPoll();
+                    clearTimeout(watchdog);
+                    watchdog = setTimeout(() => {
+                        streamHealthy = false;
+                        pollStatus();
+                    }, 20000);
+                };
+                schedulePoll();
+                es.onopen = markStreamHealthy;
+                es.addEventListener("progress", (ev) => {
+                    markStreamHealthy();
+                    try {
+                        const payload = JSON.parse(ev.data);
+                        if (payload.status === "completed" || payload.status === "failed") {
+                            finishPrint(payload);
+                            return;
+                        }
+                        $("#printProgress").text(`Generating ${payload.observation_count || ''} labels · ${payload.elapsed_seconds || 0}s elapsed.`);
+                    } catch (_) {}
+                });
 
                 es.addEventListener("log", (ev) => {
+                    markStreamHealthy();
                     try {
                         const line = JSON.parse(ev.data);
 
@@ -4158,84 +4277,23 @@
                     }
                 });
 
-                // Some servers deliver unnamed events as 'message'
+                // Both event forms use the same completion/error path.
                 es.onmessage = (ev) => {
-                    // Try to detect done payload
                     try {
                         const payload = JSON.parse(ev.data);
-
-                        if (
-                            payload &&
-                            typeof payload === "object" &&
-                            "success" in payload
-                        ) {
-                            btn.html(originalText).removeClass("is-busy").prop("disabled", false);
-
-                            if (payload.success && payload.download_url) {
-                                downloaded = true;
-                                recordSuccessfulPrint();
-                                const a = document.createElement("a");
-                                a.href = payload.download_url;
-                                a.download = downloadName;
-                                document.body.appendChild(a);
-                                a.click();
-                                document.body.removeChild(a);
-                                const cont = $("#logContent");
-
-                                cont.append(
-                                    `\n<div style="margin-top:8px;"><a class="download-link" href="${payload.download_url}" download="${downloadName}">Download ${downloadName}</a></div>`,
-                                );
-                                showToast(successMsg);
-                            }
-
-                            clearInterval(poller);
-                            es.close();
-                        }
-                    } catch (_) {
-                        /* ignore non-JSON message */
-                    }
+                        if (payload && typeof payload === 'object' && 'success' in payload) finishPrint(payload);
+                    } catch (_) { /* A log message need not be JSON. */ }
                 };
-
                 es.addEventListener("done", (ev) => {
-                    btn.html(originalText).removeClass("is-busy").prop("disabled", false);
-
-                    try {
-                        const payload = JSON.parse(ev.data);
-
-                        if (payload.success && payload.download_url) {
-                            downloaded = true;
-                            recordSuccessfulPrint();
-                            // Auto-download
-                            const a = document.createElement("a");
-                            a.href = payload.download_url;
-                            a.download = downloadName;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            // Also show a clickable link in case the browser blocks auto-download
-                            // Also show a clickable link in case the browser blocks auto-download
-                            const cont = $("#logContent");
-
-                            cont.append(
-                                `\n<div style="margin-top:8px;"><a class="download-link" href="${payload.download_url}" download="${downloadName}">Download ${downloadName}</a></div>`,
-                            );
-                            showToast(successMsg);
-                        } else {
-                            showErrorModal(
-                                "The label file could not be generated. Please try again.",
-                            );
-                        }
-                    } catch (e) {
-                        showErrorModal("Unexpected response from server.");
-                    }
-
-                    clearInterval(poller);
-                    es.close();
+                    try { finishPrint(JSON.parse(ev.data)); }
+                    catch (_) { finishPrint({success: false, error: "Unexpected response from server. Please try again."}); }
                 });
 
                 es.onerror = function () {
-                    // Keep modal open, but notify user of streaming issue
-                    // Don't close the stream immediately; the server may be buffering
+                    streamHealthy = false;
+                    clearTimeout(watchdog);
+                    schedulePoll();
+                    // EventSource reconnects to the same job and replays new lines.
                 };
             } catch (err) {
                 btn.html(originalText).removeClass("is-busy").prop("disabled", false);
@@ -4543,6 +4601,16 @@
             }
         }
 
+        const searchTabId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2));
+        function searchHeaders(kind, sequence) {
+            return {"X-Search-Channel": searchTabId + "_" + kind,
+                    "X-Search-Sequence": String(sequence)};
+        }
+        function cancelServerSearch(kind, sequence) {
+            fetch("/labels/cancel_search", {method: "POST", headers: searchHeaders(kind, sequence),
+                                          keepalive: true}).catch(() => {});
+        }
+
         function invalidateAddObsSearch({ clearBanner = true } = {}) {
             clearTimeout(addObsSearchTimer);
             clearTimeout(addObsFilterTimer);
@@ -4550,6 +4618,7 @@
             addObsFilterTimer = null;
             addObsPreviewGeneration += 1;
             if (addObsSearchController) {
+                cancelServerSearch("observations", addObsPreviewGeneration);
                 addObsSearchController.abort();
                 addObsSearchController = null;
             }
@@ -4577,6 +4646,7 @@
             addObsFieldTimer = null;
             addObsFieldGeneration += 1;
             if (addObsFieldController) {
+                cancelServerSearch("fields", addObsFieldGeneration);
                 addObsFieldController.abort();
                 addObsFieldController = null;
             }
@@ -4627,7 +4697,7 @@
             try {
                 const response = await fetch(
                     `/labels/observation_fields?q=${encodeURIComponent(query)}`,
-                    { signal: controller.signal },
+                    { signal: controller.signal, headers: searchHeaders("fields", generation) },
                 );
                 const data = await response.json();
                 if (generation !== addObsFieldGeneration) return;
@@ -4890,6 +4960,7 @@
                 const response = await fetch("/labels/find_observations", {
                     method: "POST",
                     body: formData,
+                    headers: searchHeaders("observations", searchGeneration),
                     signal: controller.signal,
                 });
                 let data = null;
@@ -4907,6 +4978,12 @@
                     throw new Error("Search failed — unreadable response");
                 }
                 if (searchGeneration !== addObsPreviewGeneration) return;
+                if ([429, 503].includes(response.status) && data.retryable) {
+                    const delay = Math.min(60000, Math.max(3000, (Number(data.retry_after) || 2) * 1000));
+                    showModalBannerError(data.error || "Waiting for observation search availability.");
+                    addObsSearchTimer = setTimeout(() => performAddObsSearch(searchGeneration), delay);
+                    return;
+                }
                 if (!response.ok) throw new Error(data.error || "Search failed");
 
                 let items = data.items || [];

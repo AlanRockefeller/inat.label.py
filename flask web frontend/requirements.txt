@@ -1,0 +1,21 @@
+# Pinned to the versions running in production.  Unpinned requirements meant a
+# rebuild could silently pull different versions; `cors` was also listed next to
+# flask-cors and is not a package this app imports.
+
+# Web app (app.py, wsgi.py)
+Flask==3.1.2
+flask-cors==6.0.1
+gunicorn==23.0.0
+requests==2.32.5
+
+# Label generator (inat.label.py, motoinat.py)
+beautifulsoup4==4.14.2
+colorama==0.4.6
+pillow==12.0.0
+python-dateutil==2.9.0.post0
+qrcode==8.2
+reportlab==4.4.5
+
+# Usage graph (make_graph.py)
+matplotlib==3.10.7
+pandas==2.3.3
