@@ -386,28 +386,30 @@
 
   // Header names (lowercased, non-alphanumerics removed) that name the
   // observation number, best first.  iNaturalist's own export calls it "id".
+  // Most specific names first, so a file with both a row-number "ID" column and an
+  // "Observation Number" column (this app's own CSV export) uses the observations.
   const CSV_ID_HEADERS = [
-    "id",
-    "observationid",
     "observationnumber",
+    "observationid",
     "observationno",
-    "observation",
-    "obsid",
-    "obsnumber",
-    "inatid",
-    "inatnumber",
-    "inatobservationid",
     "inatobservationnumber",
+    "inatobservationid",
+    "inaturalistobservationnumber",
+    "inaturalistobservationid",
+    "inatnumber",
+    "inatid",
+    "inaturalistnumber",
+    "inaturalistid",
+    "obsnumber",
+    "obsid",
+    "id",
+    "observation",
     "inat",
     "inaturalist",
-    "inaturalistid",
-    "inaturalistnumber",
-    "inaturalistobservationid",
-    "inaturalistobservationnumber",
-    "url",
     "observationurl",
     "inaturl",
     "inaturalisturl",
+    "url",
   ];
 
   const CSV_INAT_URL =
@@ -525,7 +527,7 @@
       return csvError("empty", "This CSV file is empty.");
     }
 
-    const width = Math.max(...rows.map((cells) => cells.length));
+    const width = rows.reduce((max, cells) => Math.max(max, cells.length), 0);
     const first = rows[0];
     const hasHeader = first.some(
       (cell) => cell !== "" && csvCellObservationId(cell) === null,
@@ -547,15 +549,33 @@
     });
     const usable = (column) => column.plain + column.urls > 0;
 
+    const columnNames = (list) =>
+      list
+        .map((column) => header[column.index] || `column ${column.index + 1}`)
+        .map((name) => `“${name}”`)
+        .join(", ");
+
+    // A recognized header decides the column outright, even if its cells are blank
+    // or invalid; other columns are never used in its place.
     let chosen = null;
     for (const name of CSV_ID_HEADERS) {
-      chosen = columns.find((column) => column.key === name && usable(column));
+      chosen = columns.find((column) => column.key === name);
       if (chosen) break;
     }
     if (!chosen) {
       const withUrls = columns.filter((column) => column.urls > 0);
       if (withUrls.length) {
-        chosen = withUrls.reduce((best, column) => (column.urls > best.urls ? column : best));
+        const most = withUrls.reduce((max, column) => Math.max(max, column.urls), 0);
+        const best = withUrls.filter((column) => column.urls === most);
+        if (best.length > 1) {
+          return csvError(
+            "ambiguous",
+            `This CSV has several columns of iNaturalist links (${columnNames(best)}), so it ` +
+              "isn't clear which one lists the observations to add. Name that column “id” " +
+              "in the header row, or upload a CSV with just that one column.",
+          );
+        }
+        chosen = best[0];
       }
     }
     if (!chosen) {
@@ -565,10 +585,7 @@
       if (numeric.length === 1) {
         chosen = numeric[0];
       } else if (numeric.length > 1) {
-        const names = numeric
-          .map((column) => header[column.index] || `column ${column.index + 1}`)
-          .map((name) => `“${name}”`)
-          .join(", ");
+        const names = columnNames(numeric);
         return csvError(
           "ambiguous",
           `This CSV has several columns of numbers (${names}), so it isn't clear which ` +

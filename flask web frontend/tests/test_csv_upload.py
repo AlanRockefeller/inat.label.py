@@ -17,14 +17,16 @@ APP_DIR = Path(__file__).resolve().parents[1]
 
 
 def extract(csv_text, limit=None):
-    """Run extractCsvObservationIds in Node on *csv_text*."""
-    args = json.dumps(csv_text) + ("" if limit is None else f", {int(limit)}")
+    """Run extractCsvObservationIds in Node on *csv_text* (sent on stdin)."""
+    args = "text" + ("" if limit is None else f", {int(limit)}")
     script = (
         "const h = require('./static/addobs_helpers.js');"
+        "const text = require('fs').readFileSync(0, 'utf8');"
         f"process.stdout.write(JSON.stringify(h.extractCsvObservationIds({args})));"
     )
     completed = subprocess.run(
-        ["node", "-e", script], cwd=APP_DIR, check=True, capture_output=True, text=True
+        ["node", "-e", script], cwd=APP_DIR, check=True, capture_output=True, text=True,
+        input=csv_text,
     )
     return json.loads(completed.stdout)
 
@@ -87,6 +89,36 @@ class CsvObservationIdExtractionTestCase(unittest.TestCase):
         self.assertEqual(extract("")["code"], "empty")
         self.assertEqual(extract("hello\nworld\n")["code"], "no_ids")
 
+    def test_own_csv_export_round_trips_observation_numbers(self):
+        """The export's "ID" column is a row position, not an observation."""
+        header = ",".join(labels_app.CSV_COLUMNS)
+        blanks = "," * (len(labels_app.CSV_COLUMNS) - 2)
+        result = extract(f"{header}\n1,255645737{blanks}\n2,255644217{blanks}\n")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["ids"], ["255645737", "255644217"])
+        self.assertEqual(result["column"], "Observation Number")
+
+    def test_recognized_header_is_never_replaced_by_another_column(self):
+        result = extract("id,taxon_id\n,47170\nn/a,47171\n")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "no_ids")
+
+    def test_tied_url_columns_are_ambiguous(self):
+        result = extract(
+            "primary,related\n"
+            "https://www.inaturalist.org/observations/12,"
+            "https://www.inaturalist.org/observations/99\n"
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "ambiguous")
+        self.assertIn("“primary”", result["error"])
+
+    def test_many_rows_do_not_overflow_the_argument_limit(self):
+        result = extract("id\n" + "12\n" * 300000)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["ids"], ["12"])
+        self.assertEqual(result["duplicates"], 299999)
+
     def test_limit_is_1000_with_a_friendly_message(self):
         at_limit = extract("\n".join(str(n) for n in range(1, 1001)))
         self.assertTrue(at_limit["ok"])
@@ -110,6 +142,10 @@ class CsvUploadTemplateTestCase(unittest.TestCase):
         csv = self.template.index('name="addObsSource" value="csv"')
         self.assertLess(mo, csv)
         self.assertIn("CSV Upload", self.template[csv:csv + 200])
+
+    def test_late_csv_read_leaves_other_sources_add_button_alone(self):
+        start = self.template.index("function updateAddObsCsvControls()")
+        self.assertIn("if (!isAddObsCsvMode()) return;", self.template[start:start + 400])
 
     def test_run_and_search_caps_are_separate(self):
         self.assertIn("const maxObservations = 1000;", self.template)

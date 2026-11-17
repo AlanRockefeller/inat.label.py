@@ -5128,6 +5128,9 @@
         }
 
         function updateAddObsCsvControls() {
+            // A CSV read can finish after the user switched source; the Add button
+            // then belongs to that source, and is refreshed on switching back.
+            if (!isAddObsCsvMode()) return;
             const count = addObsCsvIds.length;
             $("#addObsConfirm").text(addObsActionText(count)).prop("disabled", count === 0);
             updateAddObsRunSummary(count);
