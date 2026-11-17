@@ -529,9 +529,12 @@
 
     const width = rows.reduce((max, cells) => Math.max(max, cells.length), 0);
     const first = rows[0];
-    const hasHeader = first.some(
-      (cell) => cell !== "" && csvCellObservationId(cell) === null,
-    );
+    // The first row is a header if it names a known ID column, or if none of its
+    // cells is an observation number or link. A row like "123,first specimen" is
+    // data: the text in another column does not make it a header.
+    const hasHeader =
+      first.some((cell) => CSV_ID_HEADERS.includes(csvHeaderKey(cell))) ||
+      !first.some((cell) => cell !== "" && csvCellObservationId(cell) !== null);
     const header = hasHeader ? first : [];
     const data = hasHeader ? rows.slice(1) : rows;
     const columns = Array.from({ length: width }, (_, index) => {

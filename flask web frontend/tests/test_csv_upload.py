@@ -119,6 +119,11 @@ class CsvObservationIdExtractionTestCase(unittest.TestCase):
         self.assertEqual(result["ids"], ["12"])
         self.assertEqual(result["duplicates"], 299999)
 
+    def test_headerless_mixed_columns_keep_the_first_row(self):
+        result = extract("123,first specimen\n456,second specimen\n")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["ids"], ["123", "456"])
+
     def test_limit_is_1000_with_a_friendly_message(self):
         at_limit = extract("\n".join(str(n) for n in range(1, 1001)))
         self.assertTrue(at_limit["ok"])
