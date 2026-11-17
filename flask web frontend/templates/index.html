@@ -1238,7 +1238,7 @@
         .addobs-modal-header {
             flex: 0 0 auto;
             display: grid;
-            grid-template-columns: auto minmax(240px, 360px) auto;
+            grid-template-columns: auto minmax(300px, 480px) auto;
         }
 
         .addobs-header-source {
@@ -2190,6 +2190,74 @@
         }
 
         /* Add Observations modal error styling */
+        /* CSV Upload replaces the search filters and results. */
+        #addObsModal.is-csv-source .addobs-filter-bar,
+        #addObsModal.is-csv-source #addObsResults {
+            display: none;
+        }
+
+        .addobs-csv-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            padding: 1rem;
+            overflow: auto;
+        }
+
+        .addobs-csv-panel[hidden] {
+            display: none;
+        }
+
+        .addobs-csv-drop {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.25rem;
+            min-height: 140px;
+            padding: 1rem;
+            text-align: center;
+            cursor: pointer;
+            background: var(--slip-hi);
+            border: 1px dashed var(--rule-hi);
+            border-radius: var(--r);
+            transition: border-color 110ms linear, background-color 110ms linear;
+        }
+
+        .addobs-csv-drop:hover,
+        .addobs-csv-drop.is-dragover {
+            border-color: var(--brass);
+            background: var(--slip);
+        }
+
+        .addobs-csv-drop:focus-within {
+            outline: 2px solid var(--brass);
+            outline-offset: 2px;
+        }
+
+        .addobs-csv-drop-title {
+            font-weight: 600;
+            color: var(--ink-hi);
+        }
+
+        .addobs-csv-drop-hint {
+            font-size: 0.85rem;
+            color: var(--ink-mute);
+        }
+
+        .addobs-csv-status {
+            min-height: 1.4em;
+            font-size: 0.9rem;
+            line-height: 1.4;
+            color: var(--ink);
+        }
+
+        .addobs-csv-status.is-error {
+            padding-left: 0.6rem;
+            border-left: 2px solid var(--stamp);
+            color: var(--stamp);
+        }
+
         .addobs-banner-error {
             display: none;
             padding: 0.6rem 0.75rem;
@@ -2471,6 +2539,10 @@
                         <input type="radio" class="segment-input" name="addObsSource" value="mo">
                         <div class="segment-label">Mushroom Observer</div>
                     </label>
+                    <label class="segment-option">
+                        <input type="radio" class="segment-input" name="addObsSource" value="csv">
+                        <div class="segment-label">CSV Upload</div>
+                    </label>
                 </div>
                 <div class="addobs-header-actions">
                     <a href="/labels/help#batch-add" class="tool-link" target="_blank">Help ↗</a>
@@ -2479,6 +2551,20 @@
             </div>
             <div class="modal-body addobs-modal-body">
                 <div id="addObsBannerError" class="addobs-banner-error" role="alert"></div>
+                <section id="addObsCsvPanel" class="addobs-csv-panel" aria-labelledby="addObsCsvTitle" hidden>
+                    <label for="addObsCsvFile" id="addObsCsvDrop" class="addobs-csv-drop">
+                        <input type="file" id="addObsCsvFile" class="sr-only"
+                            accept=".csv,.tsv,.txt,text/csv,text/plain,text/tab-separated-values">
+                        <span class="addobs-csv-drop-title" id="addObsCsvTitle">Choose a CSV file</span>
+                        <span class="addobs-csv-drop-hint">or drag it here</span>
+                    </label>
+                    <p class="modal-helper-text">
+                        iNaturalist observation numbers or observation URLs are read from the file and every
+                        other column is ignored. If the file has a header row, name that column “id”, as
+                        iNaturalist's own export does. Up to 1,000 observations per file.
+                    </p>
+                    <div id="addObsCsvStatus" class="addobs-csv-status" role="status" aria-live="polite"></div>
+                </section>
                 <div class="addobs-filter-bar">
                     <div class="field-group">
                         <label for="addObsUser" class="field-label" id="addObsUserLabel">iNat Username</label>
@@ -2668,7 +2754,11 @@
 
         $(document).ready(function () {
             let observationCount = 1;
-            const maxObservations = 500;
+            // A run (queue, print or CSV export) holds up to 1,000 observations;
+            // one Add Observations search shows at most 500 (app.py
+            // MAX_OBS_PER_REQUEST and MAX_SEARCH_RESULTS).
+            const maxObservations = 1000;
+            const maxSearchResults = 500;
 
             let previewCache = {};
             let allObservationData = {};
@@ -4494,7 +4584,7 @@
         }
 
         function renderAddObsWindows(windows, totalCount, shownCount) {
-            if (totalCount <= maxObservations) {
+            if (totalCount <= maxSearchResults) {
                 hideAddObsWindows();
                 return;
             }
@@ -4994,8 +5084,8 @@
                 const requiredField = String(data.required_observation_field || "").trim();
                 rememberAddObsObserver(validation.filters.source, validation.filters.username);
 
-                if (items.length > maxObservations || addObsTotalCount > maxObservations) {
-                    items = items.slice(0, maxObservations);
+                if (items.length > maxSearchResults || addObsTotalCount > maxSearchResults) {
+                    items = items.slice(0, maxSearchResults);
                 }
 
                 if (items.length === 0) {
@@ -5010,7 +5100,7 @@
                     totalCount: addObsTotalCount,
                     statusText: requiredField && Number.isFinite(totalInScope)
                         ? `${addObsTotalCount.toLocaleString()} match all filters · ${totalInScope.toLocaleString()} observations in scope before requiring “${requiredField}”`
-                        : addObsTotalCount > maxObservations ? "" : undefined,
+                        : addObsTotalCount > maxSearchResults ? "" : undefined,
                 });
                 updateAddObsSelectionState();
             } catch (error) {
@@ -5025,8 +5115,176 @@
             }
         }
 
+        // ---- CSV Upload -------------------------------------------------
+        let addObsCsvIds = [];
+        let addObsCsvReadGeneration = 0;
+
+        function isAddObsCsvMode() {
+            return $("input[name='addObsSource']:checked").val() === "csv";
+        }
+
+        function setAddObsCsvStatus(text, isError = false) {
+            $("#addObsCsvStatus").text(text).toggleClass("is-error", isError);
+        }
+
+        function updateAddObsCsvControls() {
+            // A CSV read can finish after the user switched source; the Add button
+            // then belongs to that source, and is refreshed on switching back.
+            if (!isAddObsCsvMode()) return;
+            const count = addObsCsvIds.length;
+            $("#addObsConfirm").text(addObsActionText(count)).prop("disabled", count === 0);
+            updateAddObsRunSummary(count);
+        }
+
+        function resetAddObsCsv() {
+            addObsCsvReadGeneration += 1;
+            addObsCsvIds = [];
+            $("#addObsCsvFile").val("");
+            $("#addObsCsvDrop").removeClass("is-dragover");
+            setAddObsCsvStatus("");
+        }
+
+        function formatMegabytes(bytes) {
+            return (bytes / (1024 * 1024)).toFixed(1);
+        }
+
+        function readAddObsCsvFile(file) {
+            const generation = ++addObsCsvReadGeneration;
+            addObsCsvIds = [];
+            updateAddObsCsvControls();
+            if (!file) {
+                setAddObsCsvStatus("");
+                return;
+            }
+            const maxBytes = LabelsAddObsHelpers.CSV_UPLOAD_MAX_BYTES;
+            if (file.size > maxBytes) {
+                setAddObsCsvStatus(
+                    `${file.name} is ${formatMegabytes(file.size)} MB. CSV uploads are limited to ` +
+                        `${formatMegabytes(maxBytes)} MB; upload a smaller file or just the column of observation numbers.`,
+                    true,
+                );
+                return;
+            }
+            if (file.size === 0) {
+                setAddObsCsvStatus(`${file.name} is empty.`, true);
+                return;
+            }
+
+            setAddObsCsvStatus(`Reading ${file.name}…`);
+            const reader = new FileReader();
+            reader.onerror = () => {
+                if (generation !== addObsCsvReadGeneration) return;
+                setAddObsCsvStatus(`${file.name} couldn't be read. Try choosing it again.`, true);
+            };
+            reader.onload = () => {
+                if (generation !== addObsCsvReadGeneration) return;
+                const result = LabelsAddObsHelpers.extractCsvObservationIds(
+                    String(reader.result || ""),
+                    LabelsAddObsHelpers.CSV_UPLOAD_MAX_OBSERVATIONS,
+                );
+                if (!result.ok) {
+                    setAddObsCsvStatus(result.error, true);
+                    updateAddObsCsvControls();
+                    return;
+                }
+
+                const queued = new Set(getQueuedObservationIds().map(String));
+                const fresh = result.ids.filter((id) => !queued.has(id));
+                const alreadyQueued = result.ids.length - fresh.length;
+                if (!fresh.length) {
+                    setAddObsCsvStatus(
+                        `All ${addObsCountText(result.ids.length)} in ${file.name} ${result.ids.length === 1 ? "is" : "are"} already in the queue.`,
+                        true,
+                    );
+                    updateAddObsCsvControls();
+                    return;
+                }
+                const capacity = addObsRemainingRunCapacity();
+                if (fresh.length > capacity) {
+                    setAddObsCsvStatus(
+                        `${file.name} would add ${addObsCountText(fresh.length)}, but the queue already has ` +
+                            `${addObsCountText(countQueuedObservations())} and a run can contain at most ` +
+                            `${maxObservations.toLocaleString()}. Remove some observations from the queue, ` +
+                            "or split the CSV into smaller files.",
+                        true,
+                    );
+                    updateAddObsCsvControls();
+                    return;
+                }
+
+                addObsCsvIds = fresh;
+                const notes = [];
+                if (result.duplicates) {
+                    notes.push(`${addObsCountText(result.duplicates, "repeated number")} ignored`);
+                }
+                if (alreadyQueued) {
+                    notes.push(`${alreadyQueued} already in the queue`);
+                }
+                if (result.skipped) {
+                    notes.push(`${addObsCountText(result.skipped, "value")} that ${result.skipped === 1 ? "isn't an" : "aren't"} observation number${result.skipped === 1 ? "" : "s"} skipped`);
+                }
+                const column = result.column ? ` (column “${result.column}”)` : "";
+                setAddObsCsvStatus(
+                    `Found ${addObsCountText(fresh.length, "iNaturalist observation")} in ${file.name}${column}.` +
+                        (notes.length ? ` ${notes.join("; ")}.` : ""),
+                );
+                updateAddObsCsvControls();
+            };
+            reader.readAsText(file);
+        }
+
+        function addCsvObservationsToQueue() {
+            const ids = addObsCsvIds.slice();
+            if (!ids.length) return;
+            if (ids.length > addObsRemainingRunCapacity()) {
+                showToast(`A run can contain at most ${maxObservations} observations`, false);
+                return;
+            }
+            let $target = $("#observationInputs .obs-id-input")
+                .filter(function () { return !$(this).val().trim(); })
+                .last();
+            if (!$target.length) {
+                addObservationField();
+                $target = $("#observationInputs .obs-id-input").last();
+            }
+            // The row expands a list into one row per observation and looks
+            // them up in batches, exactly as a pasted list does.
+            $target.val(ids.join(", ")).trigger("input");
+            normalizeAndLookupObservationInput($target);
+            scheduleQueueSave();
+            closeAddObsModal();
+            showToast(`Added ${addObsCountText(ids.length)} from CSV`);
+        }
+
+        $("#addObsCsvFile").on("change", function () {
+            readAddObsCsvFile(this.files && this.files[0]);
+        });
+
+        $("#addObsCsvDrop")
+            .on("dragenter dragover", function (event) {
+                event.preventDefault();
+                event.originalEvent.dataTransfer.dropEffect = "copy";
+                $(this).addClass("is-dragover");
+            })
+            .on("dragleave dragend", function () {
+                $(this).removeClass("is-dragover");
+            })
+            .on("drop", function (event) {
+                event.preventDefault();
+                $(this).removeClass("is-dragover");
+                const files = event.originalEvent.dataTransfer && event.originalEvent.dataTransfer.files;
+                if (files && files.length) readAddObsCsvFile(files[0]);
+            });
+
         function updateAddObsSourceControls({ loadObserver = false } = {}) {
             const source = $("input[name='addObsSource']:checked").val() || "inat";
+            const csvMode = source === "csv";
+            $("#addObsModal").toggleClass("is-csv-source", csvMode);
+            $("#addObsCsvPanel").prop("hidden", !csvMode);
+            if (csvMode) {
+                updateAddObsCsvControls();
+                return;
+            }
             addObsObserverSource = source;
             $("#addObsModal").toggleClass("is-mo-source", source === "mo");
             if (source === "inat") {
@@ -5068,6 +5326,7 @@
             $("input[name='addObsDateMode'][value='observed']").prop("checked", true);
             $("#addObsDateModeHelper").text("Filtering by observation date");
             $("input[name='addObsSource'][value='inat']").prop("checked", true);
+            resetAddObsCsv();
             $("#addObsTaxon").val("Fungi");
             $("#addObsObservationField, #addObsObservationFieldId").val("");
             addObsObserverValidationState = "none";
@@ -5292,6 +5551,10 @@
         });
 
         $("#addObsConfirm").click(function () {
+            if (isAddObsCsvMode()) {
+                addCsvObservationsToQueue();
+                return;
+            }
             const selectedIds = Array.from(
                 document.querySelectorAll("#addObsList .addObsRowCk:checked:not(:disabled)"),
             ).map((el) => el.getAttribute("data-id"));
@@ -5832,6 +6095,14 @@
         }
 
         $("input[name='addObsSource']").on("change", function () {
+            if (isAddObsCsvMode()) {
+                clearModalErrors();
+                invalidateAddObsSearch();
+                cancelAddObsObserverValidation();
+                cancelObservationFieldAutocomplete();
+                updateAddObsSourceControls();
+                return;
+            }
             updateAddObsSourceControls({ loadObserver: true });
             clearFieldError("addObsUser");
             invalidateAddObsSearch();

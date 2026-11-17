@@ -85,7 +85,12 @@ def legacy_color_for_taxon_group(color_group):
 # Pacing is persisted by inat_shared across web and print subprocesses.
 INAT_MIN_REQUEST_INTERVAL = float(os.environ.get("INAT_MIN_REQUEST_INTERVAL", "1.0"))
 # Hardening settings
-MAX_OBS_PER_REQUEST = int(os.environ.get("MAX_OBS_PER_REQUEST", "500"))
+# Observations in one run: the queue, a print job, a CSV export or a row lookup.
+MAX_OBS_PER_REQUEST = int(os.environ.get("MAX_OBS_PER_REQUEST", "1000"))
+# Rows one Add Observations search returns; larger searches are split into date
+# windows of at most this many.  Kept below the run cap so each search page
+# stays quick to fetch and render.
+MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "500"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
 # Mushroom Observer has no histogram endpoint, so per-day counts for the date
 # windows can only come from walking result pages.  Each page is ~1000 records
@@ -565,6 +570,10 @@ if ALLOWED_ORIGINS:
 # Reject oversized bodies before Werkzeug parses them.  nginx allows 200M on
 # this vhost, and every byte of a form POST is parsed by the single worker.
 app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
+# A full run posts one multipart part per observation plus the option fields.
+# Flask's default of 1,000 parts would reject a 1,000-observation print or CSV
+# export with a 413 before any validation runs.
+app.config["MAX_FORM_PARTS"] = MAX_OBS_PER_REQUEST + 200
 
 _rate_limiter = RateLimiter()
 # Loopback only: Gunicorn binds to 127.0.0.1, so a request that did not come
@@ -3146,7 +3155,7 @@ def _windows_for_complete_daily_counts(
     daily_counts, total_count, requested_start, requested_end
 ):
     """Build windows only when every upstream match has a usable selected date."""
-    if total_count <= MAX_OBS_PER_REQUEST:
+    if total_count <= MAX_SEARCH_RESULTS:
         return []
     dated_total = sum(daily_counts.values())
     if dated_total != total_count:
@@ -3161,7 +3170,7 @@ def _windows_for_complete_daily_counts(
             daily_counts,
             requested_start,
             requested_end,
-            cap=MAX_OBS_PER_REQUEST,
+            cap=MAX_SEARCH_RESULTS,
             newest_first=True,
         )
     except ValueError:
@@ -3238,7 +3247,7 @@ def find_observations():
 
     # Query observations
     found = []
-    cap = MAX_OBS_PER_REQUEST + 1
+    cap = MAX_SEARCH_RESULTS + 1
     current_batch = []
     total_count = 0
     total_in_scope = None
@@ -3406,7 +3415,7 @@ def find_observations():
                 total_count = len(current_batch)
             total_count = max(total_count, len(current_batch))
 
-            if total_count > MAX_OBS_PER_REQUEST:
+            if total_count > MAX_SEARCH_RESULTS:
                 histogram_params = {
                     **inat_search_params,
                     "interval": "day",
